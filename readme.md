@@ -1,11 +1,17 @@
-This code is based on the article:-
+Ultimately this code will 'SFU' video (and audio) between thousands of connected parties.
+At some point it will need to scale out horizontally - but that is relatively straighforward, and we are *far* from needing it yet
+Fairly sure we could host an event for ~1000 users on a single machine without doing anything too exotic
+
+
+Code is based on the article:-
 
 https://www.piesocket.com/blog/golang-websocket
 
 I'm sure it will need to morph a lot over time - but it is possible to hande 100's of 1000's of sockets on a single golang server (a million is claimed possible - but I think that's just silly)
 
-Ultimately this will SFU video (and audio) between thousands of connected parties - at some point it will need to scale out horizontally - but that is relatively straighforward, and we are *far* from needing it yet
-Fairly sure we could host an event for ~1000 users on a single machine without doing anything too exotic
+Concurrency (multithreading) is/was the biggest issue - this article was a big help - mutexes are the 'answer'
+https://medium.com/swlh/handle-concurrency-in-gorilla-web-sockets-ade4d06acd9c
+
 
 Go is a beatiful, simple language - which compiles to a single native executable for every major OS
 It has packages - but not dependencies (in the sense that you don't have to bundle or deploy the packages, they are compiled in)
@@ -28,5 +34,13 @@ The documentation is generally excellent - https://go.dev/
 
 It produces, tiny, bulletproof .EXEs that just run for months on end
 
+Don't get me wrong - Rust looks very cool too.. but I would say it has a steeper learning curve.. especially for juniors, it's a 'bigger' language
+
+
+to build the project
+
+go build gofu.go
+
+(the extension is important!)
 
 
