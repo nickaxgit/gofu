@@ -120,8 +120,8 @@ func main() {
 	port:=":8040"
     fmt.Println("Gofu server - listening on " + port)
     setupRoutes()
-    //log.Fatal(http.ListenAndServe(port, nil,))
-	log.Fatal(http.ListenAndServeTLS(port, "qs.cert","qs.key",nil))
+    log.Fatal(http.ListenAndServe(port, nil,))
+	//log.Fatal(http.ListenAndServeTLS(port, "qs.cert","qs.key",nil))
 
 	
 }
