@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -97,7 +98,7 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 	m := []byte(fmt.Sprint(len(users) - 1))
 	send(&u, websocket.TextMessage, &m) //write (as a string) your index in the slice of users
 
-	log.Println(fmt.Sprintf("Client %s Connected", strconv.Itoa(len(users))))
+	log.Printf(fmt.Sprintf("Client %s Connected", strconv.Itoa(len(users))))
 
 	// err = ws.WriteMessage(1, []byte("Hi Client!"))
 	// if err != nil {
@@ -109,21 +110,31 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 	reader(ws)
 }
 
-func setupRoutes() {
-
+func main() {
+	port := ":8040"
+	fmt.Println("Gofu server - listening on " + port)
 	fs := http.FileServer(http.Dir("../dozer"))
+
 	http.Handle("/", fs)
 
 	//http.HandleFunc("/", homePage)
 	http.HandleFunc("/reset", reset)
 	http.HandleFunc("/ws", wsEndpoint)
-}
 
-func main() {
-	port := ":8040"
-	fmt.Println("Gofu server - listening on " + port)
-	setupRoutes()
-	log.Fatal(http.ListenAndServe(port, nil))
+	log.Fatal(http.ListenAndServe(port, customHeaders(fs)))
 	//log.Fatal(http.ListenAndServeTLS(port, "qs.cert","qs.key",nil))
 
+}
+
+func customHeaders(fs http.Handler) http.HandlerFunc {
+	// found at https://stackoverflow.com/a/65905091
+	return func(w http.ResponseWriter, r *http.Request) {
+		// add headers etc here
+		// return if you do not want the FileServer handle a specific request
+		if strings.HasSuffix(r.RequestURI, ".js") {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		//w.Header().Set("x-server", "hello, world!")
+		fs.ServeHTTP(w, r)
+	}
 }
