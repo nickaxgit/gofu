@@ -122,7 +122,7 @@ func main() {
 	http.HandleFunc("/ws", wsEndpoint)
 
 	//log.Fatal(http.ListenAndServe(port, customHeaders(fs)))
-	log.Fatal(http.ListenAndServeTLS(port, "./dozer.pem", "./dozer.key", customHeaders(fs)))
+	log.Fatal(http.ListenAndServeTLS(port, "dozer.world.crt", "./dozer.key", customHeaders(fs)))
 
 }
 
