@@ -111,7 +111,7 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	port := ":8040"
+	port := ":443"
 	fmt.Println("Gofu server - listening on " + port)
 	fs := http.FileServer(http.Dir("../dozer"))
 
@@ -121,8 +121,8 @@ func main() {
 	http.HandleFunc("/reset", reset)
 	http.HandleFunc("/ws", wsEndpoint)
 
-	log.Fatal(http.ListenAndServe(port, customHeaders(fs)))
-	//log.Fatal(http.ListenAndServeTLS(port, "qs.cert","qs.key",nil))
+	//log.Fatal(http.ListenAndServe(port, customHeaders(fs)))
+	log.Fatal(http.ListenAndServeTLS(port, "dozer.world.cert", "dozer.world.key", nil))
 
 }
 
