@@ -1,0 +1,67 @@
+{
+    "[go]": {
+      "editor.insertSpaces": false,
+      "editor.formatOnSave": true,
+      "editor.codeActionsOnSave": {
+        "source.organizeImports": "never"
+      },
+      "editor.defaultFormatter": "golang.go"
+    },
+    "go.formatTool": "gofmt",
+    "settingsSync.ignoredExtensions": [],
+    "notebook.kernelProviderAssociations": [],
+    "editor.formatOnSave": true,
+    "terminal.integrated.automationShell.windows": "",
+    "git.autofetch": true,
+    "html.autoClosingTags": false,
+    "git.enableSmartCommit": true,
+    "diffEditor.ignoreTrimWhitespace": false,
+    "liveServer.settings.donotShowInfoMsg": true,
+    "terminal.integrated.tabs.enabled": true,
+    "terminal.integrated.defaultProfile.windows": "Command Prompt",
+    "terminal.integrated.profiles.windows": {
+      "C:\\Windows\\System32\\cmd.exe (migrated)": {
+        "path": "C:\\Windows\\System32\\cmd.exe",
+        "args": [
+          "-ExecutionPolicy",
+          "Bypass"
+        ]
+      }
+    },
+    "files.exclude": {
+      // Hide all .js files when have a .ts file
+      "**/*.js": {
+        "when": "$(basename).ts"
+      },
+      "**/*.js.map": true
+    },
+    "workbench.editorAssociations": {
+      "*.ipynb": "jupyter-notebook"
+    },
+    "notebook.cellToolbarLocation": {
+      "default": "right",
+      "jupyter-notebook": "left"
+    },
+    "[python]": {
+      "editor.formatOnType": true
+    },
+    "cmake.configureEnvironment": {
+      "PICO_SDK": "c:\\pico-sdk"
+    },
+    "cmake.configureOnOpen": true,
+    "cmake.configureSettings": {},
+    "editor.fontSize": 18,
+    "window.zoomLevel": 1,
+    "micropico.manualComDevice": "com9:",
+    "cmake.pinnedCommands": [
+      "workbench.action.tasks.configureTaskRunner",
+      "workbench.action.tasks.runTask"
+    ],
+    "arduino.useArduinoCli": true,
+    "editor.defaultFormatter": "tinygo.vscode-tinygo",
+    "terminal.integrated.enableMultiLinePasteWarning": "auto",
+    "cmake.showOptionsMovedNotification": false,
+    "[typescript]": {
+  
+    }
+  }

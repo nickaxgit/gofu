@@ -19,7 +19,7 @@ var upgrader = websocket.Upgrader{
 }
 
 type user struct {
-	mtx sync.Mutex // a mutex is required to 'lock' access to each users connection (for writing)
+	mtx *sync.Mutex // a mutex is required to 'lock' access to each users connection (for writing)
 	// many calls (to wsEndpoint) can be running in paralell - and more than one of them may attempt to write to a single users socket at the same time (not allowed!)
 	conn *websocket.Conn // a pointer to the socket
 }
@@ -58,8 +58,8 @@ func send(user *user, messageType int, msg *[]byte) error {
 	return user.conn.WriteMessage(messageType, *msg) //write the message (and return any error)
 }
 
-func homePage(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "<h1>CrowdSurf GoFu SFU server</h1>")
+func homePage(w http.ResponseWriter, _ *http.Request) {
+	fmt.Fprintf(w, "<h1>Dozer game server</h1>")
 	fmt.Fprintf(w, "<p>%d users are connected", len(users))
 }
 
@@ -117,12 +117,29 @@ func main() {
 
 	http.Handle("/", fs)
 
-	//http.HandleFunc("/", homePage)
+	http.HandleFunc("/", homePage)
+	http.HandleFunc("/gi/", gameTraffic)
 	http.HandleFunc("/reset", reset)
-	http.HandleFunc("/ws", wsEndpoint)
+	http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
 
 	//log.Fatal(http.ListenAndServe(port, customHeaders(fs)))
 	log.Fatal(http.ListenAndServeTLS(port, "dozer_world.crt", "./dozer.key", customHeaders(fs)))
+
+}
+
+func gameTraffic(w http.ResponseWriter, r *http.Request) {
+
+	var q []byte
+	n, err := r.Body.Read(q)
+
+	logit("gameTraffic", n, "bytes")
+	if err != nil {
+		logit(err.Error())
+		w.Write([]byte("Error reading request"))
+		return
+	}
+
+	w.Write(rx(q)) //process the request que (from this player) and return the response (typically moved masses)
 
 }
 
