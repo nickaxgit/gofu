@@ -118,7 +118,7 @@ func main() {
 	http.Handle("/", fs)
 
 	//http.HandleFunc("/", homePage)
-	http.HandleFunc("/gi/", gameTraffic)
+	http.HandleFunc("/gi", gameTraffic)
 	http.HandleFunc("/reset", reset)
 	http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
 
