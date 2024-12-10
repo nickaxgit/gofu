@@ -115,10 +115,12 @@ func main() {
 	fmt.Println("Gofu server - listening on " + port)
 	fs := http.FileServer(http.Dir("../dozer"))
 
+	http.HandleFunc("/gi", gameTraffic)
+
 	http.Handle("/", fs)
 
 	//http.HandleFunc("/", homePage)
-	http.HandleFunc("/gi", gameTraffic)
+
 	http.HandleFunc("/reset", reset)
 	http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
 
@@ -129,6 +131,7 @@ func main() {
 
 func gameTraffic(w http.ResponseWriter, r *http.Request) {
 
+	logit("gameTraffic", "called")
 	var q []byte
 	n, err := r.Body.Read(q)
 
