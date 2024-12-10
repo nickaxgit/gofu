@@ -77,7 +77,7 @@ func reset(w http.ResponseWriter, r *http.Request) {
 
 	users = nil
 
-	fmt.Fprintf(w, "<h1>CrowdSurf GoFu SFU server</h1>")
+	fmt.Fprintf(w, "<h1>Dozer game server</h1>")
 	fmt.Fprintf(w, "<p>%d users are connected", len(users))
 
 	log.Println("Reset")
@@ -117,7 +117,7 @@ func main() {
 
 	http.Handle("/", fs)
 
-	http.HandleFunc("/", homePage)
+	//http.HandleFunc("/", homePage)
 	http.HandleFunc("/gi/", gameTraffic)
 	http.HandleFunc("/reset", reset)
 	http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
