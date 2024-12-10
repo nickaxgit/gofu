@@ -139,7 +139,8 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Write(rx(q)) //process the request que (from this player) and return the response (typically moved masses)
+	w.Header().Set("Access-Control-Allow-Origin", "*") //TODO - tighten this up
+	w.Write(rx(q))                                     //process the request que (from this player) and return the response (typically moved masses)
 
 }
 
