@@ -11,17 +11,17 @@ import (
 //when a mass overlaps a spring - the mass is 'owned' by the spring
 
 type Mass struct {
-	p                Vector
-	r                float64
-	fixed            bool
-	isCoin           bool
-	collideable      bool
-	thingNum         int //which thing is this mass part of - coins are -1
-	op               Vector
-	oz               float64
-	fallingInto      int     //*Thing           //index of thing
-	v                Vector  //"velocity" - the change in position of this mass
-	angle            float64 //flipping angle (for coins)
+	p           Vector
+	r           float64
+	fixed       bool
+	isCoin      bool
+	collideable bool
+	thingNum    int //which thing is this mass part of - coins are -1
+	op          Vector
+	oz          float64
+	fallingInto int    //*Thing           //index of thing
+	v           Vector //"velocity" - the change in position of this mass
+	//angle            float64 //flipping angle (for coins)
 	z                float64 //falling depth/spin (/height above ground)
 	enabled          bool
 	lastThingTouched int //who 'owns' this mass

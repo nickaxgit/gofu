@@ -3,8 +3,6 @@ package main
 type Thing struct {
 	//a thing is really a collection of springs (which never intersect)
 	//to which we pin an image
-
-	enabled  bool
 	springs  []*Spring
 	offset   Vector
 	scale    Vector

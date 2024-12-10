@@ -49,8 +49,8 @@ func qSound(sound string, position Vector, volume float32, label string, loop bo
 }
 
 func q4all(msg reply) {
-	for _, q := range obq { //for every outbound que (player)
-		q = append(q, msg)
+	for pn, q := range obq { //for every outbound que (player)
+		obq[pn] = append(q, msg) //we MUST index the slice - or we are appending to a byval copy
 	}
 }
 
@@ -245,6 +245,6 @@ func sendCurrentThing(state *State, player *Player) {
 	q4all(reply{cmd: "mass", payload: thingPayload{ti: ti, thing: *state.Things[ti]}})
 }
 
-func logit(s ...interface{}) {
+func logit(s ...interface{}) { //accept an array of any type(s)
 	println(s)
 }
