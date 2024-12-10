@@ -132,6 +132,8 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 	var q []byte
 	n, err := r.Body.Read(q)
 
+	w.Header().Set("Access-Control-Allow-Origin", "*") //TODO - tighten this up
+
 	logit("gameTraffic", n, "bytes")
 	if err != nil {
 		logit(err.Error())
@@ -139,8 +141,7 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Access-Control-Allow-Origin", "*") //TODO - tighten this up
-	w.Write(rx(q))                                     //process the request que (from this player) and return the response (typically moved masses)
+	w.Write(rx(q)) //process the request que (from this player) and return the response (typically moved masses)
 
 }
 
