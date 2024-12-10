@@ -115,7 +115,7 @@ func main() {
 	fmt.Println("Gofu server - listening on " + port)
 	fs := http.FileServer(http.Dir("../dozer"))
 
-	http.HandleFunc("/gi", gameTraffic)
+	http.HandleFunc("POST ", gameTraffic)
 
 	http.Handle("/", fs)
 
