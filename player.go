@@ -3,39 +3,39 @@ package main
 import ()
 
 type highlitType struct {
-	mass   int
-	spring int
-	thing  int
+	Mass   int `json:"mass"`
+	Spring int `json:"spring"`
+	Thing  int `json:"thing"`
 }
 
 type Player struct {
-	name           string
-	dozer          int //index of dozer in the things array
-	maxDamage      byte
-	maxTemperature byte
+	Name           string `json:"playerName"`
+	Dozer          int    `json:"dozer"` //index of dozer in the things array
+	MaxDamage      byte   `json:"maxDamage"`
+	MaxTemperature byte   `json:"maxTemperature"`
 	worldCursor    Vector
-	damage         byte
-	temperature    byte
+	Damage         byte `json:"damage"`
+	Temperature    byte `json:"temperature"`
 
-	leftDrive  float64
-	rightDrive float64
+	LeftDrive  float64 `json:"leftDrive"` //used as scratchpad clientside - so we need to init them
+	RightDrive float64 `json:"rightDrive"`
 	//touchControlled:boolean = false //set to true as soon as we get a touch event
 	oRevs float32
 
-	coins     int
+	Coins     int `json:"coins"`
 	stepCoins int
 
-	highlit highlitType //= {mass:-1,spring:-1,thing:-1}
+	Highlit highlitType `json:"highlit"` //= {mass:-1,spring:-1,thing:-1}
 
 	springStart  int
 	currentThing int
 	mode         ModeEnum
 
-	killer int //Player
+	Killer int `json:"killer"`
 	dying  bool
 }
 
 func NewPlayer(name string, dozer int) *Player {
-	return &Player{name: name, dozer: dozer, maxDamage: 100, maxTemperature: 100, worldCursor: Vector{0, 0}, damage: 0, temperature: 0, leftDrive: 0, rightDrive: 0, oRevs: 0, coins: 0, stepCoins: 0, highlit: highlitType{-1, -1, -1}, springStart: -1, currentThing: -1, mode: playing, killer: -1, dying: false}
+	return &Player{Name: name, Dozer: dozer, MaxDamage: 100, MaxTemperature: 100, worldCursor: Vector{0, 0}, Damage: 0, Temperature: 0, LeftDrive: 0, RightDrive: 0, oRevs: 0, Coins: 0, stepCoins: 0, Highlit: highlitType{-1, -1, -1}, springStart: -1, currentThing: -1, mode: playing, Killer: -1, dying: false}
 
 }

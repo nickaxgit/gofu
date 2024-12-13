@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -59,11 +60,12 @@ func send(user *user, messageType int, msg *[]byte) error {
 }
 
 func homePage(w http.ResponseWriter, _ *http.Request) {
+	logit("homePage", "called")
 	fmt.Fprintf(w, "<h1>Dozer game server</h1>")
 	fmt.Fprintf(w, "<p>%d users are connected", len(users))
 }
 
-func reset(w http.ResponseWriter, r *http.Request) {
+func reset(w http.ResponseWriter, _r *http.Request) {
 
 	log.Println("Resetting")
 
@@ -111,41 +113,63 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	port := ":443"
+	port := ":8081" //":443"
 	fmt.Println("Gofu server - listening on " + port)
 	fs := http.FileServer(http.Dir("../dozer"))
 
-	http.HandleFunc("POST /gi", gameTraffic)
+	//important!
+	games = make(map[int]*State)
+	obq = make(map[string][]reply)
 
-	http.Handle("/", fs)
+	//see customHeaders
+	//http.HandleFunc("/gi", gameTraffic)
+	//http.HandleFunc("/home", homePage)
+	//http.Handle("/", fs)
 
-	//http.HandleFunc("/", homePage)
+	//http.HandleFunc("/reset", reset)
 
-	http.HandleFunc("/reset", reset)
-	http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
+	//	http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
 
-	//log.Fatal(http.ListenAndServe(port, customHeaders(fs)))
-	log.Fatal(http.ListenAndServeTLS(port, "dozer_world.crt", "./dozer.key", customHeaders(fs)))
+	log.Fatal(http.ListenAndServe(port, customHeaders(fs)))
+	//log.Fatal(http.ListenAndServeTLS(port, "dozer_world.crt", "./dozer.key", customHeaders(fs)))
 
 }
 
 func gameTraffic(w http.ResponseWriter, r *http.Request) {
 
-	logit("gameTraffic", "called")
-	var q []byte
-	n, err := r.Body.Read(q)
+	//logit("gameTraffic", "called")
+
+	var block block
+	// n, err := r.Body.Read(jsonBytes)
 
 	w.Header().Set("Access-Control-Allow-Origin", "*") //TODO - tighten this up
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Methods", "*") //POST, OPTIONS")
 
-	logit("gameTraffic", n, "bytes")
-	if err != nil {
-		logit(err.Error())
-		w.Write([]byte("Error reading request"))
-		return
+	//logit(r.Method)
+	if r.Method == "POST" {
+		err := json.NewDecoder(r.Body).Decode(&block)
+
+		if err != nil {
+			logit(err.Error())
+			w.Write([]byte("Error reading JSON (not a block) ?" + err.Error()))
+			//w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		//its possible there are 0 bytes in the request
+		// if len(block) == 0 {
+		// 	w.WriteHeader(http.StatusNoContent)
+		// 	//nothing in the outbound queue for you
+		// 	//w.response([]byte("{}"))
+		// 	return
+		// }
+		//w.WriteHeader(http.StatusOK)
+
+		response := processBlock(block)
+
+		w.Write(response) //process the request que (from this player) and return the response (typically moved masses)
 	}
-
-	w.Write(rx(q)) //process the request que (from this player) and return the response (typically moved masses)
-
 }
 
 func customHeaders(fs http.Handler) http.HandlerFunc {
@@ -153,6 +177,14 @@ func customHeaders(fs http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// add headers etc here
 		// return if you do not want the FileServer handle a specific request
+		if strings.HasSuffix(r.RequestURI, "/gi") {
+			gameTraffic(w, r)
+			return
+		}
+		if strings.HasSuffix(r.RequestURI, "/home") {
+			homePage(w, r)
+			return
+		}
 		if strings.HasSuffix(r.RequestURI, ".js") {
 			w.Header().Set("Cache-Control", "no-cache")
 		}

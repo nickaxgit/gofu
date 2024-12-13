@@ -6,44 +6,44 @@ import (
 	"math/rand/v2"
 )
 
-type SkinPayload struct {
-	ti       int
-	scale    Vector
-	rotation float64
+type skinPayload struct {
+	Ti       int
+	Scale    Vector
+	Rotation float64
 }
 
 type soundPayload struct {
-	sound    string
-	position Vector
-	volume   float32
-	label    string
-	loop     bool
+	Sound    string  `json:"sound"`
+	Position Vector  `json:"position"`
+	Volume   float32 `json:"volume"`
+	Label    string  `json:"label"`
+	Loop     bool    `json:"loop"`
 }
 
 type massPayload struct {
-	//index: i, mass: state.masses[i]}}) //we receive a new thing sfrom someone -
-	i    int
-	mass Mass
+	//index: I, mass: state.masses[I]}}) //we receive a new thing sfrom someone -
+	I    int  `json:"i"`
+	Mass Mass `json:"mass"`
 }
 
 type springPayload struct {
-	ti     int
-	si     int
-	spring Spring
+	Ti     int    `json:"ti"`
+	Si     int    `json:"si"`
+	Spring Spring `json:"spring"`
 }
 
 type thingPayload struct {
-	ti    int
-	thing Thing
+	Ti    int   `json:"ti"`
+	Thing Thing `json:"thing"`
 }
 
-type State struct { //the data of a game in progress - it is serianlised and should have no methods - it can be entirely replaced at any point by rejoining a game
-	gameId    int
-	Players   map[string]*Player
-	Masses    []*Mass
-	Things    []*Thing
-	DeathList []*Player
-	Layers    map[string]*Layer
+type State struct { //the data of a game in progress - it is serialised and should have no methods - it can be entirely replaced at any point by rejoining a game
+	GameId    int                `json:"gameId"`
+	Players   map[string]*Player `json:"players"`
+	Masses    []*Mass            `json:"masses"`
+	Things    []*Thing           `json:"things"`
+	deathList []*Player
+	Layers    map[string]*Layer `json:"layers"`
 }
 
 func (s *State) AddMass(m *Mass) int {
@@ -57,8 +57,9 @@ func (s *State) addThing(layer, picName string, isHole bool) int {
 	return len(s.Things) - 1 // return the index of the new thing
 }
 
-func (s *State) AddSpring(thing, m1, m2 int, isRim, collideable bool) int {
-	return len(s.Things[thing].springs) - 1 // NB: returns the index of the spring in the thing
+func (s *State) AddSpring(thing, m1, m2 int, collideable bool) int {
+	s.Things[thing].Springs = append(s.Things[thing].Springs, NewSpring(s.Masses, m1, m2, collideable))
+	return len(s.Things[thing].Springs) - 1 // NB: returns the index of the spring in the thing
 }
 
 func (s *State) AddPlayer(name string, position Vector) *Player {
@@ -69,15 +70,16 @@ func (s *State) AddPlayer(name string, position Vector) *Player {
 	rr := s.AddMass(NewMass(position.add(Vector{w, 0}), 1, false, false, true, dozer))
 	fl := s.AddMass(NewMass(position.add(Vector{0, -h}), 10, false, false, true, dozer))
 	fr := s.AddMass(NewMass(position.add(Vector{w, -h}), 10, false, false, true, dozer))
-	s.Things[dozer].scale.y = h / w
+	s.Things[dozer].Scale.Y = h / w
+	s.Things[dozer].Scale.X = 1
 
-	s.AddSpring(dozer, rr, rl, false, true) // bottom
-	s.AddSpring(dozer, rl, fl, false, true) // left
-	s.AddSpring(dozer, fl, fr, false, true) // top
-	s.AddSpring(dozer, fr, rr, false, true) // right
+	s.AddSpring(dozer, rr, rl, true) // bottom
+	s.AddSpring(dozer, rl, fl, true) // left
+	s.AddSpring(dozer, fl, fr, true) // top
+	s.AddSpring(dozer, fr, rr, true) // right
 
-	s.AddSpring(dozer, rr, fl, false, false) // cross members (not collideable)
-	s.AddSpring(dozer, rl, fr, false, false)
+	s.AddSpring(dozer, rr, fl, false) // cross members (not collideable)
+	s.AddSpring(dozer, rl, fr, false)
 
 	p := NewPlayer(name, dozer)
 	s.Players[name] = p
@@ -88,25 +90,25 @@ func (s *State) AddPlayer(name string, position Vector) *Player {
 
 func (p *Player) Move(state *State) {
 	if !p.dying { //you loose all traction when dying
-		dozer := state.Things[p.dozer]
-		rr := state.Masses[dozer.springs[0].m1].p
-		rl := state.Masses[dozer.springs[0].m2].p
-		fl := state.Masses[dozer.springs[1].m2].p
-		fr := state.Masses[dozer.springs[2].m2].p
+		dozer := state.Things[p.Dozer]
+		rr := &state.Masses[dozer.Springs[0].M1].P
+		rl := &state.Masses[dozer.Springs[0].M2].P
+		fl := &state.Masses[dozer.Springs[1].M2].P
+		fr := &state.Masses[dozer.Springs[2].M2].P
 
-		leftside := fl.subtract(&rl)
+		leftside := fl.subtract(rl)
 		lt := leftside.normalise() //left track
 
-		rightside := fr.subtract(&rr)
+		rightside := fr.subtract(rr)
 		rt := rightside.normalise() //right track
 
-		fl.addIn(lt.multiply(p.leftDrive))
-		rl.addIn(lt.multiply(p.leftDrive))
+		fl.addIn(lt.multiply(p.LeftDrive))
+		rl.addIn(lt.multiply(p.LeftDrive))
 
-		fr.addIn(rt.multiply(p.rightDrive))
-		rr.addIn(rt.multiply(p.rightDrive))
+		fr.addIn(rt.multiply(p.RightDrive))
+		rr.addIn(rt.multiply(p.RightDrive))
 
-		revs := float32(math.Abs(float64(p.leftDrive)) + math.Abs(float64(p.rightDrive)))
+		revs := float32(math.Abs(float64(p.LeftDrive)) + math.Abs(float64(p.RightDrive)))
 		if revs != p.oRevs {
 			p.oRevs = revs
 			// server.Q4all({cmd:"revs",payload:{player:p.playerName,revs}})
@@ -120,11 +122,11 @@ func (state *State) closestSpring(wp Vector) (spring int, thing int) {
 	closestDistance := float64(1000)
 
 	for t := 0; t < len(state.Things); t++ {
-		for s := 0; s < len(state.Things[t].springs); s++ {
+		for s := 0; s < len(state.Things[t].Springs); s++ {
 
-			spring := state.Things[t].springs[s]
-			m1p := state.Masses[spring.m1].p
-			m2p := state.Masses[spring.m2].p
+			spring := state.Things[t].Springs[s]
+			m1p := state.Masses[spring.M1].P
+			m2p := state.Masses[spring.M2].P
 
 			if wp.liesBetween(&m1p, &m2p) {
 				d := wp.distanceFromLine(&m1p, &m2p)
@@ -140,13 +142,13 @@ func (state *State) closestSpring(wp Vector) (spring int, thing int) {
 
 }
 
-func (state *State) closestMass(wp Vector) int {
+func (state *State) closestMass(wp *Vector) int {
 
 	//let closestDistance=within
 	for i := 0; i < len(state.Masses); i++ {
 		m := state.Masses[i]
-		d := wp.distanceFrom(&m.p)
-		if d < m.r {
+		d := wp.distanceFrom(&m.P)
+		if d < m.R {
 			return i
 		}
 	}
@@ -157,25 +159,27 @@ func (state *State) checkHoles() {
 
 	//check for escapes
 	for _, m := range state.Masses {
-		if m.fallingInto > -1 {
-			if !m.isInside(state.Masses, state.Things[m.fallingInto]) {
-				m.fallingInto = -1 //phew, escaped
+		if !m.IsCoin { //coins can never escape holes
+			if m.fallingInto > -1 {
+				if !m.isInside(state.Masses, state.Things[m.fallingInto]) {
+					m.fallingInto = -1 //phew, escaped
+				}
 			}
 		}
 	}
 
 	for ti, t := range state.Things {
 
-		if t.isHole {
+		if t.IsHole {
 			for _, m := range state.Masses {
 				if m.thingNum != ti { //masses cannot fall into things they belong to
 					if !m.fixed && m.fallingInto == -1 { //you can only be falling into one hole at once - and fixed masses can't fall into anything
 						if m.isInside(state.Masses, t) {
 							m.fallingInto = ti
-							if m.isCoin {
-								qSound("coin-flip", m.p, 0.2, "", false)
+							if m.IsCoin {
+								qSound("coin-flip", m.P, 0.2, "", false)
 							} else {
-								qSound("clank", m.p, 0.2, "", false)
+								qSound("clank", m.P, 0.2, "", false)
 							}
 						}
 					}
@@ -192,7 +196,7 @@ func (state *State) resolvePenetrations() bool {
 		if m.collideable && m.enabled {
 			for ti, t := range state.Things {
 
-				if !t.isHole {
+				if !t.IsHole {
 					if state.pushApart(m, ti) {
 						penetrated = true
 					}
@@ -208,11 +212,11 @@ func (state *State) pushApart(mass *Mass, thingNum int) bool {
 
 	penetrated := false
 	thing := state.Things[thingNum]
-	for _, spring := range thing.springs {
+	for _, spring := range thing.Springs {
 		if spring.collideable {
-			if spring.contains(state.Masses, &mass.p) { //are we within the endpoints of the spring
+			if spring.contains(state.Masses, &mass.P) { //are we within the endpoints of the spring
 				dist := mass.sideof(state.Masses, spring) //distance from the line .. negative means its gone to the right hand (wrong side)
-				pen := dist - mass.r
+				pen := dist - mass.R
 
 				if pen < 0 && pen > -20 { //this.r*2 ) { //we're on the wrong side
 					mass.lastThingTouched = thingNum
@@ -232,17 +236,19 @@ func (state *State) centreOf(thingNum int) Vector {
 
 	thing := state.Things[thingNum]
 	r := Vector{0, 0}
-	for _, spring := range thing.springs {
-		r.addIn(state.Masses[spring.m1].p)
+	for _, spring := range thing.Springs {
+		r.addIn(state.Masses[spring.M1].P)
 	}
-	return r.multiply(float64(1 / len(thing.springs)))
+
+	f := 1 / float64(len(thing.Springs))
+	return r.multiply(f)
 }
 
 func (state *State) countCoin(lastThingCoinTouched int, value int) {
 	//for each player
 
 	for _, p := range state.Players {
-		if p.dozer == lastThingCoinTouched {
+		if p.Dozer == lastThingCoinTouched {
 			p.stepCoins += value //coins won this step
 		}
 	}
@@ -254,12 +260,12 @@ func (state *State) tumbleCoins() {
 			hole := state.centreOf(m.fallingInto) //state.things[m.fallingInto].centre(state.masses)
 			m.moveTowards(&hole, 1)               //also dragging dozer tracks into holes 2 was too strong
 
-			if m.isCoin {
-				m.z -= 0.1 //fall down
+			if m.IsCoin {
+				m.Z -= 0.1 //fall down
 
-				if m.z == -5 {
-					qSound("coin-drop", m.p, 0.2, "", false)      //hit the bottom
-					state.countCoin(m.lastThingTouched, int(m.r)) //this is a server side function
+				if m.Z < -5 {
+					qSound("coin-drop", m.P, 0.2, "", false)      //hit the bottom
+					state.countCoin(m.lastThingTouched, int(m.R)) //this is a server side function
 					m.enabled = false
 				}
 			}
@@ -269,7 +275,7 @@ func (state *State) tumbleCoins() {
 
 func (state *State) stretchSprings() {
 	for _, t := range state.Things {
-		for _, s := range t.springs {
+		for _, s := range t.Springs {
 			s.stretch(state.Masses)
 		}
 	}
@@ -285,7 +291,7 @@ func (state *State) scatterCoins(w float64, h float64) {
 	for i := 0; i < len(countValues); i += 2 {
 		v := countValues[i+1]
 		for j := 0; j < countValues[i]; j++ {
-			p := Vector{x: math.Floor(rand.Float64() * w), y: math.Floor(rand.Float64() * h)}
+			p := Vector{X: math.Floor(rand.Float64() * w), Y: math.Floor(rand.Float64() * h)}
 			state.AddMass(NewMass(p, float64(v), false, true, true, -1)) //coins don't have a thingNum
 		}
 	}
@@ -294,25 +300,25 @@ func (state *State) scatterCoins(w float64, h float64) {
 func (state *State) checkDeaths() {
 	for _, p := range state.Players {
 
-		dozer := state.Things[p.dozer]
+		dozer := state.Things[p.Dozer]
 		if p.dying {
-			dozer.scale.y -= 0.01
-			dozer.scale.x -= 0.01
-			dozer.rotation += 0.1
-			q4all(reply{cmd: "skin", payload: SkinPayload{ti: p.dozer, scale: dozer.scale, rotation: dozer.rotation}})
-			if dozer.scale.x == 0 {
-				state.DeathList = append(state.DeathList, p) //TODO - respawn/ spectate etc
+			dozer.Scale.Y -= 0.01
+			dozer.Scale.X -= 0.01
+			dozer.Rotation += 0.1
+			q4all(reply{Cmd: "skin", Payload: skinPayload{Ti: p.Dozer, Scale: dozer.Scale, Rotation: dozer.Rotation}})
+			if dozer.Scale.X == 0 {
+				state.deathList = append(state.deathList, p) //TODO - respawn/ spectate etc
 			}
 		} else {
-			for _, s := range dozer.springs {
-				m := state.Masses[s.m1]
+			for _, s := range dozer.Springs {
+				m := state.Masses[s.M1]
 				if m.fallingInto > -1 {
 					hole := state.Things[m.fallingInto]
-					cs := hole.closestPointOnEdge(state.Masses, &m.p)
-					d := cs.distanceFrom(&m.p)
+					cs := hole.closestPointOnEdge(state.Masses, &m.P)
+					d := cs.distanceFrom(&m.P)
 					if d > 80 { //more than 50 units over the edge (we already know we are inside the hole)
 						p.dying = true
-						qSound("dozer-fall", m.p, 0.4, "", false)
+						qSound("dozer-fall", m.P, 0.4, "", false)
 						return
 					}
 				}
@@ -324,7 +330,7 @@ func (state *State) checkDeaths() {
 func (state *State) makeHoles(numHoles int, w float64, h float64) {
 	for i := 0; i < numHoles; i++ {
 		x := math.Floor(rand.Float64() * w)
-		y := math.Floor(rand.Float64() * h)
+		y := 400 + math.Floor(rand.Float64()*h)
 		r := 100 + rand.Float64()*400
 		state.MakeHole(x, y, r)
 	}
@@ -332,11 +338,11 @@ func (state *State) makeHoles(numHoles int, w float64, h float64) {
 
 func (state *State) MakeHole(x float64, y float64, r float64) {
 	t := state.addThing("holes", "hole", true)
-	state.Things[t].scale.y = 2.1
-	state.Things[t].scale.x = 2
-	state.Things[t].offset.x = -r / 2
+	state.Things[t].Scale.Y = 2.1
+	state.Things[t].Scale.X = 2
+	state.Things[t].Offset.X = -r / 2
 
-	const sides = 7
+	const sides = 9
 	for i := range sides {
 		a := float64(i) * math.Pi * 2 / sides
 		b := float64(i+1) * math.Pi * 2 / sides
@@ -344,11 +350,11 @@ func (state *State) MakeHole(x float64, y float64, r float64) {
 		p2 := Vector{x + math.Cos(b)*r, y + math.Sin(b)*r}
 		m1 := state.AddMass(NewMass(p1, 1, true, false, false, t))
 		m2 := state.AddMass(NewMass(p2, 1, true, false, false, t))
-		state.AddSpring(t, m1, m2, true, false) //holes don't have thingnums (which are just a way to track who coins belong to)
+		state.AddSpring(t, m1, m2, false) //holes don't have thingnums (which are just a way to track who coins belong to)
 	}
 }
 
-// executs a physics step and returns the index and new position for all the masses that move
+// executes a physics step and returns the index and new position for all the masses that move
 func (state *State) moveAll() []int {
 
 	movedMasses := []int{} //return the index, x and y of all masses that move
@@ -357,13 +363,15 @@ func (state *State) moveAll() []int {
 
 		//inertia
 		for _, m := range state.Masses {
-			m.op = Vector{m.p.x, m.p.y}
-			m.oz = m.z //record all position (AND angles)
+			m.op = Vector{m.P.X, m.P.Y}
+			m.oz = m.Z //record all position (AND depths)
 		}
 
 		//inertia and friction
 		for _, m := range state.Masses {
-			m.p.addIn(m.v.multiply(.9))
+			//if m.enabled {
+			m.P.addIn(m.v.multiply(.9))
+			//}
 		}
 
 		for _, p := range state.Players {
@@ -386,15 +394,15 @@ func (state *State) moveAll() []int {
 
 	//calculate velocity based on moevent
 	for _, m := range state.Masses {
-		m.v = m.p.subtract(&m.op)
+		m.v = m.P.subtract(&m.op)
 	}
 
 	for i, m := range state.Masses {
-		if !m.p.Equals(&m.op) || m.z != m.oz {
+		if !m.P.Equals(&m.op) || m.Z != m.oz {
 			movedMasses = append(movedMasses, i)
-			movedMasses = append(movedMasses, int(m.p.x))
-			movedMasses = append(movedMasses, int(m.p.y))
-			movedMasses = append(movedMasses, int(m.z))
+			movedMasses = append(movedMasses, int(m.P.X))
+			movedMasses = append(movedMasses, int(m.P.Y))
+			movedMasses = append(movedMasses, int(m.Z))
 
 		}
 	}
@@ -414,12 +422,12 @@ func (state *State) resolveMassOverlaps() {
 				continue
 			} //no need to check fixed masses
 			//optimise here - we dont need to do the full distance calculation
-			d := a.p.distanceFrom(&b.p) //Vector.distanceBetween(a.position,b.position)
-			overlap := (a.r + b.r) - d
+			d := a.P.distanceFrom(&b.P) //Vector.distanceBetween(a.position,b.position)
+			overlap := (a.R + b.R) - d
 
 			if overlap > 0 {
 				//let v = ap.subtract(bp).normalise().multiply(0.5)
-				delta := b.p.subtract(&a.p)
+				delta := b.P.subtract(&a.P)
 				delta = delta.normalise()
 				delta = delta.multiply(overlap)
 
@@ -428,22 +436,22 @@ func (state *State) resolveMassOverlaps() {
 					afix = 1
 				} //if b is fixed then a is pushed out of b
 				if !a.fixed {
-					a.p.subIn(delta.multiply(afix))
+					a.P.subIn(delta.multiply(afix))
 				}
 				if !b.fixed {
-					b.p.addIn(delta.multiply((1 - afix)))
+					b.P.addIn(delta.multiply((1 - afix)))
 				}
 
 				//transfer the last touch from the coin moving fastest
-				if a.isCoin && b.isCoin {
+				if a.IsCoin && b.IsCoin {
 					if a.v.lengthSq() > b.v.lengthSq() {
 						b.lastThingTouched = a.lastThingTouched
 					} else {
 						a.lastThingTouched = b.lastThingTouched
 					}
-				} else if a.isCoin { //or off the object touched if one of the masses is not a coin
+				} else if a.IsCoin { //or off the object touched if one of the masses is not a coin
 					a.lastThingTouched = b.thingNum
-				} else if b.isCoin {
+				} else if b.IsCoin {
 					b.lastThingTouched = a.thingNum
 
 				}
@@ -461,8 +469,8 @@ func (state *State) setupTiledLayer(layerName string, pic string, tileSize float
 	down := w / tileSize
 	for i := float64(0); i < down+4; i++ {
 		for j := float64(0); j < h/tileSize+4; j++ {
-			p := Prop{position: Vector{x, y}, angle: 0, radius: tileSize / 2, pic: pic}
-			layer.props = append(layer.props, p)
+			p := Prop{Position: Vector{x, y}, Angle: 0, Radius: tileSize / 2, Pic: pic}
+			layer.Props = append(layer.Props, p)
 			x += tileSize
 		}
 		x = -tileSize * 2
@@ -474,6 +482,7 @@ func (state *State) setupRandomLayer(layerName string, picList []string, extensi
 
 	layer := NewLayer(layerName, picList, extension)
 	state.Layers[layerName] = layer
+	layer.Props = make([]Prop, numProps)
 
 	for i := range numProps {
 
@@ -487,13 +496,13 @@ func (state *State) setupRandomLayer(layerName string, picList []string, extensi
 			p = Vector{x, y}
 			pic = picList[int(math.Floor(rand.Float64()*float64(len(picList))))]
 			radius = minRadius + rand.Float64()*(maxRadius-minRadius)
-			if !spotOccupied(layer.props, &p, radius) {
+			if !spotOccupied(layer.Props, &p, radius) {
 				break
 			}
 		}
 
-		prop := Prop{position: p, angle: 0, radius: radius, pic: pic}
-		layer.props[i] = prop
+		prop := Prop{Position: p, Angle: 0, Radius: radius, Pic: pic}
+		layer.Props[i] = prop
 	}
 }
 
@@ -510,7 +519,7 @@ func (state *State) setupLayers(w float64, h float64) {
 
 }
 
-func NewState() State {
+func NewState() *State {
 	gameId := int(rand.Float32() * 1000000)
-	return State{gameId: gameId, Players: map[string]*Player{}, Masses: []*Mass{}, Things: []*Thing{}, DeathList: []*Player{}, Layers: map[string]*Layer{}}
+	return &State{GameId: gameId, Players: map[string]*Player{}, Masses: []*Mass{}, Things: []*Thing{}, deathList: []*Player{}, Layers: map[string]*Layer{}}
 }

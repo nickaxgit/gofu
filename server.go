@@ -4,27 +4,38 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/rand/v2"
 	"strings"
 )
 
-type msg struct {
-	gameId     int
-	playerName string
-	cmd        string
-	payload    interface{} //Object
+type block struct {
+	GameId     int
+	PlayerName string
+	Msgs       []msg
 }
 
-type inKeyPayload struct {
-	key   string
-	shift bool
-	ctrl  bool
-	alt   bool
+type msg struct {
+	Cmd     string
+	Key     string
+	Payload []float64 //this could become int32's
 }
+
+// type inKeyPayload struct {
+// 	key   string
+// 	shift bool
+// 	ctrl  bool
+// 	alt   bool
+// }
+
+// type VectorPayload struct {
+// 	x float64
+// 	y float64
+// }
 
 type reply struct {
-	cmd     string
-	payload interface{} //map[string]interface{} //names to (arbitrarily typed) values
+	Cmd     string
+	Payload interface{} //map[string]interface{} //names to (arbitrarily typed) values
 }
 
 type ModeEnum int
@@ -35,7 +46,7 @@ const (
 	addingSpring = 3
 )
 
-var games map[int]State    //the data of games in progress - by id
+var games map[int]*State   //the data of games in progress - by id
 var obq map[string][]reply //qued outbound JSON data (replies), per player (new mass index, position triples)
 
 func qSound(sound string, position Vector, volume float32, label string, loop bool) {
@@ -43,161 +54,174 @@ func qSound(sound string, position Vector, volume float32, label string, loop bo
 
 	// = (sound:sound,position:position,volume:volume,label:label,loop:loop)
 
-	payload := soundPayload{sound: sound, position: position, volume: volume, label: label, loop: loop}
-	q4all(reply{cmd: "sound", payload: payload})
+	payload := soundPayload{Sound: sound, Position: position, Volume: volume, Label: label, Loop: loop}
+	q4all(reply{Cmd: "sound", Payload: payload})
 
 }
 
 func q4all(msg reply) {
-	for pn, q := range obq { //for every outbound que (player)
-		obq[pn] = append(q, msg) //we MUST index the slice - or we are appending to a byval copy
+	for pn := range obq { //for every outbound que (player)
+		obq[pn] = append(obq[pn], msg) //we MUST index the slice - or we are appending to a byval copy
 	}
 }
 
 func spotOccupied(props []Prop, p *Vector, r float64) bool {
 	for _, prop := range props {
-		if prop.position.distanceFrom(p) < prop.radius+r {
+		if prop.Position.distanceFrom(p) < prop.Radius+r {
 			return true
 		}
 	}
 	return false
 }
 
-func rx(inJSONbytes []byte) []byte {
-	//this is the entry point for the server
-	var inq []msg
-	err := json.Unmarshal(inJSONbytes, &inq)
-	if err != nil {
-		panic(err)
+func processBlock(block block) []byte {
+	//this is the entry point for the server - the equivalent of rx() in the TS example
+
+	// var inBlock block // []msg
+	// err := json.Unmarshal(inJSONbytes, &inBlock)
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	if block.PlayerName == `` {
+		logit(block)
+		panic(`no player name in message`)
 	}
 
-	//made an empty request
-	if len(inq) == 0 {
-		return []byte("{}")
-	}
-
-	for _, m := range inq { //process every msg in the queue
-		process(m)
-	}
-
-	from := inq[0].playerName
+	from := block.PlayerName
 	if from == "" {
 		panic(`no player name in message`)
 	}
 
-	//is there anything in this players outpud queue to reply with
+	logit(len(block.Msgs), `messages in block`)
+	for _, m := range block.Msgs { //process every msg in the queue
+		process(block.GameId, from, m)
+	}
+
+	//is there anything in this players outbound queue to reply with
 	if len(obq[from]) > 0 {
 
 		jsonReply, err := json.Marshal(obq[from]) //reply to sender
 		if err != nil {
 			panic(err)
 		}
+		//logit(string(jsonReply))
 
 		obq[from] = []reply{} //empty the queue
 		return jsonReply      // return this players outbound queue - all changed mass positions and player states
-		//and empty the queue
+
 	} else {
 		return []byte("{}") //nothing queued for them - reply with an empty object
 	}
 }
 
-func process(msg msg) {
+// each player has a que.. but maybe a single shared que of responses by sqn would be better
+// when all players have rx'd something it is removed from the queue
+func process(gameId int, playerName string, msg msg) {
 
 	var player *Player
 
-	var state State
+	var state *State
 
-	if msg.gameId == -1 {
-		player = NewPlayer(msg.playerName+"bootstrap", 0)
+	if gameId == -1 || gameId == 0 {
+		player = NewPlayer(playerName+"bootstrap", 0)
 	} else {
-		state = games[msg.gameId]
-		player = state.Players[msg.playerName]
+		state = games[gameId]
+		player = state.Players[playerName]
 	}
 
 	dx, dy := float64(0), float64(0) //used for sliding skins
 	prop := "offset"
 	step := float64(3)
 
-	if msg.cmd == "createGame" {
+	if msg.Cmd == "createGame" {
 		//create a new game
 		state := NewState() //asigns a random game id
-		games[state.gameId] = state
-		state.makeHoles(10, 5000, 5000)
-		state.AddPlayer(msg.playerName, Vector{100, 100})
-		state.AddPlayer("bot1", Vector{400, 120})
+		games[state.GameId] = state
+		//state.makeHoles(10, 5000, 5000)
+		state.makeHoles(1, 0, 0)
+		state.AddPlayer(playerName, Vector{500, 100})
+		//state.AddPlayer("bot1", Vector{400, 120})
 		state.setupLayers(5000, 5000)
 		state.scatterCoins(5000, 5000)
 
-		obq[msg.playerName] = []reply{{cmd: "state", payload: state}}
-
-		qSound("dozer", Vector{100, 100}, 0.1, "revs-"+msg.playerName, true)
-	} else if msg.cmd == "step" {
+		obq[playerName] = []reply{{Cmd: "state", Payload: state}}
+		logit("Game created", state.GameId)
+		qSound("dozer", Vector{100, 100}, 0.1, "revs-"+playerName, true)
+	} else if msg.Cmd == "step" {
 		newPositions := state.moveAll() //<- this is a physics step
 		for pn, p := range state.Players {
 			if !strings.HasPrefix(pn, "bot") {
-				p.coins += p.stepCoins
-				obq[pn] = append(obq[pn], reply{cmd: "mps", payload: newPositions})
-				obq[pn] = append(obq[pn], reply{cmd: "coins", payload: player.coins})
+				p.Coins += p.stepCoins
+				if len(newPositions) > 0 {
+					obq[pn] = append(obq[pn], reply{Cmd: "mps", Payload: newPositions})
+				}
+				//TODO - only send coins if the value has changed
+				if p.stepCoins > 0 { //did we win any coins this step
+					obq[pn] = append(obq[pn], reply{Cmd: "coins", Payload: player.Coins})
+				}
 				p.stepCoins = 0 //reset for next step
 			}
 		}
-	} else if msg.cmd == "joinGame" {
+	} else if msg.Cmd == "joinGame" {
 		randomPos := Vector{1000 * rand.Float64(), 1000 * rand.Float64()}
-		joiner := state.AddPlayer(msg.playerName, randomPos)
+		joiner := state.AddPlayer(playerName, randomPos)
 		//obq[msg.playerName]=[{cmd:"state",payload:state.gameId}   ]
-		q4all(reply{cmd: "playerJoined", payload: joiner})
-	} else if msg.cmd == "lt" {
-		player.leftDrive = msg.payload.(float64) //no need to echo them back - local versions are used for knobs only
-	} else if msg.cmd == "rt" {
-		player.rightDrive = msg.payload.(float64)
-	} else if msg.cmd == "mm" { //mouse move
-		pl := msg.payload.(Vector)
-		player.worldCursor = Vector{pl.x, pl.y}
+		q4all(reply{Cmd: "playerJoined", Payload: joiner})
+	} else if msg.Cmd == "lt" {
+		player.LeftDrive = msg.Payload[0] //no need to echo them back - local versions are used for knobs only
+	} else if msg.Cmd == "rt" {
+		player.RightDrive = msg.Payload[0]
+	} else if msg.Cmd == "mm" { //mouse move
+
+		player.worldCursor.X = msg.Payload[0]
+		player.worldCursor.Y = msg.Payload[1]
 
 		if player.mode != playing {
-			player.highlit.mass = state.closestMass(player.worldCursor)
-			player.highlit.spring, player.highlit.thing = state.closestSpring(player.worldCursor)
+			player.Highlit.Mass = state.closestMass(&player.worldCursor)
+			player.Highlit.Spring, player.Highlit.Thing = state.closestSpring(player.worldCursor)
 
 		}
-	} else if msg.cmd == "md" {
+	} else if msg.Cmd == "md" {
 		if player.mode == addingSpring {
 			//we are adding a spring to nowhere .. make a new mass
-			if player.highlit.mass == -1 {
+			if player.Highlit.Mass == -1 {
 				//console.log("Spring to/from nowhere - adding a mass")
 				m := NewMass(player.worldCursor, 10, false, false, true, player.currentThing)
 				i := state.AddMass(m)
-				q4all(reply{cmd: "mass", payload: massPayload{i: i, mass: *state.Masses[i]}}) //we receive a new thing sfrom someone -
-				player.highlit.mass = i
+				q4all(reply{Cmd: "mass", Payload: massPayload{I: i, Mass: *state.Masses[i]}}) //we receive a new thing sfrom someone -
+				player.Highlit.Mass = i
 			}
 
 			if player.springStart == -1 { //starting a new spring
 				logit("Starting a new spring")
-				player.springStart = player.highlit.mass //closestMass(this.cursor)
+				player.springStart = player.Highlit.Mass //closestMass(this.cursor)
 				logit("Spring starts at mass", player.springStart)
 			} else { //continuing the chain of springs
-				i := state.AddSpring(player.currentThing, player.springStart, player.highlit.mass, false, true) //this is a spring-like thing (but not an acutal spring.. it has no length for example)
+				i := state.AddSpring(player.currentThing, player.springStart, player.Highlit.Mass, true) //this is a spring-like thing (but not an acutal spring.. it has no length for example)
 				t := state.Things[player.currentThing]
 
-				s := springPayload{ti: player.currentThing, si: i, spring: *t.springs[i]}
-				q4all(reply{cmd: "spring", payload: s})
+				s := springPayload{Ti: player.currentThing, Si: i, Spring: *t.Springs[i]}
+				q4all(reply{Cmd: "spring", Payload: s})
 
 				//this.currentThing.springs.push(new Spring(this.state.masses,me.springStart,this.highlit.mass,true))
-				logit("Continued chain of springs from mass ", player.springStart, " to ", player.highlit.mass)
+				logit("Continued chain of springs from mass ", player.springStart, " to ", player.Highlit.Mass)
 				//console.log("Current thing has", t.springs.length, "springs")
-				player.springStart = player.highlit.mass
+				player.springStart = player.Highlit.Mass
 			}
 		}
-	} else if msg.cmd == "keyDown" {
-		pl := msg.payload.(inKeyPayload) //type assert the payload
-		k := pl.key
-		shift := pl.shift
-		ctrl := pl.ctrl
+	} else if msg.Cmd == "keyDown" {
 
-		if shift {
+		k := msg.Key
+		shift := msg.Payload[0]
+		ctrl := msg.Payload[1]
+		//alt := pl["alt"].(bool)
+
+		if shift > 0 {
 			prop = "scale"
 			step = .1
 		}
-		if ctrl {
+		if ctrl > 0 {
 			prop = "rotation"
 			step = .1
 		}
@@ -214,14 +238,14 @@ func process(msg msg) {
 			player.mode = addingSpring
 			player.currentThing = state.addThing("holes", "hole", true)
 			player.currentThing = state.addThing("dozers", "dozer", false)
-			sendCurrentThing(&state, player)
+			sendCurrentThing(state, player)
 		} else if k == "s" {
 			player.springStart = -1
 			//player.mode = ModeEnum.addingSpring
 		} else if k == "p" {
-			m := state.Masses[player.highlit.mass]
+			m := state.Masses[player.Highlit.Mass]
 			m.fixed = !m.fixed
-			q4all(reply{cmd: "mass", payload: massPayload{i: player.highlit.mass, mass: *m}})
+			q4all(reply{Cmd: "mass", Payload: massPayload{I: player.Highlit.Mass, Mass: *m}})
 		}
 	}
 
@@ -230,21 +254,21 @@ func process(msg msg) {
 		if player.currentThing > -1 {
 			ct := state.Things[player.currentThing]
 			if prop == "rotation" {
-				ct.rotation += dx
+				ct.Rotation += dx
 			} else { //if prop=="scale" {
-				ct.scale.x += dx
-				ct.scale.y += dy
+				ct.Scale.X += dx
+				ct.Scale.Y += dy
 			}
 		}
-		sendCurrentThing(&state, player) //TODO this could just be the skin
+		sendCurrentThing(state, player) //TODO this could just be the skin
 	}
 }
 
 func sendCurrentThing(state *State, player *Player) {
 	ti := player.currentThing
-	q4all(reply{cmd: "mass", payload: thingPayload{ti: ti, thing: *state.Things[ti]}})
+	q4all(reply{Cmd: "mass", Payload: thingPayload{Ti: ti, Thing: *state.Things[ti]}})
 }
 
 func logit(s ...interface{}) { //accept an array of any type(s)
-	println(s)
+	fmt.Println(s...)
 }

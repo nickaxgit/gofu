@@ -11,10 +11,10 @@ import (
 //when a mass overlaps a spring - the mass is 'owned' by the spring
 
 type Mass struct {
-	p           Vector
-	r           float64
+	P           Vector  `json:"p"`
+	R           float64 `json:"r"`
 	fixed       bool
-	isCoin      bool
+	IsCoin      bool `json:"isCoin"`
 	collideable bool
 	thingNum    int //which thing is this mass part of - coins are -1
 	op          Vector
@@ -22,29 +22,29 @@ type Mass struct {
 	fallingInto int    //*Thing           //index of thing
 	v           Vector //"velocity" - the change in position of this mass
 	//angle            float64 //flipping angle (for coins)
-	z                float64 //falling depth/spin (/height above ground)
+	Z                float64 `json:"z"` //falling depth/spin (/height above ground)
 	enabled          bool
 	lastThingTouched int //who 'owns' this mass
 }
 
 func NewMass(p Vector, r float64, fixed bool, isCoin bool, collideable bool, thingNum int) *Mass {
-	return &Mass{p: p, r: r, fixed: fixed, isCoin: isCoin, collideable: collideable, thingNum: thingNum}
+	return &Mass{P: p, R: r, fixed: fixed, IsCoin: isCoin, collideable: collideable, thingNum: thingNum, enabled: true, fallingInto: -1}
 }
 
 func (m *Mass) moveTowards(p *Vector, dist float64) {
 	//move this mass towards the point p by dist
-	delta := p.subtract(&m.p)
+	delta := p.subtract(&m.P)
 	d := delta.normalise()
-	m.p.addIn(d.multiply(dist))
+	m.P.addIn(d.multiply(dist))
 }
 
 func (m *Mass) isInside(masses []*Mass, thing *Thing) bool {
 	//is this mass inside the thing - "draws" a line from the point (to test) to the origin and counts how many springs of this thing are crossed - if the number is odd, then the point is inside the thing
 	//works for convex or concave things - dont know about things with holes
-	o := Vector{x: 0, y: 0}
+	o := Vector{X: -1000, Y: -1000}
 	crossings := 0
-	for s := 0; s < len(thing.springs); s++ {
-		if thing.springs[s].crosses(masses, &o, &m.p) {
+	for _, s := range thing.Springs {
+		if s.crosses(masses, &o, &m.P) {
 			crossings++
 		}
 	}
@@ -63,8 +63,8 @@ func (m *Mass) resolveMasSpringOverlap(masses []*Mass, spring *Spring, pen float
 	// this.p.addIn(resolve)
 	// return
 
-	a := masses[spring.m1] //.p
-	b := masses[spring.m2] //.p
+	a := masses[spring.M1] //.p
+	b := masses[spring.M2] //.p
 
 	if m.fixed && a.fixed && b.fixed {
 		panic(`all masses fixed - but overlap ?`)
@@ -72,18 +72,18 @@ func (m *Mass) resolveMasSpringOverlap(masses []*Mass, spring *Spring, pen float
 
 	//the spring is fixed the mass is free
 	if a.fixed && b.fixed {
-		m.p.addIn(resolve)
+		m.P.addIn(resolve)
 		return
 	} //if both ends of the spring are pinned move the mass - and EXIT
 
 	if m.fixed {
 		ratio = 0
 	}
-	m.p.addIn(resolve.multiply(ratio)) //push the mass out to the left (things are defined clockwise) - so left is outwards
+	m.P.addIn(resolve.multiply(ratio)) //push the mass out to the left (things are defined clockwise) - so left is outwards
 
-	pol := m.p.closestPointOnLine(&a.p, &b.p)
+	pol := m.P.closestPointOnLine(&a.P, &b.P)
 
-	share := pol.distanceFrom(&a.p) / a.p.distanceFrom(&b.p)
+	share := pol.distanceFrom(&a.P) / a.P.distanceFrom(&b.P)
 	if share > 1 || share < 0 {
 		panic(`share out of range`)
 	}
@@ -94,16 +94,16 @@ func (m *Mass) resolveMasSpringOverlap(masses []*Mass, spring *Spring, pen float
 		share = 0
 	}
 
-	a.p.subIn(resolve.multiply((1 - ratio) * (1 - share)))
-	b.p.subIn(resolve.multiply((1 - ratio) * share))
+	a.P.subIn(resolve.multiply((1 - ratio) * (1 - share)))
+	b.P.subIn(resolve.multiply((1 - ratio) * share))
 }
 
 func (m *Mass) sideof(masses []*Mass, spring *Spring) float64 {
 	//return the signed distance of this point from the spring
-	a := &masses[spring.m1].p
-	b := &masses[spring.m2].p
+	a := &masses[spring.M1].P
+	b := &masses[spring.M2].P
 
-	return m.p.distanceFromLine(a, b) * -mathSign(b.subtract(a).cross(m.p.subtract(a)))
+	return m.P.distanceFromLine(a, b) * -mathSign(b.subtract(a).cross(m.P.subtract(a)))
 
 }
 
