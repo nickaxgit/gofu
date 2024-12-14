@@ -119,7 +119,7 @@ func main() {
 
 	//important!
 	games = make(map[int]*State)
-	obq = make(map[string][]reply)
+	//obq = make(map[string]*qHolder)
 
 	//see customHeaders
 	//http.HandleFunc("/gi", gameTraffic)

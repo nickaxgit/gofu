@@ -1,6 +1,8 @@
 package main
 
-import ()
+import (
+	"sync"
+)
 
 type highlitType struct {
 	Mass   int `json:"mass"`
@@ -33,9 +35,13 @@ type Player struct {
 
 	Killer int `json:"killer"`
 	dying  bool
+	qh     *qHolder //pointer to the queue of messages for this player
 }
 
 func NewPlayer(name string, dozer int) *Player {
-	return &Player{Name: name, Dozer: dozer, MaxDamage: 100, MaxTemperature: 100, worldCursor: Vector{0, 0}, Damage: 0, Temperature: 0, LeftDrive: 0, RightDrive: 0, oRevs: 0, Coins: 0, stepCoins: 0, Highlit: highlitType{-1, -1, -1}, springStart: -1, currentThing: -1, mode: playing, Killer: -1, dying: false}
+
+	p := Player{Name: name, Dozer: dozer, MaxDamage: 100, MaxTemperature: 100, worldCursor: Vector{0, 0}, Damage: 0, Temperature: 0, LeftDrive: 0, RightDrive: 0, oRevs: 0, Coins: 0, stepCoins: 0, Highlit: highlitType{-1, -1, -1}, springStart: -1, currentThing: -1, mode: playing, Killer: -1, dying: false}
+	p.qh = &qHolder{mutex: &sync.Mutex{}, q: make([]*reply, 0)} //initialise their outbound queue
+	return &p
 
 }

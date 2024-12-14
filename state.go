@@ -4,12 +4,13 @@ package main
 import (
 	"math"
 	"math/rand/v2"
+	"strings"
 )
 
 type skinPayload struct {
-	Ti       int
-	Scale    Vector
-	Rotation float64
+	Ti       int     `json:"ti"`
+	Scale    Vector  `json:"scale"`
+	Rotation float64 `json:"rotation"`
 }
 
 type soundPayload struct {
@@ -38,7 +39,8 @@ type thingPayload struct {
 }
 
 type State struct { //the data of a game in progress - it is serialised and should have no methods - it can be entirely replaced at any point by rejoining a game
-	GameId    int                `json:"gameId"`
+	GameId    int `json:"gameId"`
+	host      string
 	Players   map[string]*Player `json:"players"`
 	Masses    []*Mass            `json:"masses"`
 	Things    []*Thing           `json:"things"`
@@ -177,9 +179,9 @@ func (state *State) checkHoles() {
 						if m.isInside(state.Masses, t) {
 							m.fallingInto = ti
 							if m.IsCoin {
-								qSound("coin-flip", m.P, 0.2, "", false)
+								state.qSound("coin-flip", m.P, 0.2, "", false)
 							} else {
-								qSound("clank", m.P, 0.2, "", false)
+								state.qSound("clank", m.P, 0.2, "", false)
 							}
 						}
 					}
@@ -264,8 +266,8 @@ func (state *State) tumbleCoins() {
 				m.Z -= 0.1 //fall down
 
 				if m.Z < -5 {
-					qSound("coin-drop", m.P, 0.2, "", false)      //hit the bottom
-					state.countCoin(m.lastThingTouched, int(m.R)) //this is a server side function
+					state.qSound("coin-drop", m.P, 0.2, "", false) //hit the bottom
+					state.countCoin(m.lastThingTouched, int(m.R))  //this is a server side function
 					m.enabled = false
 				}
 			}
@@ -287,7 +289,7 @@ func (state *State) anyPlayers() bool {
 
 func (state *State) scatterCoins(w float64, h float64) {
 
-	countValues := []int{100, 10, 20, 20, 10, 30, 2, 40}
+	countValues := []int{100, 10, 20, 20, 10, 30, 5, 50}
 	for i := 0; i < len(countValues); i += 2 {
 		v := countValues[i+1]
 		for j := 0; j < countValues[i]; j++ {
@@ -305,8 +307,10 @@ func (state *State) checkDeaths() {
 			dozer.Scale.Y -= 0.01
 			dozer.Scale.X -= 0.01
 			dozer.Rotation += 0.1
-			q4all(reply{Cmd: "skin", Payload: skinPayload{Ti: p.Dozer, Scale: dozer.Scale, Rotation: dozer.Rotation}})
-			if dozer.Scale.X == 0 {
+
+			r := reply{Cmd: "skin", Payload: skinPayload{Ti: p.Dozer, Scale: dozer.Scale, Rotation: dozer.Rotation}}
+			state.q4all(&r)
+			if dozer.Scale.X <= 0 {
 				state.deathList = append(state.deathList, p) //TODO - respawn/ spectate etc
 			}
 		} else {
@@ -316,9 +320,9 @@ func (state *State) checkDeaths() {
 					hole := state.Things[m.fallingInto]
 					cs := hole.closestPointOnEdge(state.Masses, &m.P)
 					d := cs.distanceFrom(&m.P)
-					if d > 80 { //more than 50 units over the edge (we already know we are inside the hole)
+					if d > 100 { //more than 50 units over the edge (we already know we are inside the hole)
 						p.dying = true
-						qSound("dozer-fall", m.P, 0.4, "", false)
+						state.qSound("dozer-fall", m.P, 0.4, "", false)
 						return
 					}
 				}
@@ -400,8 +404,8 @@ func (state *State) moveAll() []int {
 	for i, m := range state.Masses {
 		if !m.P.Equals(&m.op) || m.Z != m.oz {
 			movedMasses = append(movedMasses, i)
-			movedMasses = append(movedMasses, int(m.P.X))
-			movedMasses = append(movedMasses, int(m.P.Y))
+			movedMasses = append(movedMasses, int(m.P.X*100))
+			movedMasses = append(movedMasses, int(m.P.Y*100))
 			movedMasses = append(movedMasses, int(m.Z))
 
 		}
@@ -522,4 +526,32 @@ func (state *State) setupLayers(w float64, h float64) {
 func NewState() *State {
 	gameId := int(rand.Float32() * 1000000)
 	return &State{GameId: gameId, Players: map[string]*Player{}, Masses: []*Mass{}, Things: []*Thing{}, deathList: []*Player{}, Layers: map[string]*Layer{}}
+}
+
+func (state *State) qSound(sound string, position Vector, volume float32, label string, loop bool) {
+	//this is a queue for sounds to be played
+
+	// = (sound:sound,position:position,volume:volume,label:label,loop:loop)
+
+	payload := soundPayload{Sound: sound, Position: position, Volume: volume, Label: label, Loop: loop}
+	state.q4all(&reply{Cmd: "sound", Payload: payload})
+
+}
+
+func (state *State) q4all(msg *reply) {
+
+	for _, p := range state.Players { //for every outbound que (player)
+		q4one(p, msg)
+	}
+
+}
+
+func q4one(p *Player, msg *reply) {
+
+	if !strings.HasPrefix(p.Name, "bot") {
+		p.qh.mutex.Lock()
+		p.qh.q = append(p.qh.q, msg)
+		p.qh.mutex.Unlock()
+	}
+
 }
