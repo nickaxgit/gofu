@@ -190,7 +190,7 @@ func process(gameId int, playerName string, msg msg) *State {
 	} else if msg.Cmd == "step" {
 
 		if playerName == state.host {
-			newPositions := state.moveAll() //<- this is a physics step
+			newPositions := state.moveAll(3) //<- this is a physics step
 			if len(newPositions) > 0 {
 				state.q4all(&reply{Cmd: "mps", Payload: newPositions})
 			}

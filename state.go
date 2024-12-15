@@ -104,7 +104,7 @@ func (p *Player) Move(state *State) {
 		rightside := fr.subtract(rr)
 		rt := rightside.normalise() //right track
 
-		const speed = 5
+		const speed = 2
 		fl.addIn(lt.multiply(p.LeftDrive * speed))
 		rl.addIn(lt.multiply(p.LeftDrive * speed))
 
@@ -360,46 +360,50 @@ func (state *State) MakeHole(x float64, y float64, r float64) {
 }
 
 // executes a physics step and returns the index and new position for all the masses that move
-func (state *State) moveAll() []int {
+func (state *State) moveAll(substeps int) []int {
 
 	movedMasses := []int{} //return the index, x and y of all masses that move
 
 	if state.anyPlayers() && len(state.Masses) > 3 {
 
-		//inertia
-		for _, m := range state.Masses {
-			m.op = Vector{m.P.X, m.P.Y}
-			m.oz = m.Z //record all position (AND depths)
+		for substep := 0; substep < substeps; substep++ {
+
+			//inertia
+			for _, m := range state.Masses {
+				m.op = Vector{m.P.X, m.P.Y}
+				m.oz = m.Z //record all position (AND depths)
+			}
+
+			//inertia and friction
+			for _, m := range state.Masses {
+				//if m.enabled {
+				m.P.addIn(m.v.multiply(.8)) //was .9
+				//}
+			}
+
+			for _, p := range state.Players {
+				p.Move(state) //state.movePlayer(p) //based on a players keyboard/touch inputs move their track masses
+			}
+
+			state.stretchSprings()
+			state.stretchSprings()
+			state.stretchSprings()
+
+			// do{
+			// }while (this.resolvePenetrations()) //loop unit all mass-thing pepetrations are resolved
+			state.checkHoles()
+			state.checkDeaths()
+			state.resolvePenetrations()
+			//masses are pushed out of things (and things away from masses)
+			state.resolveMassOverlaps()
+			state.tumbleCoins() //may change angle
+
+			//calculate velocity based on moevent
+			for _, m := range state.Masses {
+				m.v = m.P.subtract(&m.op)
+			}
+
 		}
-
-		//inertia and friction
-		for _, m := range state.Masses {
-			//if m.enabled {
-			m.P.addIn(m.v.multiply(.8)) //was .9
-			//}
-		}
-
-		for _, p := range state.Players {
-			p.Move(state) //state.movePlayer(p) //based on a players keyboard/touch inputs move their track masses
-		}
-	}
-
-	state.stretchSprings()
-	state.stretchSprings()
-	state.stretchSprings()
-
-	// do{
-	// }while (this.resolvePenetrations()) //loop unit all mass-thing pepetrations are resolved
-	state.checkHoles()
-	state.checkDeaths()
-	state.resolvePenetrations()
-	//masses are pushed out of things (and things away from masses)
-	state.resolveMassOverlaps()
-	state.tumbleCoins() //may change angle
-
-	//calculate velocity based on moevent
-	for _, m := range state.Masses {
-		m.v = m.P.subtract(&m.op)
 	}
 
 	for i, m := range state.Masses {
@@ -408,7 +412,6 @@ func (state *State) moveAll() []int {
 			movedMasses = append(movedMasses, int(m.P.X*100))
 			movedMasses = append(movedMasses, int(m.P.Y*100))
 			movedMasses = append(movedMasses, int(m.Z))
-
 		}
 	}
 
