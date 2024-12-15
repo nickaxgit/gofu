@@ -113,7 +113,7 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	port := ":8081" //":443" //":8081"
+	port := ":443" //":8081"
 	logit("Gofu server - listening on " + port)
 	fs := http.FileServer(http.Dir("../dozer"))
 
@@ -130,8 +130,8 @@ func main() {
 
 	//	http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
 
-	log.Fatal(http.ListenAndServe(port, customHeaders(fs)))
-	//log.Fatal(http.ListenAndServeTLS(port, "dozer_world.crt", "./dozer.key", customHeaders(fs)))
+	//log.Fatal(http.ListenAndServe(port, customHeaders(fs)))
+	log.Fatal(http.ListenAndServeTLS(port, "dozer_world.crt", "./dozer.key", customHeaders(fs)))
 
 }
 
