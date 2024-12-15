@@ -104,11 +104,12 @@ func (p *Player) Move(state *State) {
 		rightside := fr.subtract(rr)
 		rt := rightside.normalise() //right track
 
-		fl.addIn(lt.multiply(p.LeftDrive))
-		rl.addIn(lt.multiply(p.LeftDrive))
+		const speed = 5
+		fl.addIn(lt.multiply(p.LeftDrive * speed))
+		rl.addIn(lt.multiply(p.LeftDrive * speed))
 
-		fr.addIn(rt.multiply(p.RightDrive))
-		rr.addIn(rt.multiply(p.RightDrive))
+		fr.addIn(rt.multiply(p.RightDrive * speed))
+		rr.addIn(rt.multiply(p.RightDrive * speed))
 
 		revs := float32(math.Abs(float64(p.LeftDrive)) + math.Abs(float64(p.RightDrive)))
 		if revs != p.oRevs {
@@ -374,7 +375,7 @@ func (state *State) moveAll() []int {
 		//inertia and friction
 		for _, m := range state.Masses {
 			//if m.enabled {
-			m.P.addIn(m.v.multiply(.9))
+			m.P.addIn(m.v.multiply(.8)) //was .9
 			//}
 		}
 

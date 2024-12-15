@@ -113,8 +113,8 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	port := ":443" //":8081" //":443"
-	fmt.Println("Gofu server - listening on " + port)
+	port := ":443" //":8081"
+	logit("Gofu server - listening on " + port)
 	fs := http.FileServer(http.Dir("../dozer"))
 
 	//important!

@@ -133,6 +133,13 @@ func process(gameId int, playerName string, msg msg) *State {
 	prop := "offset"
 	step := float64(3)
 
+	if gameId < 1 && msg.Cmd != "createGame" {
+		logit("No game id ", msg.Cmd, player)
+		return state
+	}
+
+	logit("processing", msg.Cmd, "from", playerName)
+
 	if msg.Cmd == "createGame" {
 		//create a new game
 		state = NewState()      //asigns a random game id
@@ -190,9 +197,10 @@ func process(gameId int, playerName string, msg msg) *State {
 
 			//count money and send to player
 			for _, p := range state.Players {
-				p.Coins += p.stepCoins
+
 				if p.stepCoins > 0 { //did we win any coins this step
-					q4one(p, &reply{Cmd: "coins", Payload: player.Coins})
+					p.Coins += p.stepCoins
+					q4one(p, &reply{Cmd: "coins", Payload: p.Coins})
 				}
 				p.stepCoins = 0 //reset for next step
 			}
