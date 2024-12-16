@@ -2,8 +2,11 @@ package main
 
 //lighteright game state - the objects do not have methods (as they are deserialised from server data)
 import (
+	"bufio"
+	"go.mongodb.org/mongo-driver/bson" //once stuctures are stabilised - can probaly just use bufio direclty
 	"math"
 	"math/rand/v2"
+	"os"
 	"strings"
 )
 
@@ -38,19 +41,54 @@ type thingPayload struct {
 	Thing Thing `json:"thing"`
 }
 
+//	type pos struct{
+//		fl Vector
+//		rl Vector
+//		fr Vector
+//		rr Vector
+//	}
+type track struct {
+	Pointer   int       `json:"pointer"`
+	Positions []float64 `json:"positions"` //x,y pairs for 4 verts per frame
+}
+
 type State struct { //the data of a game in progress - it is serialised and should have no methods - it can be entirely replaced at any point by rejoining a game
-	GameId    int `json:"gameId"`
+	GameId    int `json:"gameId" bson:"gameId"`
 	host      string
 	Players   map[string]*Player `json:"players"`
 	Masses    []*Mass            `json:"masses"`
 	Things    []*Thing           `json:"things"`
 	deathList []*Player
+	Tracks    map[string]*track `json:"tracks"` //a stream of point quads by player name
 	Layers    map[string]*Layer `json:"layers"`
 }
 
 func (s *State) AddMass(m *Mass) int {
 	s.Masses = append(s.Masses, m)
 	return len(s.Masses) - 1 // return the index of the new mass
+}
+
+func (s *State) save(filename string) {
+
+	bytes, err := bson.Marshal(s)
+	if err != nil {
+		logit(err.Error())
+		return
+	}
+
+	file, err := os.Create(filename)
+	if err != nil {
+		logit(err.Error() + " save failed")
+		return
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	writer.Write(bytes)
+	writer.Flush()
+
+	//write the bytes slice to a file
+
 }
 
 func (s *State) addThing(layer, picName string, isHole bool) int {
@@ -407,16 +445,84 @@ func (state *State) moveAll(substeps int) []int {
 	}
 
 	for i, m := range state.Masses {
-		if !m.P.Equals(&m.op) || m.Z != m.oz {
+		//if !m.P.Equals(&m.op) || m.Z != m.oz {
+		if m.v.lengthSq() > 0.01 || m.Z != m.oz {
 			movedMasses = append(movedMasses, i)
 			movedMasses = append(movedMasses, int(m.P.X*100))
 			movedMasses = append(movedMasses, int(m.P.Y*100))
 			movedMasses = append(movedMasses, int(m.Z))
 		}
+
+	}
+
+	for _, p := range state.Players {
+		if p.moved(state) {
+			state.RecordTrack(p)
+		}
 	}
 
 	return movedMasses
 
+}
+
+func (state *State) RecordTrack(player *Player) {
+
+	dozer := state.Things[player.Dozer]
+	port := dozer.Springs[1]
+	starboard := dozer.Springs[3]
+
+	if state.Tracks[player.Name] == nil {
+		state.Tracks[player.Name] = &track{Pointer: 0, Positions: make([]float64, 800)}
+	}
+	track := state.Tracks[player.Name]
+	//pos := track.Positions[track.Pointer]
+	m := state.Masses
+	fl := m[port.M2].P
+	rl := m[port.M1].P
+	fr := m[starboard.M1].P
+	rr := m[starboard.M2].P
+
+	track.record(fl, rl, fr, rr)
+
+}
+
+// encode float 64's into the tracks points
+// A track is a stream of float 64's 8 per frame per player, 2 (x/y)  values per vert, 4 verts
+// this is to (massively) reduce the JSON overhead
+func (track *track) record(points ...Vector) {
+	for _, p := range points {
+		track.Positions[track.Pointer] = p.X
+		track.Positions[track.Pointer+1] = p.Y
+		track.Pointer += 2
+	}
+	if track.Pointer > 800 {
+		track.Pointer = 0
+	}
+}
+
+func (player *Player) moved(state *State) bool {
+
+	dozer := state.Things[player.Dozer]
+	port := dozer.Springs[1]
+	starboard := dozer.Springs[3]
+	fl := state.Masses[port.M2]
+	if fl.v.lengthSq() > 0.01 {
+		return true
+	}
+	rl := state.Masses[port.M1]
+	if rl.v.lengthSq() > 0.01 {
+		return true
+	}
+	fr := state.Masses[starboard.M1]
+	if fr.v.lengthSq() > 0.01 {
+		return true
+	}
+	rr := state.Masses[starboard.M2]
+	if rr.v.lengthSq() > 0.01 {
+		return true
+	}
+
+	return true
 }
 
 func (state *State) resolveMassOverlaps() {

@@ -52,6 +52,8 @@ const (
 )
 
 var games map[int]*State //the data of games in progress - by id
+var accountsByGuid map[string]*account
+
 //var obq map[string]*qHolder //*reply //qued outbound JSON data (replies), per player (new mass index, position triples)
 
 func spotOccupied(props []Prop, p *Vector, r float64) bool {
@@ -133,7 +135,7 @@ func process(gameId int, playerName string, msg msg) *State {
 	prop := "offset"
 	step := float64(3)
 
-	if gameId < 1 && msg.Cmd != "createGame" {
+	if gameId < 1 && msg.Cmd != "createGame" && msg.Cmd != "joinGame" {
 		logit("No game id ", msg.Cmd, player)
 		return state
 	}
@@ -157,6 +159,8 @@ func process(gameId int, playerName string, msg msg) *State {
 		q4one(state.Players[playerName], &gs)
 		logit("Game created", state.GameId)
 		state.qSound("dozer", Vector{100, 100}, 0.1, "revs-"+playerName, true)
+
+		state.save("game" + fmt.Sprint(state.GameId) + ".bson")
 
 	} else if msg.Cmd == "joinGame" {
 		//join an existing game
@@ -206,10 +210,10 @@ func process(gameId int, playerName string, msg msg) *State {
 			}
 		}
 
-	} else if msg.Cmd == "lt" {
-		player.LeftDrive = msg.Payload[0] //no need to echo them back - local versions are used for knobs only
-	} else if msg.Cmd == "rt" {
-		player.RightDrive = msg.Payload[0]
+	} else if msg.Cmd == "drive" {
+		player.LeftDrive = msg.Payload[0]  //no need to echo them back - local versions are used for knobs only
+		player.RightDrive = msg.Payload[1] //no need to echo them back - local versions are used for knobs only
+
 	} else if msg.Cmd == "mm" { //mouse move
 
 		player.worldCursor.X = msg.Payload[0]

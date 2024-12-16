@@ -25,9 +25,15 @@ type Mass struct {
 	Z                float64 `json:"z"` //falling depth/spin (/height above ground)
 	enabled          bool
 	lastThingTouched int //who 'owns' this mass
+
 }
 
 func NewMass(p Vector, r float64, fixed bool, isCoin bool, collideable bool, thingNum int) *Mass {
+
+	// var marks = []Vector{}
+	// if leavesMarks {
+	// 	marks = make([]Vector, 200)
+	// }
 	return &Mass{P: p, R: r, fixed: fixed, IsCoin: isCoin, collideable: collideable, thingNum: thingNum, enabled: true, fallingInto: -1}
 }
 
