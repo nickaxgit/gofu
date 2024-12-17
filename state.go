@@ -48,8 +48,8 @@ type thingPayload struct {
 //		rr Vector
 //	}
 type track struct {
-	Pointer   int       `json:"pointer"`
-	Positions []float64 `json:"positions"` //x,y pairs for 4 verts per frame
+	Pointer int       `json:"pointer"`
+	Points  []float64 `json:"points"` //x,y pairs for 4 verts per frame
 }
 
 type State struct { //the data of a game in progress - it is serialised and should have no methods - it can be entirely replaced at any point by rejoining a game
@@ -465,64 +465,59 @@ func (state *State) moveAll(substeps int) []int {
 
 }
 
-func (state *State) RecordTrack(player *Player) {
+func (player *Player) getMasses(state *State) []*Mass {
 
 	dozer := state.Things[player.Dozer]
 	port := dozer.Springs[1]
 	starboard := dozer.Springs[3]
 
 	if state.Tracks[player.Name] == nil {
-		state.Tracks[player.Name] = &track{Pointer: 0, Positions: make([]float64, 800)}
+		state.Tracks[player.Name] = &track{Pointer: 0, Points: make([]float64, 800)}
+	}
+
+	m := state.Masses
+	fl := m[port.M2]
+	rl := m[port.M1]
+	fr := m[starboard.M1]
+	rr := m[starboard.M2]
+
+	return []*Mass{fl, rl, fr, rr}
+}
+
+func (state *State) RecordTrack(player *Player) {
+
+	if state.Tracks[player.Name] == nil {
+		state.Tracks[player.Name] = &track{Pointer: 0, Points: make([]float64, 800)}
 	}
 	track := state.Tracks[player.Name]
-	//pos := track.Positions[track.Pointer]
-	m := state.Masses
-	fl := m[port.M2].P
-	rl := m[port.M1].P
-	fr := m[starboard.M1].P
-	rr := m[starboard.M2].P
 
-	track.record(fl, rl, fr, rr)
+	track.record(player.getMasses(state))
 
 }
 
 // encode float 64's into the tracks points
 // A track is a stream of float 64's 8 per frame per player, 2 (x/y)  values per vert, 4 verts
 // this is to (massively) reduce the JSON overhead
-func (track *track) record(points ...Vector) {
-	for _, p := range points {
-		track.Positions[track.Pointer] = p.X
-		track.Positions[track.Pointer+1] = p.Y
+func (track *track) record(masses []*Mass) {
+	for _, m := range masses {
+		track.Points[track.Pointer] = m.P.X
+		track.Points[track.Pointer+1] = m.P.Y
 		track.Pointer += 2
 	}
-	if track.Pointer > 800 {
+	if track.Pointer >= len(track.Points) {
 		track.Pointer = 0
 	}
 }
 
 func (player *Player) moved(state *State) bool {
 
-	dozer := state.Things[player.Dozer]
-	port := dozer.Springs[1]
-	starboard := dozer.Springs[3]
-	fl := state.Masses[port.M2]
-	if fl.v.lengthSq() > 0.01 {
-		return true
-	}
-	rl := state.Masses[port.M1]
-	if rl.v.lengthSq() > 0.01 {
-		return true
-	}
-	fr := state.Masses[starboard.M1]
-	if fr.v.lengthSq() > 0.01 {
-		return true
-	}
-	rr := state.Masses[starboard.M2]
-	if rr.v.lengthSq() > 0.01 {
-		return true
+	for _, m := range player.getMasses(state) {
+		if m.v.lengthSq() > 0.01 {
+			return true
+		}
 	}
 
-	return true
+	return false
 }
 
 func (state *State) resolveMassOverlaps() {
@@ -635,7 +630,7 @@ func (state *State) setupLayers(w float64, h float64) {
 
 func NewState() *State {
 	gameId := int(rand.Float32() * 1000000)
-	return &State{GameId: gameId, Players: map[string]*Player{}, Masses: []*Mass{}, Things: []*Thing{}, deathList: []*Player{}, Layers: map[string]*Layer{}}
+	return &State{GameId: gameId, Players: map[string]*Player{}, Masses: []*Mass{}, Things: []*Thing{}, deathList: []*Player{}, Layers: map[string]*Layer{}, Tracks: map[string]*track{}}
 }
 
 func (state *State) qSound(sound string, position Vector, volume float32, label string, loop bool) {
