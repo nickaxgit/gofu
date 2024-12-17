@@ -87,6 +87,7 @@ func processBlock(block block) []byte {
 	logit(len(block.Msgs), `messages in block`)
 	var state *State
 	for _, m := range block.Msgs { //process every msg in the queue
+
 		state = process(block.GameId, from, m)
 	}
 
@@ -131,6 +132,8 @@ func process(gameId int, playerName string, msg msg) *State {
 		player = state.Players[playerName]
 	}
 
+	//var fpn string //firstPlayer *Player
+
 	dx, dy := float64(0), float64(0) //used for sliding skins
 	prop := "offset"
 	step := float64(3)
@@ -166,11 +169,21 @@ func process(gameId int, playerName string, msg msg) *State {
 		//join an existing game
 		gameId := int(msg.Payload[0])
 		state = games[gameId]
+		if state == nil {
+			state = load("game" + fmt.Sprint(gameId) + ".bson")
+			games[gameId] = state
+			for _, p := range state.Players {
+				p.qh = &qHolder{mutex: &sync.Mutex{}, q: make([]*reply, 0)}
+			}
+		}
+		state.host = playerName //the last person to join becomes the host (and steps the game)
 
 		randomPos := Vector{1000 * rand.Float64(), 1000 * rand.Float64()}
+
 		joiner := state.AddPlayer(playerName, randomPos)
-		state.q4all(&reply{Cmd: "playerJoined", Payload: joiner}) //tell everyone about the new player
 		q4one(joiner, &reply{Cmd: "state", Payload: state})
+		state.q4all(&reply{Cmd: "playerJoined", Payload: joiner}) //tell everyone about the new player
+
 		sendWholeThing(state, joiner.Dozer) //NOTE the joiner will recieve themselves twice
 
 		// } else if msg.Cmd == "keyDown" {
@@ -227,7 +240,7 @@ func process(gameId int, playerName string, msg msg) *State {
 		if player.mode == addingSpring {
 			//we are adding a spring to nowhere .. make a new mass
 			if player.Highlit.Mass == -1 {
-				//console.log("Spring to/from nowhere - adding a mass")
+				logit("Spring to/from nowhere - adding a mass")
 				m := NewMass(player.worldCursor, 10, false, false, true, player.currentThing)
 				i := state.AddMass(m)
 				state.q4all(&reply{Cmd: "mass", Payload: massPayload{I: i, Mass: *state.Masses[i]}}) //we receive a new thing sfrom someone -
@@ -254,6 +267,7 @@ func process(gameId int, playerName string, msg msg) *State {
 	} else if msg.Cmd == "keyDown" {
 
 		k := msg.Key
+		logit("key down", k)
 		shift := msg.Payload[0]
 		ctrl := msg.Payload[1]
 		//alt := pl["alt"].(bool)
@@ -277,7 +291,6 @@ func process(gameId int, playerName string, msg msg) *State {
 			dy = -step //see the end of the if block for where the transform is send if dx or dy are set
 		} else if k == "t" {
 			player.mode = addingSpring
-			player.currentThing = state.addThing("holes", "hole", true)
 			player.currentThing = state.addThing("dozers", "dozer", false)
 			sendThing(state, player.currentThing)
 		} else if k == "s" {
@@ -285,8 +298,14 @@ func process(gameId int, playerName string, msg msg) *State {
 			//player.mode = ModeEnum.addingSpring
 		} else if k == "p" {
 			m := state.Masses[player.Highlit.Mass]
-			m.fixed = !m.fixed
+			m.Fixed = !m.Fixed
 			state.q4all(&reply{Cmd: "mass", Payload: massPayload{I: player.Highlit.Mass, Mass: *m}})
+		} else if k == "v" {
+			state.save((`game` + fmt.Sprint(state.GameId) + `.bson`))
+			logit("Game saved", state.GameId)
+		} else if k == "l" {
+			state = load((`game` + fmt.Sprint(state.GameId) + `.bson`))
+			logit("Game loaded", state.GameId)
 		}
 	}
 

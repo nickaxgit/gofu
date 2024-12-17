@@ -13,10 +13,10 @@ import (
 type Mass struct {
 	P           Vector  `json:"p"`
 	R           float64 `json:"r"`
-	fixed       bool
-	IsCoin      bool `json:"isCoin"`
-	collideable bool
-	thingNum    int //which thing is this mass part of - coins are -1
+	Fixed       bool    `json:"-"`
+	IsCoin      bool    `json:"isCoin"`
+	Collideable bool    `json:"-"`
+	ThingNum    int     `json:"-"` //which thing is this mass part of - coins are -1
 	op          Vector
 	oz          float64
 	fallingInto int    //*Thing           //index of thing
@@ -34,7 +34,7 @@ func NewMass(p Vector, r float64, fixed bool, isCoin bool, collideable bool, thi
 	// if leavesMarks {
 	// 	marks = make([]Vector, 200)
 	// }
-	return &Mass{P: p, R: r, fixed: fixed, IsCoin: isCoin, collideable: collideable, thingNum: thingNum, enabled: true, fallingInto: -1}
+	return &Mass{P: p, R: r, Fixed: fixed, IsCoin: isCoin, Collideable: collideable, ThingNum: thingNum, enabled: true, fallingInto: -1}
 }
 
 func (m *Mass) moveTowards(p *Vector, dist float64) {
@@ -72,17 +72,17 @@ func (m *Mass) resolveMasSpringOverlap(masses []*Mass, spring *Spring, pen float
 	a := masses[spring.M1] //.p
 	b := masses[spring.M2] //.p
 
-	if m.fixed && a.fixed && b.fixed {
+	if m.Fixed && a.Fixed && b.Fixed {
 		panic(`all masses fixed - but overlap ?`)
 	}
 
 	//the spring is fixed the mass is free
-	if a.fixed && b.fixed {
+	if a.Fixed && b.Fixed {
 		m.P.addIn(resolve)
 		return
 	} //if both ends of the spring are pinned move the mass - and EXIT
 
-	if m.fixed {
+	if m.Fixed {
 		ratio = 0
 	}
 	m.P.addIn(resolve.multiply(ratio)) //push the mass out to the left (things are defined clockwise) - so left is outwards
@@ -93,10 +93,10 @@ func (m *Mass) resolveMasSpringOverlap(masses []*Mass, spring *Spring, pen float
 	if share > 1 || share < 0 {
 		panic(`share out of range`)
 	}
-	if a.fixed {
+	if a.Fixed {
 		share = 1
 	}
-	if b.fixed {
+	if b.Fixed {
 		share = 0
 	}
 

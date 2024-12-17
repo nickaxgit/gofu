@@ -5,10 +5,10 @@ import (
 )
 
 type Spring struct {
-	length      float64
-	M1          int  `json:"m1"`
-	M2          int  `json:"m2"`
-	collideable bool //collision are not handled client side (so the client doesn't need to know)
+	Length      float64 `json:"-"` //length is not needed clientside
+	M1          int     `json:"m1"`
+	M2          int     `json:"m2"`
+	Collideable bool    `json:"-"` //collision are not handled client side (so the client doesn't need to know)
 }
 
 func NewSpring(masses []*Mass, m1 int, m2 int, collideable bool) *Spring {
@@ -38,7 +38,7 @@ func (s *Spring) stretch(masses []*Mass) {
 	m1 := masses[s.M1]
 	m2 := masses[s.M2]
 
-	if m1.fixed && m2.fixed {
+	if m1.Fixed && m2.Fixed {
 		return
 	} //if both ends are pinned, then the spring does not stretch
 
@@ -49,12 +49,12 @@ func (s *Spring) stretch(masses []*Mass) {
 		panic(`zero length spring`)
 	}
 
-	difference := (s.length - distance) / distance
+	difference := (s.Length - distance) / distance
 	move := delta.multiply(difference * 0.5 * 0.6) //stiffness
-	if !m1.fixed {
+	if !m1.Fixed {
 		m1.P.subIn(move)
 	} //unless they're pinned
-	if !m2.fixed {
+	if !m2.Fixed {
 		m2.P.addIn(move)
 	}
 }

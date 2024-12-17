@@ -13,7 +13,7 @@ type Thing struct {
 }
 
 func NewThing(layer, picName string, isHole bool) *Thing {
-	return &Thing{Layer: layer, PicName: picName, IsHole: isHole}
+	return &Thing{Layer: layer, PicName: picName, IsHole: isHole, Springs: []*Spring{}}
 }
 
 func (thing *Thing) closestPointOnEdge(masses []*Mass, wp *Vector) Vector {

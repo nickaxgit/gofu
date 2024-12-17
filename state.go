@@ -4,6 +4,7 @@ package main
 import (
 	"bufio"
 	"go.mongodb.org/mongo-driver/bson" //once stuctures are stabilised - can probaly just use bufio direclty
+	"io"
 	"math"
 	"math/rand/v2"
 	"os"
@@ -88,6 +89,33 @@ func (s *State) save(filename string) {
 	writer.Flush()
 
 	//write the bytes slice to a file
+
+}
+
+func load(filename string) *State {
+
+	file, err := os.Open(filename)
+	if err != nil {
+		logit(err.Error() + " load failed")
+		return &State{}
+	}
+	defer file.Close()
+
+	reader := io.Reader(file)
+	bytes, err := io.ReadAll(reader)
+	if err != nil {
+		logit(err.Error())
+	}
+
+	state := NewState()
+	err = bson.Unmarshal(bytes, &state)
+	if err != nil {
+		logit(err.Error())
+	}
+
+	logit("Loaded state from " + filename)
+
+	return state
 
 }
 
@@ -213,8 +241,8 @@ func (state *State) checkHoles() {
 
 		if t.IsHole {
 			for _, m := range state.Masses {
-				if m.thingNum != ti { //masses cannot fall into things they belong to
-					if !m.fixed && m.fallingInto == -1 { //you can only be falling into one hole at once - and fixed masses can't fall into anything
+				if m.ThingNum != ti { //masses cannot fall into things they belong to
+					if !m.Fixed && m.fallingInto == -1 { //you can only be falling into one hole at once - and fixed masses can't fall into anything
 						if m.isInside(state.Masses, t) {
 							m.fallingInto = ti
 							if m.IsCoin {
@@ -234,7 +262,7 @@ func (state *State) resolvePenetrations() bool {
 
 	penetrated := false
 	for _, m := range state.Masses {
-		if m.collideable && m.enabled {
+		if m.Collideable && m.enabled {
 			for ti, t := range state.Things {
 
 				if !t.IsHole {
@@ -254,7 +282,7 @@ func (state *State) pushApart(mass *Mass, thingNum int) bool {
 	penetrated := false
 	thing := state.Things[thingNum]
 	for _, spring := range thing.Springs {
-		if spring.collideable {
+		if spring.Collideable {
 			if spring.contains(state.Masses, &mass.P) { //are we within the endpoints of the spring
 				dist := mass.sideof(state.Masses, spring) //distance from the line .. negative means its gone to the right hand (wrong side)
 				pen := dist - mass.R
@@ -527,7 +555,7 @@ func (state *State) resolveMassOverlaps() {
 		for i := o + 1; i < len(state.Masses); i++ {
 			b := state.Masses[i]
 
-			if a.fixed || b.fixed || !a.enabled || !b.enabled {
+			if a.Fixed || b.Fixed || !a.enabled || !b.enabled {
 				continue
 			} //no need to check fixed masses
 			//optimise here - we dont need to do the full distance calculation
@@ -541,13 +569,13 @@ func (state *State) resolveMassOverlaps() {
 				delta = delta.multiply(overlap)
 
 				afix := .5 //b.mass/(a.mass+b.mass)
-				if b.fixed {
+				if b.Fixed {
 					afix = 1
 				} //if b is fixed then a is pushed out of b
-				if !a.fixed {
+				if !a.Fixed {
 					a.P.subIn(delta.multiply(afix))
 				}
-				if !b.fixed {
+				if !b.Fixed {
 					b.P.addIn(delta.multiply((1 - afix)))
 				}
 
@@ -559,9 +587,9 @@ func (state *State) resolveMassOverlaps() {
 						a.lastThingTouched = b.lastThingTouched
 					}
 				} else if a.IsCoin { //or off the object touched if one of the masses is not a coin
-					a.lastThingTouched = b.thingNum
+					a.lastThingTouched = b.ThingNum
 				} else if b.IsCoin {
-					b.lastThingTouched = a.thingNum
+					b.lastThingTouched = a.ThingNum
 
 				}
 			}
