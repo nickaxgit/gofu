@@ -44,20 +44,6 @@ func (m *Mass) moveTowards(p *Vector, dist float64) {
 	m.P.addIn(d.multiply(dist))
 }
 
-func (m *Mass) isInside(masses []*Mass, thing *Thing) bool {
-	//is this mass inside the thing - "draws" a line from the point (to test) to the origin and counts how many springs of this thing are crossed - if the number is odd, then the point is inside the thing
-	//works for convex or concave things - dont know about things with holes
-	o := Vector{X: -1000, Y: -1000}
-	crossings := 0
-	for _, s := range thing.Springs {
-		if s.crosses(masses, &o, &m.P) {
-			crossings++
-		}
-	}
-
-	return crossings%2 == 1
-}
-
 func (m *Mass) resolveMasSpringOverlap(masses []*Mass, spring *Spring, pen float64) {
 	//pushes masses back out of springs
 	//a mass can only penetrate one spring on a given thing at a time

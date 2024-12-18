@@ -56,9 +56,9 @@ var accountsByGuid map[string]*account
 
 //var obq map[string]*qHolder //*reply //qued outbound JSON data (replies), per player (new mass index, position triples)
 
-func spotOccupied(props []Prop, p *Vector, r float64) bool {
+func spotOccupied(props []Prop, p *Vector, clearance float64) bool {
 	for _, prop := range props {
-		if prop.Position.distanceFrom(p) < prop.Radius+r {
+		if prop.Position.distanceFrom(p) < prop.Radius+clearance {
 			return true
 		}
 	}
@@ -117,6 +117,41 @@ func processBlock(block block) []byte {
 	}
 }
 
+func (state *State) RandomStartPos() Vector {
+	var randomPos Vector
+	for {
+		randomPos = Vector{5000 * rand.Float64(), 5000 * rand.Float64()}
+		if state.thingClearance(&randomPos) > 100 && !state.inHole(randomPos) {
+			break
+		} //don't respawn in a hole
+	}
+	return randomPos
+}
+
+func (state *State) inHole(p Vector) bool {
+	for _, thing := range state.Things {
+		if thing.IsHole && thing.contains(&p, state.Masses) {
+			return true
+		}
+	}
+	return false
+}
+
+// what is distance is the closest thing to P
+func (state *State) thingClearance(p *Vector) float64 {
+
+	clearance := float64(10000)
+	var c float64
+	for _, thing := range state.Things {
+		c = thing.distanceFrom(p, state.Masses)
+		if c < clearance {
+			clearance = c
+		}
+	}
+
+	return c
+}
+
 // each player has a que.. but maybe a single shared que of responses by sqn would be better
 // when all players have rx'd something it is removed from the queue
 func process(gameId int, playerName string, msg msg) *State {
@@ -153,7 +188,8 @@ func process(gameId int, playerName string, msg msg) *State {
 		games[state.GameId] = state
 		state.makeHoles(10, 5000, 5000)
 		//state.makeHoles(1, 0, 0)
-		state.AddPlayer(playerName, Vector{500, 100})
+
+		state.AddPlayer(playerName, state.RandomStartPos())
 		//state.AddPlayer("bot1", Vector{400, 120})
 		state.setupLayers(5000, 5000)
 		state.scatterCoins(5000, 5000)
@@ -178,9 +214,7 @@ func process(gameId int, playerName string, msg msg) *State {
 		}
 		state.host = playerName //the last person to join becomes the host (and steps the game)
 
-		randomPos := Vector{1000 * rand.Float64(), 1000 * rand.Float64()}
-
-		joiner := state.AddPlayer(playerName, randomPos)
+		joiner := state.AddPlayer(playerName, state.RandomStartPos())
 		q4one(joiner, &reply{Cmd: "state", Payload: state})
 		state.q4all(&reply{Cmd: "playerJoined", Payload: joiner}) //tell everyone about the new player
 
@@ -224,6 +258,7 @@ func process(gameId int, playerName string, msg msg) *State {
 		}
 
 	} else if msg.Cmd == "drive" {
+
 		player.LeftDrive = msg.Payload[0]  //no need to echo them back - local versions are used for knobs only
 		player.RightDrive = msg.Payload[1] //no need to echo them back - local versions are used for knobs only
 

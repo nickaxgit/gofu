@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -157,7 +158,7 @@ func (s *State) AddPlayer(name string, position Vector) *Player {
 }
 
 func (p *Player) Move(state *State) {
-	if !p.dying { //you loose all traction when dying
+	if !p.dying && !p.dead { //you loose all traction when dying
 		dozer := state.Things[p.Dozer]
 		rr := &state.Masses[dozer.Springs[0].M1].P
 		rl := &state.Masses[dozer.Springs[0].M2].P
@@ -230,7 +231,7 @@ func (state *State) checkHoles() {
 	for _, m := range state.Masses {
 		if !m.IsCoin { //coins can never escape holes
 			if m.fallingInto > -1 {
-				if !m.isInside(state.Masses, state.Things[m.fallingInto]) {
+				if !state.Things[m.fallingInto].contains(&m.P, state.Masses) {
 					m.fallingInto = -1 //phew, escaped
 				}
 			}
@@ -243,7 +244,7 @@ func (state *State) checkHoles() {
 			for _, m := range state.Masses {
 				if m.ThingNum != ti { //masses cannot fall into things they belong to
 					if !m.Fixed && m.fallingInto == -1 { //you can only be falling into one hole at once - and fixed masses can't fall into anything
-						if m.isInside(state.Masses, t) {
+						if t.contains(&m.P, state.Masses) { //todo - optimise - non moving masses cant fall in holes
 							m.fallingInto = ti
 							if m.IsCoin {
 								state.qSound("coin-flip", m.P, 0.2, "", false)
@@ -369,33 +370,78 @@ func (state *State) scatterCoins(w float64, h float64) {
 func (state *State) checkDeaths() {
 	for _, p := range state.Players {
 
-		dozer := state.Things[p.Dozer]
-		if p.dying {
-			dozer.Scale.Y -= 0.01
-			dozer.Scale.X -= 0.01
-			dozer.Rotation += 0.1
+		if !p.dead {
+			dozer := state.Things[p.Dozer]
+			if p.dying {
 
-			r := reply{Cmd: "skin", Payload: skinPayload{Ti: p.Dozer, Scale: dozer.Scale, Rotation: dozer.Rotation}}
-			state.q4all(&r)
-			if dozer.Scale.X <= 0 {
-				state.deathList = append(state.deathList, p) //TODO - respawn/ spectate etc
-			}
-		} else {
-			for _, s := range dozer.Springs {
-				m := state.Masses[s.M1]
-				if m.fallingInto > -1 {
-					hole := state.Things[m.fallingInto]
-					cs := hole.closestPointOnEdge(state.Masses, &m.P)
-					d := cs.distanceFrom(&m.P)
-					if d > 100 { //more than 50 units over the edge (we already know we are inside the hole)
-						p.dying = true
-						state.qSound("dozer-fall", m.P, 0.4, "", false)
-						return
+				dozer.Scale.Y -= 0.01
+				dozer.Scale.X -= 0.01
+				dozer.Rotation += 0.1
+
+				if dozer.Scale.X <= 0 {
+					p.lives--
+
+					if p.lives > 0 {
+						dozer.Scale.Y = 140 / float64(100)
+						dozer.Scale.X = 1
+						dozer.Rotation = 0
+						p.dying = false
+						state.resetDozer(p)
+						state.q4all(&reply{Cmd: "banner", Payload: p.Name + " has " + strconv.Itoa(p.lives) + " lives left"})
+						sendWholeThing(state, p.Dozer) //does a q4all
+					} else {
+						p.dead = true
+						p.dying = false
+						state.q4all(&reply{Cmd: "banner", Payload: p.Name + " is dead"})
+						q4one(p, &reply{Cmd: "dead", Payload: ""})
+						state.deathList = append(state.deathList, p) //TODO - respawn/ spectate etc
+					}
+				}
+
+				r := reply{Cmd: "skin", Payload: skinPayload{Ti: p.Dozer, Scale: dozer.Scale, Rotation: dozer.Rotation}}
+				state.q4all(&r)
+
+			} else {
+				for _, s := range dozer.Springs {
+					m := state.Masses[s.M1]
+					if m.fallingInto > -1 {
+						hole := state.Things[m.fallingInto]
+						cs := hole.closestPointOnEdge(state.Masses, &m.P)
+						d := cs.distanceFrom(&m.P)
+						if d > 100 { //more than 50 units over the edge (we already know we are inside the hole)
+							if !p.dying {
+								p.dying = true
+								state.qSound("dozer-fall", m.P, 0.4, "", false)
+							}
+						}
 					}
 				}
 			}
 		}
 	}
+}
+
+func (state *State) resetDozer(player *Player) {
+
+	var pos Vector = state.RandomStartPos()
+
+	w := float64(100)
+	h := float64(140)
+
+	m := player.getMasses(state)
+
+	//fl, rl, fr, rr
+	m[0].P = pos
+	m[1].P = pos.add(Vector{0, h})
+	m[2].P = pos.add(Vector{w, 0})
+	m[3].P = pos.add(Vector{w, h})
+
+	//kill their velocity
+	for _, m := range m {
+		m.op.X = m.P.X
+		m.op.Y = m.P.Y
+	}
+
 }
 
 func (state *State) makeHoles(numHoles int, w float64, h float64) {
@@ -478,7 +524,7 @@ func (state *State) moveAll(substeps int) []int {
 			movedMasses = append(movedMasses, i)
 			movedMasses = append(movedMasses, int(m.P.X*100))
 			movedMasses = append(movedMasses, int(m.P.Y*100))
-			movedMasses = append(movedMasses, int(m.Z))
+			movedMasses = append(movedMasses, int(m.Z*100))
 		}
 
 	}
@@ -527,6 +573,12 @@ func (state *State) RecordTrack(player *Player) {
 // A track is a stream of float 64's 8 per frame per player, 2 (x/y)  values per vert, 4 verts
 // this is to (massively) reduce the JSON overhead
 func (track *track) record(masses []*Mass) {
+	if len(masses) > 4 {
+		panic("more than 4 track masses!" + strconv.Itoa(len(masses)))
+	}
+	if len(track.Points) < 8 {
+		panic("track points too small!")
+	}
 	for _, m := range masses {
 		track.Points[track.Pointer] = m.P.X
 		track.Points[track.Pointer+1] = m.P.Y
@@ -633,7 +685,7 @@ func (state *State) setupRandomLayer(layerName string, picList []string, extensi
 			p = Vector{x, y}
 			pic = picList[int(math.Floor(rand.Float64()*float64(len(picList))))]
 			radius = minRadius + rand.Float64()*(maxRadius-minRadius)
-			if !spotOccupied(layer.Props, &p, radius) {
+			if !spotOccupied(layer.Props, &p, radius) { //don't pile things ontop of each other
 				break
 			}
 		}

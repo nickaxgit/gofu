@@ -68,6 +68,25 @@ func (s *Spring) contains(masses []*Mass, p *Vector) bool {
 
 }
 
+func (s *Spring) distanceFrom(p *Vector, masses []*Mass) float64 {
+
+	m1 := masses[s.M1]
+	m2 := masses[s.M2]
+
+	if s.contains(masses, p) {
+		return p.distanceFromLine(&m1.P, &m2.P)
+	} else {
+		d1 := p.distanceFrom(&m1.P)
+		d2 := p.distanceFrom(&m2.P)
+		if d1 < d2 {
+			return d1
+		} else {
+			return d2
+		}
+	}
+
+}
+
 func (s *Spring) direction(m []*Mass) Vector {
 	v := m[s.M2].P.subtract(&m[s.M1].P)
 	return v.normalise()
