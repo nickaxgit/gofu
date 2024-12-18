@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -87,7 +89,6 @@ func processBlock(block block) []byte {
 	logit(len(block.Msgs), `messages in block`)
 	var state *State
 	for _, m := range block.Msgs { //process every msg in the queue
-
 		state = process(block.GameId, from, m)
 	}
 
@@ -121,9 +122,10 @@ func (state *State) RandomStartPos() Vector {
 	var randomPos Vector
 	for {
 		randomPos = Vector{5000 * rand.Float64(), 5000 * rand.Float64()}
-		if state.thingClearance(&randomPos) > 100 && !state.inHole(randomPos) {
+		//don't spawn in a hole
+		if state.thingClearance(&randomPos) > 200 && !state.inHole(randomPos) {
 			break
-		} //don't respawn in a hole
+		}
 	}
 	return randomPos
 }
@@ -164,7 +166,7 @@ func process(gameId int, playerName string, msg msg) *State {
 		//player = NewPlayer(playerName+"bootstrap", 0)
 	} else {
 		state = games[gameId]
-		player = state.Players[playerName]
+		player = state.Players[playerName] //may (or may not) be nil for joinGame
 	}
 
 	//var fpn string //firstPlayer *Player
@@ -189,7 +191,7 @@ func process(gameId int, playerName string, msg msg) *State {
 		state.makeHoles(10, 5000, 5000)
 		//state.makeHoles(1, 0, 0)
 
-		state.AddPlayer(playerName, state.RandomStartPos())
+		player := state.AddPlayer(playerName, state.RandomStartPos())
 		//state.AddPlayer("bot1", Vector{400, 120})
 		state.setupLayers(5000, 5000)
 		state.scatterCoins(5000, 5000)
@@ -197,13 +199,14 @@ func process(gameId int, playerName string, msg msg) *State {
 		gs := reply{Cmd: "state", Payload: state}
 		q4one(state.Players[playerName], &gs)
 		logit("Game created", state.GameId)
-		state.qSound("dozer", Vector{100, 100}, 0.1, "revs-"+playerName, true)
+
+		state.qSound("dozer", state.Things[player.Dozer].centreOfMass(state.Masses), 0.1, "revs-"+playerName, true)
 
 		state.save("game" + fmt.Sprint(state.GameId) + ".bson")
 
 	} else if msg.Cmd == "joinGame" {
 		//join an existing game
-		gameId := int(msg.Payload[0])
+		//gameId := int(msg.Payload[0])
 		state = games[gameId]
 		if state == nil {
 			state = load("game" + fmt.Sprint(gameId) + ".bson")
@@ -214,11 +217,20 @@ func process(gameId int, playerName string, msg msg) *State {
 		}
 		state.host = playerName //the last person to join becomes the host (and steps the game)
 
-		joiner := state.AddPlayer(playerName, state.RandomStartPos())
-		q4one(joiner, &reply{Cmd: "state", Payload: state})
-		state.q4all(&reply{Cmd: "playerJoined", Payload: joiner}) //tell everyone about the new player
+		if player != nil {
+			//i am joining to control an existing player (whos is already in)
+			q4one(player, &reply{Cmd: "state", Payload: state}) //inst important that state is sent bedore the change of name
+			//from now on the client will prefix its playerName with "control-" to indicate that it is controlling another player
+			q4one(player, &reply{Cmd: "prefix", Payload: "control-"})
+			p := NewPlayer("control-"+playerName, -1)
+			state.Players[p.Name] = p
 
-		sendWholeThing(state, joiner.Dozer) //NOTE the joiner will recieve themselves twice
+		} else { //player = NewPlayer(playerName, 0)
+			joiner := state.AddPlayer(playerName, state.RandomStartPos())
+			q4one(joiner, &reply{Cmd: "state", Payload: state})
+			state.q4all(&reply{Cmd: "playerJoined", Payload: joiner}) //tell everyone about the new player
+			sendWholeThing(state, joiner.Dozer)                       //NOTE the joiner will recieve themselves twice
+		}
 
 		// } else if msg.Cmd == "keyDown" {
 		// 	//a key was pressed
@@ -249,16 +261,23 @@ func process(gameId int, playerName string, msg msg) *State {
 			//count money and send to player
 			for _, p := range state.Players {
 
-				if p.stepCoins > 0 { //did we win any coins this step
-					p.Coins += p.stepCoins
+				if p.stepCoinsValue > 0 { //did we win any coins this step
+					p.Coins += p.stepCoinsValue * p.stepCoinCount
+					if p.stepCoinCount > 1 {
+						q4one(p, &reply{Cmd: "banner", Payload: "X" + strconv.Itoa(p.stepCoinCount)})
+					}
 					q4one(p, &reply{Cmd: "coins", Payload: p.Coins})
 				}
-				p.stepCoins = 0 //reset for next step
+				p.stepCoinsValue = 0 //reset for next step
+				p.stepCoinCount = 0
 			}
 		}
 
 	} else if msg.Cmd == "drive" {
 
+		if strings.HasPrefix(playerName, "control-") {
+			player = state.Players[strings.TrimPrefix(playerName, "control-")]
+		}
 		player.LeftDrive = msg.Payload[0]  //no need to echo them back - local versions are used for knobs only
 		player.RightDrive = msg.Payload[1] //no need to echo them back - local versions are used for knobs only
 
@@ -376,5 +395,5 @@ func sendWholeThing(state *State, ti int) {
 }
 
 func logit(s ...interface{}) { //accept an array of any type(s)
-	fmt.Println(s...)
+	//fmt.Println(s...)
 }

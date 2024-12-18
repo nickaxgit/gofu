@@ -48,6 +48,18 @@ func (thing *Thing) contains(p *Vector, m []*Mass) bool {
 
 }
 
+func (thing *Thing) centreOfMass(m []*Mass) Vector {
+	//return the centre of mass of the thing
+	//this is the average of the masses of the springs
+	//TODO - account for weights
+	c := Vector{0, 0}
+	for _, s := range thing.Springs {
+		h := m[s.M1].P.add(m[s.M2].P)
+		c.addIn(h.multiply(0.5))
+	}
+	return c.multiply(1.0 / float64(len(thing.Springs)))
+}
+
 func (thing *Thing) closestPointOnEdge(masses []*Mass, wp *Vector) Vector {
 	bestDist := float64(1000000)
 	bestPoint := Vector{0, 0}

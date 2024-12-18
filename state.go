@@ -26,6 +26,11 @@ type soundPayload struct {
 	Loop     bool    `json:"loop"`
 }
 
+type revsPayload struct {
+	Player string  `json:"player"`
+	Revs   float32 `json:"revs"`
+}
+
 type massPayload struct {
 	//index: I, mass: state.masses[I]}}) //we receive a new thing sfrom someone -
 	I    int  `json:"i"`
@@ -158,6 +163,7 @@ func (s *State) AddPlayer(name string, position Vector) *Player {
 }
 
 func (p *Player) Move(state *State) {
+
 	if !p.dying && !p.dead { //you loose all traction when dying
 		dozer := state.Things[p.Dozer]
 		rr := &state.Masses[dozer.Springs[0].M1].P
@@ -181,7 +187,7 @@ func (p *Player) Move(state *State) {
 		revs := float32(math.Abs(float64(p.LeftDrive)) + math.Abs(float64(p.RightDrive)))
 		if revs != p.oRevs {
 			p.oRevs = revs
-			// server.Q4all({cmd:"revs",payload:{player:p.playerName,revs}})
+			state.q4all(&reply{Cmd: "revs", Payload: revsPayload{Player: p.Name, Revs: revs}})
 		}
 	}
 }
@@ -247,6 +253,7 @@ func (state *State) checkHoles() {
 						if t.contains(&m.P, state.Masses) { //todo - optimise - non moving masses cant fall in holes
 							m.fallingInto = ti
 							if m.IsCoin {
+
 								state.qSound("coin-flip", m.P, 0.2, "", false)
 							} else {
 								state.qSound("clank", m.P, 0.2, "", false)
@@ -319,7 +326,8 @@ func (state *State) countCoin(lastThingCoinTouched int, value int) {
 
 	for _, p := range state.Players {
 		if p.Dozer == lastThingCoinTouched {
-			p.stepCoins += value //coins won this step
+			p.stepCoinsValue += value //value of coins won this step
+			p.stepCoinCount += 1      //number of coins won this step
 		}
 	}
 }
@@ -370,7 +378,7 @@ func (state *State) scatterCoins(w float64, h float64) {
 func (state *State) checkDeaths() {
 	for _, p := range state.Players {
 
-		if !p.dead {
+		if p.Dozer > -1 && !p.dead {
 			dozer := state.Things[p.Dozer]
 			if p.dying {
 
@@ -494,7 +502,9 @@ func (state *State) moveAll(substeps int) []int {
 			}
 
 			for _, p := range state.Players {
-				p.Move(state) //state.movePlayer(p) //based on a players keyboard/touch inputs move their track masses
+				if p.Dozer > -1 { //controller players don't have dozers
+					p.Move(state) //state.movePlayer(p) //based on a players keyboard/touch inputs move their track masses
+				}
 			}
 
 			state.stretchSprings()
@@ -530,8 +540,10 @@ func (state *State) moveAll(substeps int) []int {
 	}
 
 	for _, p := range state.Players {
-		if p.moved(state) {
-			state.RecordTrack(p)
+		if p.Dozer > -1 {
+			if p.moved(state) {
+				state.RecordTrack(p)
+			}
 		}
 	}
 
@@ -685,7 +697,7 @@ func (state *State) setupRandomLayer(layerName string, picList []string, extensi
 			p = Vector{x, y}
 			pic = picList[int(math.Floor(rand.Float64()*float64(len(picList))))]
 			radius = minRadius + rand.Float64()*(maxRadius-minRadius)
-			if !spotOccupied(layer.Props, &p, radius) { //don't pile things ontop of each other
+			if !spotOccupied(layer.Props, &p, radius) && !state.inHole(p) { //don't pile things ontop of each other
 				break
 			}
 		}
