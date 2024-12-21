@@ -60,8 +60,9 @@ type track struct {
 }
 
 type State struct { //the data of a game in progress - it is serialised and should have no methods - it can be entirely replaced at any point by rejoining a game
-	GameId    int `json:"gameId" bson:"gameId"`
-	host      string
+	GameId int `json:"gameId" bson:"gameId"`
+	Sqn    int `json:"sqn"`
+	//host      string
 	Players   map[string]*Player `json:"players"`
 	Masses    []*Mass            `json:"masses"`
 	Things    []*Thing           `json:"things"`
@@ -75,9 +76,50 @@ func (s *State) AddMass(m *Mass) int {
 	return len(s.Masses) - 1 // return the index of the new mass
 }
 
+func (state *State) step() {
+
+	state.moveAll(3) //<- this is a physics step - move, count coins and deaths, falls etc
+
+	mm := make([]int, 4*len(state.Masses))
+
+	moved := int(0)
+	for i, m := range state.Masses {
+		if m.P.X != m.op.X || m.P.Y != m.op.Y || m.Z != m.oz {
+			mm[moved*4] = i
+			mm[moved*4+1] = int(m.P.X * 100)
+			mm[moved*4+2] = int(m.P.Y * 100)
+			mm[moved*4+3] = int(m.Z * 100)
+			moved++
+		}
+	}
+
+	mm = mm[:moved*4] //truncate
+
+	if moved > 0 {
+		state.Sqn++
+		state.q4all(&reply{Cmd: "mps", Payload: mm})
+	}
+
+	//count money and send to player
+	for _, p := range state.Players {
+
+		if p.stepCoinsValue > 0 { //did we win any coins this step
+			p.Coins += p.stepCoinsValue * p.stepCoinCount
+			if p.stepCoinCount > 1 {
+				state.q4one(p, &reply{Cmd: "banner", Payload: "X" + strconv.Itoa(p.stepCoinCount)})
+			}
+			state.q4one(p, &reply{Cmd: "coins", Payload: p.Coins})
+		}
+		p.stepCoinsValue = 0 //reset for next step
+		p.stepCoinCount = 0
+	}
+
+}
+
 func (s *State) save(filename string) {
 
 	bytes, err := bson.Marshal(s)
+
 	if err != nil {
 		logit(err.Error())
 		return
@@ -136,27 +178,27 @@ func (s *State) AddSpring(thing, m1, m2 int, collideable bool) int {
 	return len(s.Things[thing].Springs) - 1 // NB: returns the index of the spring in the thing
 }
 
-func (s *State) AddPlayer(name string, position Vector) *Player {
-	dozer := s.addThing("dozers", "dozer", false) // position,0,radius,"",0,false,"dozers",1)
-	rl := s.AddMass(NewMass(position, 1, false, false, true, dozer))
+func (state *State) AddPlayer(name string, position Vector) *Player {
+	dozer := state.addThing("dozers", "dozer", false) // position,0,radius,"",0,false,"dozers",1)
+	rl := state.AddMass(NewMass(position, 1, false, false, true, dozer))
 	w := float64(100)
 	h := float64(140)
-	rr := s.AddMass(NewMass(position.add(Vector{w, 0}), 1, false, false, true, dozer))
-	fl := s.AddMass(NewMass(position.add(Vector{0, -h}), 10, false, false, true, dozer))
-	fr := s.AddMass(NewMass(position.add(Vector{w, -h}), 10, false, false, true, dozer))
-	s.Things[dozer].Scale.Y = h / w
-	s.Things[dozer].Scale.X = 1
+	rr := state.AddMass(NewMass(position.add(Vector{w, 0}), 1, false, false, true, dozer))
+	fl := state.AddMass(NewMass(position.add(Vector{0, -h}), 10, false, false, true, dozer))
+	fr := state.AddMass(NewMass(position.add(Vector{w, -h}), 10, false, false, true, dozer))
+	state.Things[dozer].Scale.Y = h / w
+	state.Things[dozer].Scale.X = 1
 
-	s.AddSpring(dozer, rr, rl, true) // bottom
-	s.AddSpring(dozer, rl, fl, true) // left
-	s.AddSpring(dozer, fl, fr, true) // top
-	s.AddSpring(dozer, fr, rr, true) // right
+	state.AddSpring(dozer, rr, rl, true) // bottom
+	state.AddSpring(dozer, rl, fl, true) // left
+	state.AddSpring(dozer, fl, fr, true) // top
+	state.AddSpring(dozer, fr, rr, true) // right
 
-	s.AddSpring(dozer, rr, fl, false) // cross members (not collideable)
-	s.AddSpring(dozer, rl, fr, false)
+	state.AddSpring(dozer, rr, fl, false) // cross members (not collideable)
+	state.AddSpring(dozer, rl, fr, false)
 
-	p := NewPlayer(name, dozer)
-	s.Players[name] = p
+	p := NewPlayer(name, dozer, state)
+	state.Players[name] = p
 
 	return p
 
@@ -347,6 +389,7 @@ func (state *State) tumbleCoins() {
 					m.enabled = false
 				}
 			}
+
 		}
 	}
 }
@@ -401,7 +444,7 @@ func (state *State) checkDeaths() {
 						p.dead = true
 						p.dying = false
 						state.q4all(&reply{Cmd: "banner", Payload: p.Name + " is dead"})
-						q4one(p, &reply{Cmd: "dead", Payload: ""})
+						state.q4one(p, &reply{Cmd: "dead", Payload: ""})
 						state.deathList = append(state.deathList, p) //TODO - respawn/ spectate etc
 					}
 				}
@@ -480,25 +523,22 @@ func (state *State) MakeHole(x float64, y float64, r float64) {
 }
 
 // executes a physics step and returns the index and new position for all the masses that move
-func (state *State) moveAll(substeps int) []int {
+func (state *State) moveAll(substeps int) {
 
-	movedMasses := []int{} //return the index, x and y of all masses that move
+	//movedMasses := []int{} //return the index, x and y of all masses that move
 
 	if state.anyPlayers() && len(state.Masses) > 3 {
 
 		for substep := 0; substep < substeps; substep++ {
 
-			//inertia
 			for _, m := range state.Masses {
 				m.op = Vector{m.P.X, m.P.Y}
 				m.oz = m.Z //record all position (AND depths)
 			}
 
-			//inertia and friction
+			//move by inertia and friction
 			for _, m := range state.Masses {
-				//if m.enabled {
 				m.P.addIn(m.v.multiply(.8)) //was .9
-				//}
 			}
 
 			for _, p := range state.Players {
@@ -513,30 +553,25 @@ func (state *State) moveAll(substeps int) []int {
 
 			// do{
 			// }while (this.resolvePenetrations()) //loop unit all mass-thing pepetrations are resolved
+
 			state.checkHoles()
 			state.checkDeaths()
+
 			state.resolvePenetrations()
 			//masses are pushed out of things (and things away from masses)
 			state.resolveMassOverlaps()
 			state.tumbleCoins() //may change angle
 
-			//calculate velocity based on moevent
+			// //calculate velocity based on moevent
 			for _, m := range state.Masses {
 				m.v = m.P.subtract(&m.op)
+
+				if m.v.lengthSq() < 0.01 {
+					m.v = Vector{0, 0}
+				}
 			}
 
 		}
-	}
-
-	for i, m := range state.Masses {
-		//if !m.P.Equals(&m.op) || m.Z != m.oz {
-		if m.v.lengthSq() > 0.01 || m.Z != m.oz {
-			movedMasses = append(movedMasses, i)
-			movedMasses = append(movedMasses, int(m.P.X*100))
-			movedMasses = append(movedMasses, int(m.P.Y*100))
-			movedMasses = append(movedMasses, int(m.Z*100))
-		}
-
 	}
 
 	for _, p := range state.Players {
@@ -547,8 +582,6 @@ func (state *State) moveAll(substeps int) []int {
 		}
 	}
 
-	return movedMasses
-
 }
 
 func (player *Player) getMasses(state *State) []*Mass {
@@ -556,10 +589,6 @@ func (player *Player) getMasses(state *State) []*Mass {
 	dozer := state.Things[player.Dozer]
 	port := dozer.Springs[1]
 	starboard := dozer.Springs[3]
-
-	if state.Tracks[player.Name] == nil {
-		state.Tracks[player.Name] = &track{Pointer: 0, Points: make([]float64, 800)}
-	}
 
 	m := state.Masses
 	fl := m[port.M2]
@@ -738,16 +767,16 @@ func (state *State) qSound(sound string, position Vector, volume float32, label 
 func (state *State) q4all(msg *reply) {
 
 	for _, p := range state.Players { //for every outbound que (player)
-		q4one(p, msg)
+		state.q4one(p, msg)
 	}
 
 }
 
-func q4one(p *Player, msg *reply) {
+func (state *State) q4one(p *Player, msg *reply) {
 
 	if !strings.HasPrefix(p.Name, "bot") {
 		p.qh.mutex.Lock()
-		p.qh.q = append(p.qh.q, msg)
+		p.qh.q[state.Sqn] = append(p.qh.q[state.Sqn], msg)
 		p.qh.mutex.Unlock()
 	}
 

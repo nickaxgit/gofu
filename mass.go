@@ -34,7 +34,7 @@ func NewMass(p Vector, r float64, fixed bool, isCoin bool, collideable bool, thi
 	// if leavesMarks {
 	// 	marks = make([]Vector, 200)
 	// }
-	return &Mass{P: p, R: r, Fixed: fixed, IsCoin: isCoin, Collideable: collideable, ThingNum: thingNum, enabled: true, fallingInto: -1}
+	return &Mass{P: p, R: r, Fixed: fixed, IsCoin: isCoin, Collideable: collideable, ThingNum: thingNum, enabled: true, fallingInto: -1, op: p}
 }
 
 func (m *Mass) moveTowards(p *Vector, dist float64) {

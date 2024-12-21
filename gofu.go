@@ -115,7 +115,7 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 func main() {
 	port := ":8081" //":443" //":8081"
 	logit("Gofu server - listening on " + port)
-	fs := http.FileServer(http.Dir("../dozer"))
+	//fs := http.FileServer(http.Dir("../dozer"))
 
 	//important!
 	games = make(map[int]*State)
@@ -125,7 +125,7 @@ func main() {
 	//obq = make(map[string]*qHolder)
 
 	//see customHeaders
-	//http.HandleFunc("/gi", gameTraffic)
+	http.HandleFunc("/gi", gameTraffic)
 	//http.HandleFunc("/home", homePage)
 	//http.Handle("/", fs)
 
@@ -133,7 +133,12 @@ func main() {
 
 	//	http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
 
-	log.Fatal(http.ListenAndServe(port, customHeaders(fs)))
+	//this blocks the main thread
+	go http.ListenAndServe(port, nil) //, customHeaders(fs))
+
+	logit("Starting ticker")
+	stepWorlds()
+
 	//log.Fatal(http.ListenAndServeTLS(port, "dozer_world.crt", "./dozer.key", customHeaders(fs)))
 
 }
@@ -180,10 +185,10 @@ func customHeaders(fs http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// add headers etc here
 		// return if you do not want the FileServer handle a specific request
-		if strings.HasSuffix(r.RequestURI, "/gi") {
-			gameTraffic(w, r)
-			return
-		}
+		// if strings.HasSuffix(r.RequestURI, "/gi") {
+		// 	gameTraffic(w, r)
+		// 	return
+		// }
 		if strings.HasSuffix(r.RequestURI, "/home") {
 			homePage(w, r)
 			return
