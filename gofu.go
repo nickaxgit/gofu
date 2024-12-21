@@ -3,11 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/gorilla/websocket"
 	//"golang.org/x/tools/playground/socket"
@@ -19,98 +16,100 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-type user struct {
-	mtx *sync.Mutex // a mutex is required to 'lock' access to each users connection (for writing)
-	// many calls (to wsEndpoint) can be running in paralell - and more than one of them may attempt to write to a single users socket at the same time (not allowed!)
-	conn *websocket.Conn // a pointer to the socket
-}
+// type user struct {
+// 	mtx *sync.Mutex // a mutex is required to 'lock' access to each users connection (for writing)
+// 	// many calls (to wsEndpoint) can be running in paralell - and more than one of them may attempt to write to a single users socket at the same time (not allowed!)
+// 	conn *websocket.Conn // a pointer to the socket
+// }
 
-var users []user
+//var users []user
 
-func reader(conn *websocket.Conn) {
-	for {
-		// read in a message
-		messageType, msg, err := conn.ReadMessage()
-		if err != nil {
-			log.Println(err)
-			return
-		}
+// func (player *Player) readForever() {
 
-		sender := msg[0] //the sender id is in the first byte of the message
-		//	fmt.Printf("sender was %d", sender)
+// 	for {
+// 		// read in a message
+// 		//websocket.BinaryMessage or websocket.TextMessage
+// 		messageType, msg, err := player.socket.ReadMessage()
 
-		for i := range users { //send the message to everyone except the originator
-			if byte(i) != sender { //the index (which we are interting) IS the byte userID (which will need to be a long at some point)
-				send(&users[i], messageType, &msg)
-			}
-		}
+// 		if err != nil {
+// 			logit ("Error reading message from websocket: " + err.Error())
+// 		}
 
-		// if err := conn.WriteMessage(messageType, p); err != nil {
-		// 	log.Println(err)
-		// 	return
-		// }
+// 		if messageType == websocket.TextMessage{
 
-	}
-}
+// 			var block block
+// 			//err = json.NewDecoder(msg).Decode(&block)
+// 			err = json.Unmarshal(msg, &block)
 
-func send(user *user, messageType int, msg *[]byte) error {
-	user.mtx.Lock()
-	defer user.mtx.Unlock()                          //the defer statement runs this code when the function exits .. it's "idiomatic" in go .. it's excatly the same as if we made this the last line of the function
-	return user.conn.WriteMessage(messageType, *msg) //write the message (and return any error)
-}
+// 			processBlock(block) //block{MessageType: messageType, Message: msg})
+
+// 		}
+// 	}
+// }
+
+// func send(user *user, messageType int, msg *[]byte) error {
+// 	user.mtx.Lock()
+// 	defer user.mtx.Unlock()                          //the defer statement runs this code when the function exits .. it's "idiomatic" in go .. it's excatly the same as if we made this the last line of the function
+// 	return user.conn.WriteMessage(messageType, *msg) //write the message (and return any error)
+// }
 
 func homePage(w http.ResponseWriter, _ *http.Request) {
 	logit("homePage", "called")
 	fmt.Fprintf(w, "<h1>Dozer game server</h1>")
-	fmt.Fprintf(w, "<p>%d users are connected", len(users))
-}
-
-func reset(w http.ResponseWriter, _r *http.Request) {
-
-	log.Println("Resetting")
-
-	bye := []byte("BYE")
-
-	for i := range users {
-		//fmt.Println(i)
-		send(&users[i], websocket.TextMessage, &bye)
-		users[i].conn.Close()
+	for i, g := range games {
+		fmt.Fprintf(w, "<p>Game %d has %d players", i, len(g.Players))
+		for _, p := range g.Players {
+			fmt.Fprintf(w, "<p>Player %s", p.Name)
+		}
 	}
-
-	users = nil
-
-	fmt.Fprintf(w, "<h1>Dozer game server</h1>")
-	fmt.Fprintf(w, "<p>%d users are connected", len(users))
-
-	log.Println("Reset")
 }
 
-func wsEndpoint(w http.ResponseWriter, r *http.Request) {
-	// upgrade this connection to a WebSocket
-	// connection
-	ws, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println(err)
-	}
+// func reset(w http.ResponseWriter, _r *http.Request) {
 
-	var u user
-	u.conn = ws //hold a reference to the websocket
-	users = append(users, u)
+// 	log.Println("Resetting")
 
-	m := []byte(fmt.Sprint(len(users) - 1))
-	send(&u, websocket.TextMessage, &m) //write (as a string) your index in the slice of users
+// 	bye := []byte("BYE")
 
-	log.Printf(fmt.Sprintf("Client %s Connected", strconv.Itoa(len(users))))
+// 	for i := range users {
+// 		//fmt.Println(i)
+// 		send(&users[i], websocket.TextMessage, &bye)
+// 		users[i].conn.Close()
+// 	}
 
-	// err = ws.WriteMessage(1, []byte("Hi Client!"))
-	// if err != nil {
-	// 	log.Println(err)
-	// }
+// 	users = nil
 
-	// listen indefinitely for new messages coming
-	// through on our WebSocket connection
-	reader(ws)
-}
+// 	fmt.Fprintf(w, "<h1>Dozer game server</h1>")
+// 	fmt.Fprintf(w, "<p>%d users are connected", len(users))
+
+// 	log.Println("Reset")
+// }
+
+// func wsEndpoint(w http.ResponseWriter, r *http.Request) {
+// 	// upgrade this connection to a WebSocket
+// 	// connection
+// 	ws, err := upgrader.Upgrade(w, r, nil)
+// 	if err != nil {
+// 		log.Println(err)
+// 	}
+
+// 	var u user
+// 	u.conn = ws //hold a reference to the websocket
+// 	users = append(users, u)
+
+// 	m := []byte(fmt.Sprint(len(users) - 1))
+// 	send(&u, websocket.TextMessage, &m) //write (as a string) your index in the slice of users
+
+// 	log.Printf(fmt.Sprintf("Client %s Connected", strconv.Itoa(len(users))))
+
+// 	// err = ws.WriteMessage(1, []byte("Hi Client!"))
+// 	// if err != nil {
+// 	// 	log.Println(err)
+// 	// }
+
+// 	// listen indefinitely for new messages coming
+// 	// through on our WebSocket connection
+// 	reader(ws)
+// }
 
 func main() {
 	port := ":8081" //":443" //":8081"
@@ -131,7 +130,7 @@ func main() {
 
 	//http.HandleFunc("/reset", reset)
 
-	//	http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
+	//http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
 
 	//this blocks the main thread
 	go http.ListenAndServe(port, nil) //, customHeaders(fs))
@@ -143,41 +142,75 @@ func main() {
 
 }
 
+// shit name - should be 'join' (or somesuch)
 func gameTraffic(w http.ResponseWriter, r *http.Request) {
 
-	//logit("gameTraffic", "called")
+	// upgrade this connection to a WebSocket
+	ws, err := upgrader.Upgrade(w, r, nil)
 
-	var block block
-	// n, err := r.Body.Read(jsonBytes)
+	if err != nil {
+		logit(err)
+	}
 
-	w.Header().Set("Access-Control-Allow-Origin", "*") //TODO - tighten this up
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	w.Header().Set("Access-Control-Allow-Methods", "*") //POST, OPTIONS")
+	var state *State //initially nil set inside processMsg
+	var player *Player
 
-	//logit(r.Method)
-	if r.Method == "POST" {
-		err := json.NewDecoder(r.Body).Decode(&block)
+	//when a player creates of joins a game - their websocket is hooked up to the player
+	for {
+		// read in a messages forever on this socket
+
+		messageType, msgBytes, err := ws.ReadMessage()
 
 		if err != nil {
-			logit(err.Error())
-			w.Write([]byte("Error reading JSON (not a block) ?" + err.Error()))
-			//w.WriteHeader(http.StatusBadRequest)
-			return
+			logit("Error reading message from websocket: " + err.Error())
 		}
 
-		//its possible there are 0 bytes in the request
-		// if len(block) == 0 {
-		// 	w.WriteHeader(http.StatusNoContent)
-		// 	//nothing in the outbound queue for you
-		// 	//w.response([]byte("{}"))
-		// 	return
-		// }
-		//w.WriteHeader(http.StatusOK)
+		if messageType == websocket.TextMessage {
+			var structuredMessage msg
+			//err = json.NewDecoder(msg).Decode(&block)
+			err := json.Unmarshal(msgBytes, &structuredMessage)
+			if err != nil {
+				logit(err.Error())
+			}
 
-		response := processBlock(block)
+			player, state = processMsg(structuredMessage, state, player, ws) //block.GameId, from, m,player)
 
-		w.Write(response) //process the request que (from this player) and return the response (typically moved masses)
-	}
+		}
+	} //this is an infinite loop
+
+	// player := state.AddPlayer(playerName, state.RandomStartPos(),ws)
+
+	// 	var block block
+	// 	// n, err := r.Body.Read(jsonBytes)
+
+	// 	w.Header().Set("Access-Control-Allow-Origin", "*") //TODO - tighten this up
+	// 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	// 	w.Header().Set("Access-Control-Allow-Methods", "*") //POST, OPTIONS")
+
+	// 	//logit(r.Method)
+	// 	if r.Method == "POST" {  //it's either a JOIN or CREATE game command
+	// 		err := json.NewDecoder(r.Body).Decode(&block)
+
+	// 		if err != nil {
+	// 			logit(err.Error())
+	// 			w.Write([]byte("Error reading JSON (not a block) ?" + err.Error()))
+	// 			//w.WriteHeader(http.StatusBadRequest)
+	// 			return
+	// 		}
+
+	// 		//its possible there are 0 bytes in the request
+	// 		// if len(block) == 0 {
+	// 		// 	w.WriteHeader(http.StatusNoContent)
+	// 		// 	//nothing in the outbound queue for you
+	// 		// 	//w.response([]byte("{}"))
+	// 		// 	return
+	// 		// }
+	// 		//w.WriteHeader(http.StatusOK)
+
+	// 		response := processBlock(block)
+
+	// 		w.Write(response) //process the request que (from this player) and return the response (typically moved masses)
+	//	}
 }
 
 func customHeaders(fs http.Handler) http.HandlerFunc {

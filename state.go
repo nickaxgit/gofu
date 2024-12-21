@@ -3,13 +3,13 @@ package main
 //lighteright game state - the objects do not have methods (as they are deserialised from server data)
 import (
 	"bufio"
+	"github.com/gorilla/websocket"
 	"go.mongodb.org/mongo-driver/bson" //once stuctures are stabilised - can probaly just use bufio direclty
 	"io"
 	"math"
 	"math/rand/v2"
 	"os"
 	"strconv"
-	"strings"
 )
 
 type skinPayload struct {
@@ -106,9 +106,9 @@ func (state *State) step() {
 		if p.stepCoinsValue > 0 { //did we win any coins this step
 			p.Coins += p.stepCoinsValue * p.stepCoinCount
 			if p.stepCoinCount > 1 {
-				state.q4one(p, &reply{Cmd: "banner", Payload: "X" + strconv.Itoa(p.stepCoinCount)})
+				p.Send(&reply{Cmd: "banner", Payload: "X" + strconv.Itoa(p.stepCoinCount)})
 			}
-			state.q4one(p, &reply{Cmd: "coins", Payload: p.Coins})
+			p.Send(&reply{Cmd: "coins", Payload: p.Coins})
 		}
 		p.stepCoinsValue = 0 //reset for next step
 		p.stepCoinCount = 0
@@ -178,7 +178,7 @@ func (s *State) AddSpring(thing, m1, m2 int, collideable bool) int {
 	return len(s.Things[thing].Springs) - 1 // NB: returns the index of the spring in the thing
 }
 
-func (state *State) AddPlayer(name string, position Vector) *Player {
+func (state *State) AddPlayer(name string, position Vector, ws *websocket.Conn) *Player {
 	dozer := state.addThing("dozers", "dozer", false) // position,0,radius,"",0,false,"dozers",1)
 	rl := state.AddMass(NewMass(position, 1, false, false, true, dozer))
 	w := float64(100)
@@ -197,7 +197,7 @@ func (state *State) AddPlayer(name string, position Vector) *Player {
 	state.AddSpring(dozer, rr, fl, false) // cross members (not collideable)
 	state.AddSpring(dozer, rl, fr, false)
 
-	p := NewPlayer(name, dozer, state)
+	p := NewPlayer(name, dozer, state, ws)
 	state.Players[name] = p
 
 	return p
@@ -444,7 +444,7 @@ func (state *State) checkDeaths() {
 						p.dead = true
 						p.dying = false
 						state.q4all(&reply{Cmd: "banner", Payload: p.Name + " is dead"})
-						state.q4one(p, &reply{Cmd: "dead", Payload: ""})
+						p.Send(&reply{Cmd: "dead", Payload: ""})
 						state.deathList = append(state.deathList, p) //TODO - respawn/ spectate etc
 					}
 				}
@@ -767,17 +767,17 @@ func (state *State) qSound(sound string, position Vector, volume float32, label 
 func (state *State) q4all(msg *reply) {
 
 	for _, p := range state.Players { //for every outbound que (player)
-		state.q4one(p, msg)
+		p.Send(msg)
 	}
 
 }
 
-func (state *State) q4one(p *Player, msg *reply) {
+// func (state *State) q4one(p *Player, msg *reply) {
 
-	if !strings.HasPrefix(p.Name, "bot") {
-		p.qh.mutex.Lock()
-		p.qh.q[state.Sqn] = append(p.qh.q[state.Sqn], msg)
-		p.qh.mutex.Unlock()
-	}
+// 	if !strings.HasPrefix(p.Name, "bot") {
+// 		p.qh.mutex.Lock()
+// 		p.qh.q[state.Sqn] = append(p.qh.q[state.Sqn], msg)
+// 		p.qh.mutex.Unlock()
+// 	}
 
-}
+// }

@@ -3,19 +3,19 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
+	"github.com/gorilla/websocket"
 	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
 )
 
-type block struct {
-	GameId     int
-	PlayerName string
-	Msgs       []msg
-}
+// type block struct {
+// 	//GameId     int
+// 	//PlayerName string
+// 	Msgs []msg
+// }
 
 type msg struct {
 	Cmd     string
@@ -35,10 +35,10 @@ type msg struct {
 // 	y float64
 // }
 
-type qHolder struct {
-	mutex *sync.Mutex
-	q     map[int][]*reply //sets of replies by sqn
-}
+// type qHolder struct {
+// 	mutex *sync.Mutex
+// 	q     map[int][]*reply //sets of replies by sqn
+// }
 
 type reply struct {
 	Cmd     string
@@ -75,63 +75,17 @@ func stepWorlds() {
 		for _, state := range games {
 			state.step() //<- this is a physics step - it queues stuff for all players
 
-			for _, p := range state.Players {
-				select { //this is a non-blocking send
-				case p.waitChannel <- true: //<- this is a signal to the player that the world has stepped
-				default:
-				}
-			}
+			// for _, p := range state.Players {
+			// 	select { //this is a non-blocking send
+			// 	case p.waitChannel <- true: //<- this is a signal to the player that the world has stepped
+			// 	default:
+			// 	}
+			// }
 		}
 	}
 
 	panic(`stepWorlds() has exited`)
 
-}
-
-func processBlock(block block) []byte {
-	//this is the entry point for the server - the equivalent of rx() in the TS example
-
-	// var inBlock block // []msg
-	// err := json.Unmarshal(inJSONbytes, &inBlock)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	from := block.PlayerName
-	if from == "" {
-		panic(`no player name in message`)
-	}
-
-	logit(len(block.Msgs), `messages in block`)
-	var state *State
-	for _, m := range block.Msgs { //process every msg in the queue
-		state = process(block.GameId, from, m)
-	}
-
-	if state.Players[from] == nil {
-		panic(`player ` + from + ` not found in game ` + fmt.Sprint(block.GameId))
-	}
-
-	qh := state.Players[from].qh
-
-	//is there anything in this players outbound queue to reply with
-	if len(qh.q) > 0 {
-
-		jsonReply, err := json.Marshal(qh.q) //reply to sender
-		if err != nil {
-			panic(err)
-		}
-		//logit(string(jsonReply))
-
-		qh.mutex.Lock()
-		qh.q = make(map[int][]*reply) //empty the outbound queue
-		qh.mutex.Unlock()
-
-		return jsonReply // return this players outbound queue - all changed mass positions and player states
-
-	} else {
-		return []byte("{}") //nothing queued for them - reply with an empty object
-	}
 }
 
 func (state *State) RandomStartPos() Vector {
@@ -172,18 +126,7 @@ func (state *State) thingClearance(p *Vector) float64 {
 
 // each player has a que.. but maybe a single shared que of responses by sqn would be better
 // when all players have rx'd something it is removed from the queue
-func process(gameId int, playerName string, msg msg) *State {
-
-	var player *Player
-
-	var state *State
-
-	if gameId == -1 || gameId == 0 {
-		//player = NewPlayer(playerName+"bootstrap", 0)
-	} else {
-		state = games[gameId]
-		player = state.Players[playerName] //may (or may not) be nil for joinGame
-	}
+func processMsg(msg msg, state *State, player *Player, ws *websocket.Conn) (*Player, *State) {
 
 	//var fpn string //firstPlayer *Player
 
@@ -191,29 +134,25 @@ func process(gameId int, playerName string, msg msg) *State {
 	prop := "offset"
 	step := float64(3)
 
-	if gameId < 1 && msg.Cmd != "createGame" && msg.Cmd != "joinGame" {
-		logit("No game id ", msg.Cmd, player)
-		return state
+	if player == nil && msg.Cmd != "createGame" && msg.Cmd != "joinGame" {
+		logit("No player for message", msg)
+		return player, state
 	}
 
-	logit("processing", msg.Cmd, "from", playerName)
-
 	if msg.Cmd == "createGame" {
+
 		//create a new game
 		state = NewState() //asigns a random game id
-		//state.host = playerName //only the host steps the physics
-
 		games[state.GameId] = state
 		state.makeHoles(10, 5000, 5000)
-		//state.makeHoles(1, 0, 0)
-
-		player := state.AddPlayer(playerName, state.RandomStartPos())
+		playerName := msg.Key
+		player = state.AddPlayer(playerName, state.RandomStartPos(), ws)
 		//state.AddPlayer("bot1", Vector{400, 120})
 		state.setupLayers(5000, 5000)
 		state.scatterCoins(5000, 5000)
 
-		gs := reply{Cmd: "state", Payload: state}
-		state.q4one(state.Players[playerName], &gs)
+		player.Send(&reply{Cmd: "state", Payload: state})
+
 		logit("Game created", state.GameId)
 
 		state.qSound("dozer", state.Things[player.Dozer].centreOfMass(state.Masses), 0.1, "revs-"+playerName, true)
@@ -222,31 +161,34 @@ func process(gameId int, playerName string, msg msg) *State {
 
 	} else if msg.Cmd == "joinGame" {
 		//join an existing game
-		//gameId := int(msg.Payload[0])
+		gameId := int(msg.Payload[0]) //send up the game id in the first float64
 		state = games[gameId]
 		if state == nil {
 			state = load("game" + fmt.Sprint(gameId) + ".bson")
 			games[gameId] = state
 			for _, p := range state.Players {
-				p.qh = &qHolder{mutex: &sync.Mutex{}, q: make(map[int][]*reply, 0)}
+				p.mtx = &sync.Mutex{}
 			}
 		}
-		//state.host = playerName //the last person to join becomes the host (and steps the game)
 
-		if player != nil {
+		playerName := msg.Key
+		if state.Players[playerName] != nil {
+			player := state.Players[playerName]
 			//i am joining to control an existing player (whos is already in)
-			state.q4one(player, &reply{Cmd: "state", Payload: state}) //inst important that state is sent bedore the change of name
+			player.Send(&reply{Cmd: "state", Payload: state}) //inst important that state is sent bedore the change of name
 			//from now on the client will prefix its playerName with "control-" to indicate that it is controlling another player
-			state.q4one(player, &reply{Cmd: "prefix", Payload: "control-"})
-			p := NewPlayer("control-"+playerName, -1, state)
+			player.Send(&reply{Cmd: "prefix", Payload: "control-"})
+			p := NewPlayer("control-"+playerName, -1, state, ws)
 			state.Players[p.Name] = p
 
 		} else { //player = NewPlayer(playerName, 0)
-			joiner := state.AddPlayer(playerName, state.RandomStartPos())
-			state.q4one(joiner, &reply{Cmd: "state", Payload: state})
-			state.q4all(&reply{Cmd: "playerJoined", Payload: joiner}) //tell everyone about the new player
-			sendWholeThing(state, joiner.Dozer)                       //NOTE the joiner will recieve themselves twice
+			player = state.AddPlayer(playerName, state.RandomStartPos(), ws)
+			player.Send(&reply{Cmd: "state", Payload: state})
+			state.q4all(&reply{Cmd: "playerJoined", Payload: player}) //tell everyone about the new player
+			sendWholeThing(state, player.Dozer)                       //NOTE the joiner will recieve themselves twice
 		}
+
+		//reader(ws) //this is the blocking call that listens for messages from the client
 
 		// } else if msg.Cmd == "keyDown" {
 		// 	//a key was pressed
@@ -267,12 +209,12 @@ func process(gameId int, playerName string, msg msg) *State {
 			dy = 0
 		}
 	} else if msg.Cmd == "step" {
-		<-player.waitChannel //see stepworlds fo rthe sending end which releases this
+		//<-player.waitChannel //see stepworlds fo rthe sending end which releases this
 
 	} else if msg.Cmd == "drive" {
 
-		if strings.HasPrefix(playerName, "control-") {
-			player = state.Players[strings.TrimPrefix(playerName, "control-")]
+		if strings.HasPrefix(player.Name, "control-") {
+			player = state.Players[strings.TrimPrefix(player.Name, "control-")]
 		}
 		player.LeftDrive = msg.Payload[0]  //no need to echo them back - local versions are used for knobs only
 		player.RightDrive = msg.Payload[1] //no need to echo them back - local versions are used for knobs only
@@ -373,7 +315,7 @@ func process(gameId int, playerName string, msg msg) *State {
 		sendThing(state, player.currentThing) //TODO this could just be the skin
 	}
 
-	return state
+	return player, state
 }
 
 func sendThing(state *State, ti int) {
