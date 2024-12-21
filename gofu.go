@@ -217,10 +217,12 @@ func customHeaders(fs http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// add headers etc here
 		// return if you do not want the FileServer handle a specific request
-		// if strings.HasSuffix(r.RequestURI, "/gi") {
-		// 	gameTraffic(w, r)
-		// 	return
-		// }
+
+		if strings.HasSuffix(r.RequestURI, "/gi") {
+			gameTraffic(w, r)
+			return
+		}
+
 		if strings.HasSuffix(r.RequestURI, "/home") {
 			homePage(w, r)
 			return
