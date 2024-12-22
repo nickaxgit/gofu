@@ -186,6 +186,7 @@ func processMsg(msg msg, state *State, player *Player, ws *websocket.Conn) (*Pla
 			player.Send(&reply{Cmd: "state", Payload: state})
 			state.q4all(&reply{Cmd: "playerJoined", Payload: player}) //tell everyone about the new player
 			sendWholeThing(state, player.Dozer)                       //NOTE the joiner will recieve themselves twice
+			state.qSound("dozer", state.Things[player.Dozer].centreOfMass(state.Masses), 0.1, "revs-"+playerName, true)
 		}
 
 		//reader(ws) //this is the blocking call that listens for messages from the client
