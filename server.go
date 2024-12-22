@@ -71,7 +71,7 @@ func stepWorlds() {
 
 	//every 100 ms step all worlds
 	for range time.Tick(time.Millisecond * 33) { //<<waits here
-		print(".") //<< this is the heartbeat
+		//print(".") //<< this is the heartbeat
 		for _, state := range games {
 			state.step() //<- this is a physics step - it queues stuff for all players
 
