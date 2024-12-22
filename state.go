@@ -78,7 +78,7 @@ func (s *State) AddMass(m *Mass) int {
 
 func (state *State) step() {
 
-	state.moveAll(3) //<- this is a physics step - move, count coins and deaths, falls etc
+	state.moveAll(1) //<- this is a physics step - move, count coins and deaths, falls etc
 
 	mm := make([]int, 4*len(state.Masses))
 
