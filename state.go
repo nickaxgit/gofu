@@ -48,6 +48,13 @@ type thingPayload struct {
 	Thing Thing `json:"thing"`
 }
 
+type meshPayload struct {
+	Verts []int `json:"verts"`
+	Faces []int `json:"faces"`
+	Norms []int `json:"norms"`
+	UV    []int `json:"uv"`
+}
+
 //	type pos struct{
 //		fl Vector
 //		rl Vector
@@ -76,6 +83,51 @@ func (s *State) AddMass(m *Mass) int {
 	return len(s.Masses) - 1 // return the index of the new mass
 }
 
+func (state *State) sendLand() {
+
+	addVert(newVec3(0, 100, 0))
+	addVert(newVec3(100, -100, 0))
+	addVert(newVec3(-100, -100, 0))
+
+	t := NewTri(0, []int{0, 1, 2})
+
+	t.split(0, 4) //spring the triangle 4 times recursively
+
+	fi := make([]int, 1000)
+
+	p := int(0)
+	t.gather(4, fi, &p) //get all the indices of the verts at depth 4
+
+	fi = fi[:p] //truncate
+	logit(p)
+	logit(len(verts))
+
+	//send all the verts and the indices to the client
+
+	v := make([]int, len(verts)*3)  //position x,y,z triples
+	n := make([]int, len(verts)*3)  //normal x,y,z triples
+	uv := make([]int, len(verts)*2) //u,v pairs
+
+	for i, p := range verts {
+		v[i*3+0] = int(p.p.X * 10)
+		v[i*3+1] = int(p.p.Y * 10)
+		v[i*3+2] = int(p.p.Z * 10)
+
+		n[i*3+0] = int(p.n.X * 100)
+		n[i*3+1] = int(p.n.Y * 100)
+		n[i*3+2] = int(p.n.Z * 100)
+
+		uv[i*2+0] = int(p.uv.X * 1000)
+		uv[i*2+1] = int(p.uv.Y * 1000)
+
+	}
+
+	meshPayload := meshPayload{Verts: v, Faces: fi, Norms: n, UV: uv}
+	state.sendToAll(&reply{Cmd: "land", Payload: meshPayload})
+	//state.q4all(&reply{Cmd: "thing", Payload: thingPayload{Ti: ti, Thing: *state.Things[ti]}})
+
+}
+
 func (state *State) step() {
 
 	state.moveAll(1) //<- this is a physics step - move, count coins and deaths, falls etc
@@ -97,7 +149,7 @@ func (state *State) step() {
 
 	if moved > 0 {
 		state.Sqn++
-		state.q4all(&reply{Cmd: "mps", Payload: mm})
+		state.sendToAll(&reply{Cmd: "mps", Payload: mm})
 	}
 
 	//count money and send to player
@@ -229,7 +281,7 @@ func (p *Player) Move(state *State) {
 		revs := float32(math.Abs(float64(p.LeftDrive)) + math.Abs(float64(p.RightDrive)))
 		if revs != p.oRevs {
 			p.oRevs = revs
-			state.q4all(&reply{Cmd: "revs", Payload: revsPayload{Player: p.Name, Revs: revs}})
+			state.sendToAll(&reply{Cmd: "revs", Payload: revsPayload{Player: p.Name, Revs: revs}})
 		}
 	}
 }
@@ -438,19 +490,19 @@ func (state *State) checkDeaths() {
 						dozer.Rotation = 0
 						p.dying = false
 						state.resetDozer(p)
-						state.q4all(&reply{Cmd: "banner", Payload: p.Name + " has " + strconv.Itoa(p.lives) + " lives left"})
+						state.sendToAll(&reply{Cmd: "banner", Payload: p.Name + " has " + strconv.Itoa(p.lives) + " lives left"})
 						sendWholeThing(state, p.Dozer) //does a q4all
 					} else {
 						p.dead = true
 						p.dying = false
-						state.q4all(&reply{Cmd: "banner", Payload: p.Name + " is dead"})
+						state.sendToAll(&reply{Cmd: "banner", Payload: p.Name + " is dead"})
 						p.Send(&reply{Cmd: "dead", Payload: ""})
 						state.deathList = append(state.deathList, p) //TODO - respawn/ spectate etc
 					}
 				}
 
 				r := reply{Cmd: "skin", Payload: skinPayload{Ti: p.Dozer, Scale: dozer.Scale, Rotation: dozer.Rotation}}
-				state.q4all(&r)
+				state.sendToAll(&r)
 
 			} else {
 				for _, s := range dozer.Springs {
@@ -471,6 +523,24 @@ func (state *State) checkDeaths() {
 		}
 	}
 }
+
+func (state *State) deleteMass(i int) {
+	state.Masses = append(state.Masses[:i], state.Masses[i+1:]...)
+	//todo reindex all springs above
+}
+
+func (state *State) deleteSpring(ti int, si int) {
+
+	//TODO sanity check/test
+	t := state.Things[ti]
+	t.Springs = append(t.Springs[:si], t.Springs[si+1:]...)
+
+}
+
+// func (state * State) deleteProp(layer string, i int){
+// 	layer := state.Layers[layer]
+// 	layer.Props = append(layer.Props[:i], layer.Props[i+1:]...)
+// }
 
 func (state *State) resetDozer(player *Player) {
 
@@ -760,11 +830,11 @@ func (state *State) qSound(sound string, position Vector, volume float32, label 
 	// = (sound:sound,position:position,volume:volume,label:label,loop:loop)
 
 	payload := soundPayload{Sound: sound, Position: position, Volume: volume, Label: label, Loop: loop}
-	state.q4all(&reply{Cmd: "sound", Payload: payload})
+	state.sendToAll(&reply{Cmd: "sound", Payload: payload})
 
 }
 
-func (state *State) q4all(msg *reply) {
+func (state *State) sendToAll(msg *reply) {
 
 	for _, p := range state.Players { //for every outbound que (player)
 		p.Send(msg)

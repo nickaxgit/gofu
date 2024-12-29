@@ -112,7 +112,7 @@ func homePage(w http.ResponseWriter, _ *http.Request) {
 // }
 
 func main() {
-	port := ":443" //":8081"
+	port := ":8081" //":443" //":8081"
 	logit("Gofu server - listening on " + port)
 	fs := http.FileServer(http.Dir("../dozer"))
 
@@ -133,8 +133,8 @@ func main() {
 	//http.HandleFunc("/ws", wsEndpoint) //web socket upgrader
 
 	//this blocks the main thread
-	//go http.ListenAndServe(port, nil) //, customHeaders(fs))
-	go http.ListenAndServeTLS(port, "dozer_world.crt", "./dozer.key", customHeaders(fs))
+	go http.ListenAndServe(port, customHeaders(fs)) //, nil) // customHeaders(fs))
+	//go http.ListenAndServeTLS(port, "dozer_world.crt", "./dozer.key", customHeaders(fs))
 
 	logit("Starting ticker")
 	stepWorlds()

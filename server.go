@@ -152,6 +152,7 @@ func processMsg(msg msg, state *State, player *Player, ws *websocket.Conn) (*Pla
 		state.scatterCoins(5000, 5000)
 
 		player.Send(&reply{Cmd: "state", Payload: state})
+		state.sendLand()
 
 		logit("Game created", state.GameId)
 
@@ -184,8 +185,8 @@ func processMsg(msg msg, state *State, player *Player, ws *websocket.Conn) (*Pla
 		} else { //player = NewPlayer(playerName, 0)
 			player = state.AddPlayer(playerName, state.RandomStartPos(), ws)
 			player.Send(&reply{Cmd: "state", Payload: state})
-			state.q4all(&reply{Cmd: "playerJoined", Payload: player}) //tell everyone about the new player
-			sendWholeThing(state, player.Dozer)                       //NOTE the joiner will recieve themselves twice
+			state.sendToAll(&reply{Cmd: "playerJoined", Payload: player}) //tell everyone about the new player
+			sendWholeThing(state, player.Dozer)                           //NOTE the joiner will recieve themselves twice
 			state.qSound("dozer", state.Things[player.Dozer].centreOfMass(state.Masses), 0.1, "revs-"+playerName, true)
 		}
 
@@ -236,7 +237,7 @@ func processMsg(msg msg, state *State, player *Player, ws *websocket.Conn) (*Pla
 				logit("Spring to/from nowhere - adding a mass")
 				m := NewMass(player.worldCursor, 10, false, false, true, player.currentThing)
 				i := state.AddMass(m)
-				state.q4all(&reply{Cmd: "mass", Payload: massPayload{I: i, Mass: *state.Masses[i]}}) //we receive a new thing sfrom someone -
+				state.sendToAll(&reply{Cmd: "mass", Payload: massPayload{I: i, Mass: *state.Masses[i]}}) //we receive a new thing sfrom someone -
 				player.Highlit.Mass = i
 			}
 
@@ -249,7 +250,7 @@ func processMsg(msg msg, state *State, player *Player, ws *websocket.Conn) (*Pla
 				t := state.Things[player.currentThing]
 
 				s := springPayload{Ti: player.currentThing, Si: i, Spring: *t.Springs[i]}
-				state.q4all(&reply{Cmd: "spring", Payload: s})
+				state.sendToAll(&reply{Cmd: "spring", Payload: s})
 
 				//this.currentThing.springs.push(new Spring(this.state.masses,me.springStart,this.highlit.mass,true))
 				logit("Continued chain of springs from mass ", player.springStart, " to ", player.Highlit.Mass)
@@ -292,13 +293,19 @@ func processMsg(msg msg, state *State, player *Player, ws *websocket.Conn) (*Pla
 		} else if k == "p" {
 			m := state.Masses[player.Highlit.Mass]
 			m.Fixed = !m.Fixed
-			state.q4all(&reply{Cmd: "mass", Payload: massPayload{I: player.Highlit.Mass, Mass: *m}})
+			state.sendToAll(&reply{Cmd: "mass", Payload: massPayload{I: player.Highlit.Mass, Mass: *m}})
 		} else if k == "v" {
 			state.save((`game` + fmt.Sprint(state.GameId) + `.bson`))
 			logit("Game saved", state.GameId)
 		} else if k == "l" {
 			state = load((`game` + fmt.Sprint(state.GameId) + `.bson`))
 			logit("Game loaded", state.GameId)
+		} else if k == "delete" {
+			if player.Highlit.Mass > -1 {
+				state.deleteMass(player.Highlit.Mass)
+			} else if player.Highlit.Spring > -1 {
+				state.deleteSpring(player.Highlit.Spring, player.Highlit.Thing)
+			}
 		}
 	}
 
@@ -321,15 +328,15 @@ func processMsg(msg msg, state *State, player *Player, ws *websocket.Conn) (*Pla
 
 func sendThing(state *State, ti int) {
 
-	state.q4all(&reply{Cmd: "thing", Payload: thingPayload{Ti: ti, Thing: *state.Things[ti]}})
+	state.sendToAll(&reply{Cmd: "thing", Payload: thingPayload{Ti: ti, Thing: *state.Things[ti]}})
 }
 
 func sendWholeThing(state *State, ti int) {
 	sendThing(state, ti) //the skin and offsets
 	for si, spring := range state.Things[ti].Springs {
-		state.q4all(&reply{Cmd: "spring", Payload: springPayload{Ti: ti, Si: si, Spring: *spring}})
-		state.q4all(&reply{Cmd: "mass", Payload: massPayload{I: spring.M1, Mass: *state.Masses[spring.M1]}})
-		state.q4all(&reply{Cmd: "mass", Payload: massPayload{I: spring.M2, Mass: *state.Masses[spring.M2]}})
+		state.sendToAll(&reply{Cmd: "spring", Payload: springPayload{Ti: ti, Si: si, Spring: *spring}})
+		state.sendToAll(&reply{Cmd: "mass", Payload: massPayload{I: spring.M1, Mass: *state.Masses[spring.M1]}})
+		state.sendToAll(&reply{Cmd: "mass", Payload: massPayload{I: spring.M2, Mass: *state.Masses[spring.M2]}})
 	}
 }
 
