@@ -3,14 +3,18 @@ package main
 //lighteright game state - the objects do not have methods (as they are deserialised from server data)
 import (
 	"bufio"
-	"github.com/gorilla/websocket"
-	"go.mongodb.org/mongo-driver/bson" //once stuctures are stabilised - can probaly just use bufio direclty
 	"io"
 	"math"
 	"math/rand/v2"
 	"os"
 	"strconv"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"go.mongodb.org/mongo-driver/bson" //once stuctures are stabilised - can probaly just use bufio direclty
 )
+
+var rnGen *rand.Rand //nd.NewPCG(42, uint64(time.Microsecond)))
 
 type skinPayload struct {
 	Ti       int     `json:"ti"`
@@ -83,22 +87,194 @@ func (s *State) AddMass(m *Mass) int {
 	return len(s.Masses) - 1 // return the index of the new mass
 }
 
+func (t *Tri) getY(x float64, z float64, y []float64) {
+
+	valid, pop := t.probe(Vec3{x, -100000, z}, Vec3{x, 100000, z})
+	if valid && t.contains(pop) {
+
+		y[t.depth] = pop.Y
+		for _, c := range t.Children {
+			c.getY(x, z, y)
+		}
+	}
+
+}
+
+// return the point of intersection of a ray with the triangle
+func (tri *Tri) probe(p0 Vec3, p1 Vec3) (bool, Vec3) {
+	d0 := tri.distanceFrom(p0)
+	if d0 < 0 {
+		d0 = -d0
+	}
+	d1 := tri.distanceFrom(p1)
+	if d1 < 0 {
+		d1 = -d1
+	} //becase go has no abs
+
+	t := d0 / (d0 + d1)
+	if t > 0 && t < 1 {
+		return true, p0.tween(&p1, t)
+	}
+	return false, Vec3{0, 0, 0}
+}
+
+func (t *Tri) distanceFrom(p Vec3) float64 {
+
+	a := verts[t.Vi[0]].p
+	b := verts[t.Vi[1]].p
+	c := verts[t.Vi[2]].p
+
+	//get the normal of the triangle
+	n := b.subtract(a).cross(c.subtract(a)).normalise() //todo - cache/gen the normals once
+
+	v := p.subtract(a)
+
+	//get the distance from the point to the plane
+	d := v.dot(n)
+
+	return d
+
+}
+
+func (t *Tri) contains(pop Vec3) bool {
+
+	a := verts[t.Vi[0]].p
+	b := verts[t.Vi[1]].p
+	c := verts[t.Vi[2]].p
+
+	//get the normal of the triangle
+	n := b.subtract(a).cross(c.subtract(a)).normalise()
+
+	//project the point onto the plane of the triangle
+	//and get the vector from the point to the plane
+	v := pop.subtract(a)
+
+	//get the distance from the point to the plane
+	d := v.dot(n)
+
+	if d > 0.01 || d < -0.01 {
+		panic("point not on plane " + strconv.Itoa(int(d*1000)))
+	}
+
+	//get the vectors from the projected point to the vertices of the triangle
+	va := pop.subtract(a)
+	vb := pop.subtract(b)
+	vc := pop.subtract(c)
+
+	//cross each edge with the point-to-vertex vector
+	na := b.subtract(a).cross(va).normalise()
+	nb := c.subtract(b).cross(vb).normalise()
+	nc := a.subtract(c).cross(vc).normalise()
+
+	//get the dot products of the normals with the normal of the triangle
+	da := na.dot(n)
+	db := nb.dot(n)
+	dc := nc.dot(n)
+
+	//if the dot products are all positive, then the point is inside the triangle
+	if da > 0 && db > 0 && dc > 0 {
+		return true
+	}
+
+	return false
+
+}
+
 func (state *State) sendLand() {
 
-	addVert(newVec3(0, 100, 0))
-	addVert(newVec3(100, -100, 0))
-	addVert(newVec3(-100, -100, 0))
+	verts = []vert{} //clear the verts
+
+	seed := uint64(time.Now().Nanosecond())
+	logit("seed:" + strconv.Itoa(int(seed)))
+
+	rnGen = rand.New(rand.NewPCG(seed+1, seed))
+
+	tenK := float64(10000) //10km each way
+	addVert(newVec3(0, 0, tenK))
+	addVert(newVec3(tenK, 0, -tenK))
+	addVert(newVec3(-tenK, 0, -tenK))
 
 	t := NewTri(0, []int{0, 1, 2})
 
-	t.split(0, 4) //spring the triangle 4 times recursively
+	t.split(0, 6) //spring the triangle 4 times recursively
 
-	fi := make([]int, 1000)
+	fi := make([]int, 50000)
 
 	p := int(0)
-	t.gather(4, fi, &p) //get all the indices of the verts at depth 4
+	t.gather(7, fi, &p) //get all the indices of the verts at depth 4
 
 	fi = fi[:p] //truncate
+
+	//generate normals
+	for i := 0; i < len(fi); i += 3 {
+
+		a := verts[fi[i]].p
+		b := verts[fi[i+1]].p
+		c := verts[fi[i+2]].p
+
+		n := b.subtract(a).cross(c.subtract(a)).normalise()
+
+		if n.Y < 0 {
+			//panic("faces down")
+			n = n.multiply(-1)
+		}
+
+		verts[fi[i]].n = verts[fi[i]].n.add(&n) //add the face normal to each vertex
+		verts[fi[i+1]].n = verts[fi[i+1]].n.add(&n)
+		verts[fi[i+2]].n = verts[fi[i+2]].n.add(&n)
+	}
+
+	//cull every trianlge below the water table
+	nfi := make([]int, len(fi))
+
+	o := 0
+	for i := 0; i < len(fi); i += 3 {
+
+		a := verts[fi[i]].p
+		b := verts[fi[i+1]].p
+		c := verts[fi[i+2]].p
+
+		if a.Y > 0 || b.Y > 0 || c.Y > 0 {
+			nfi[o] = fi[i]
+			nfi[o+1] = fi[i+1]
+			nfi[o+2] = fi[i+2]
+			o += 3
+		}
+	}
+
+	fi = nfi[:o] //keep the shortened face list
+
+	//move every undewater vertex to the surface
+	yMax := float64(0)
+	for i := 0; i < len(verts); i++ {
+		if verts[i].p.Y < 0 {
+			verts[i].p.Y = 0
+		}
+		verts[i].p.X += (rnGen.Float64() - float64(.5)) * 100
+		verts[i].p.Z += (rnGen.Float64() - float64(.5)) * 100
+		if verts[i].p.Y > yMax {
+			yMax = verts[i].p.Y
+		}
+
+	}
+
+	//generate UVs
+	for i := range verts {
+		v := &verts[i] //DONT use range value here - we need to modify the actual vert (not a copy!)
+		v.n = v.n.normalise()
+		//use the angle of the normal projected onto x/y as the u component
+		v.uv = Vector{math.Atan2(v.n.X, v.n.Z) / float64(6.28), v.p.Y / yMax}
+	}
+
+	//randomize Ys (AFTER) generating TC's
+	for i := range verts {
+		v := &verts[i]
+		v.p.Y += (rnGen.Float64() - float64(.5)) * 100
+		if v.p.Y < 0 {
+			v.p.Y = 0
+		}
+	}
+
 	logit(p)
 	logit(len(verts))
 
@@ -121,6 +297,11 @@ func (state *State) sendLand() {
 		uv[i*2+1] = int(p.uv.Y * 1000)
 
 	}
+
+	y := []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	t.getY(300, 200, y)
+
+	logit(y)
 
 	meshPayload := meshPayload{Verts: v, Faces: fi, Norms: n, UV: uv}
 	state.sendToAll(&reply{Cmd: "land", Payload: meshPayload})

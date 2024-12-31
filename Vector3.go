@@ -14,17 +14,17 @@ func newVec3(x, y, z float64) Vec3 {
 	return Vec3{x, y, z}
 }
 
-// func (a *Vec3) add(b Vec3) Vec3 {
-// 	return newVec3(a.X+b.X, a.Y+b.Y, a.Z+b.Z)
-// }
+func (a *Vec3) add(b *Vec3) Vec3 {
+	return newVec3(a.X+b.X, a.Y+b.Y, a.Z+b.Z)
+}
 
 func hypo3(a, b, c float64) float64 {
 	return math.Sqrt(float64(a*a + b*b + c*c))
 }
 
-func (a Vec3) distanceFrom(b *Vec3) float64 {
-	return hypo3(a.X-b.X, a.Y-b.Y, a.Z-b.Z)
-}
+// func (a *Vec3) distanceFrom(b *Vec3) float64 {
+// 	return hypo3(a.X-b.X, a.Y-b.Y, a.Z-b.Z)
+// }
 
 // func (a *Vec3) lengthSq3() float64 {
 // 	return a.X*a.X + a.Y*a.Y + a.Z*a.Z
@@ -42,26 +42,26 @@ func (a Vec3) distanceFrom(b *Vec3) float64 {
 // 	a.Z += b.Z
 // }
 
-// func (a *Vec3) multiply(f float64) Vec3 {
-// 	return newVec3(a.X*f, a.Y*f, a.Z*f)
-// }
+func (a *Vec3) multiply(f float64) Vec3 {
+	return newVec3(a.X*f, a.Y*f, a.Z*f)
+}
 
 func (a *Vec3) tween(b *Vec3, f float64) Vec3 {
 	return newVec3(a.X+(b.X-a.X)*f, a.Y+(b.Y-a.Y)*f, a.Z+(b.Z-a.Z)*f)
 }
 
-// func (a *Vec3) subtract(b *Vec3) Vec3 {
-// 	return newVec3(a.X-b.X, a.Y-b.Y, a.Z-b.Z)
-// }
+func (a *Vec3) subtract(b Vec3) Vec3 {
+	return newVec3(a.X-b.X, a.Y-b.Y, a.Z-b.Z)
+}
 
-// func (a *Vec3) normalise() Vector {
-// 	l := a.length()
-// 	return Vector{X: a.X / l, Y: a.Y / l}
-// }
+func (a Vec3) normalise() Vec3 {
+	l := a.length()
+	return Vec3{X: a.X / l, Y: a.Y / l, Z: a.Z / l}
+}
 
-// func (a *Vec3) length() float64 {
-// 	return hypo3(a.X, a.Y, a.Z)
-// }
+func (a *Vec3) length() float64 {
+	return hypo3(a.X, a.Y, a.Z)
+}
 
 func (a *Vec3) Equals(b *Vec3) bool {
 	return a.X == b.X && a.Y == b.Y && a.Z == b.Z
@@ -73,13 +73,13 @@ func (a *Vec3) Equals(b *Vec3) bool {
 // 	return newVector(x, y)
 // }
 
-// func (a Vector) dot(b *Vector) float64 {
-// 	return a.X*b.X + a.Y*b.Y
-// }
+func (a Vec3) dot(b Vec3) float64 {
+	return a.X*b.X + a.Y*b.Y + a.Z*b.Z
+}
 
-// func (a Vector) cross(b Vector) float64 {
-// 	return (a.X * b.Y) - (a.Y * b.X)
-// }
+func (a Vec3) cross(b Vec3) Vec3 {
+	return Vec3{a.Y*b.Z - a.Z*b.Y, a.Z*b.X - a.X*b.Z, a.X*b.Y - a.Y*b.X}
+}
 
 // func (p Vector) closestPointOnLine(a, b *Vector) Vector {
 // 	ab := b.subtract(a)
