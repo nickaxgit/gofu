@@ -22,6 +22,17 @@ type skinPayload struct {
 	Rotation float64 `json:"rotation"`
 }
 
+type land struct {
+	verts []vert  //{}
+	fi    []int   //{} //face indices
+	yMax  float64 //= 0
+
+	//v []int //:= make([]int, len(verts)*3)  //position x,y,z
+	//n []int //:= make([]int, len(verts)*3)  //normal x,y,z triples
+	//uv [] int // := make([]int, len(verts)*2) //u,v pairs
+	//wl [] int //:= make([]int, len(verts))   //water level
+}
+
 type soundPayload struct {
 	Sound    string  `json:"sound"`
 	Position Vector  `json:"position"`
@@ -53,11 +64,10 @@ type thingPayload struct {
 }
 
 type meshPayload struct {
-	Verts       []int `json:"verts"`
-	Faces       []int `json:"faces"`
-	Norms       []int `json:"norms"`
-	UV          []int `json:"uv"`
-	WaterLevels []int `json:"waterLevels"`
+	Verts []int `json:"verts"`
+	Faces []int `json:"faces"`
+	Norms []int `json:"norms"`
+	UV    []int `json:"uv"`
 }
 
 //	type pos struct{
@@ -71,7 +81,7 @@ type track struct {
 	Points  []float64 `json:"points"` //x,y pairs for 4 verts per frame
 }
 
-type State struct { //the data of a game in progress - it is serialised and should have no methods - it can be entirely replaced at any point by rejoining a game
+type State struct { //the DATA of a game in progress - it can be entirely replaced at any point by rejoining a game
 	GameId int `json:"gameId" bson:"gameId"`
 	Sqn    int `json:"sqn"`
 	//host      string
@@ -81,6 +91,8 @@ type State struct { //the data of a game in progress - it is serialised and shou
 	deathList []*Player
 	Tracks    map[string]*track `json:"tracks"` //a stream of point quads by player name
 	Layers    map[string]*Layer `json:"layers"`
+	land      land              //not serialised
+	waterMade bool              //has the water been poured yet (don't flow until it has)
 }
 
 func (s *State) AddMass(m *Mass) int {
@@ -88,26 +100,26 @@ func (s *State) AddMass(m *Mass) int {
 	return len(s.Masses) - 1 // return the index of the new mass
 }
 
-func (t *Tri) getY(x float64, z float64, y []float64) {
+func (t *Tri) getY(v []vert, x float64, z float64, y []float64) {
 
-	valid, pop := t.probe(Vec3{x, -100000, z}, Vec3{x, 100000, z})
-	if valid && t.contains(pop) {
+	valid, pop := t.probe(v, Vec3{x, -100000, z}, Vec3{x, 100000, z})
+	if valid && t.contains(v, pop) {
 
 		y[t.depth] = pop.Y
 		for _, c := range t.Children {
-			c.getY(x, z, y)
+			c.getY(v, x, z, y)
 		}
 	}
 
 }
 
 // return the point of intersection of a ray with the triangle
-func (tri *Tri) probe(p0 Vec3, p1 Vec3) (bool, Vec3) {
-	d0 := tri.distanceFrom(p0)
+func (tri *Tri) probe(v []vert, p0 Vec3, p1 Vec3) (bool, Vec3) {
+	d0 := tri.distanceFrom(v, p0)
 	if d0 < 0 {
 		d0 = -d0
 	}
-	d1 := tri.distanceFrom(p1)
+	d1 := tri.distanceFrom(v, p1)
 	if d1 < 0 {
 		d1 = -d1
 	} //becase go has no abs
@@ -119,39 +131,43 @@ func (tri *Tri) probe(p0 Vec3, p1 Vec3) (bool, Vec3) {
 	return false, Vec3{0, 0, 0}
 }
 
-func (t *Tri) distanceFrom(p Vec3) float64 {
+// func (p Vec3) distanceFrom(t *Tri, v []vert) float64 {
+// 	return t.distanceFrom(v, p)
+// }
 
-	a := verts[t.Vi[0]].p
-	b := verts[t.Vi[1]].p
-	c := verts[t.Vi[2]].p
+func (t *Tri) distanceFrom(v []vert, p Vec3) float64 {
+
+	a := v[t.Vi[0]].p
+	b := v[t.Vi[1]].p
+	c := v[t.Vi[2]].p
 
 	//get the normal of the triangle
 	n := b.subtract(a).cross(c.subtract(a)).normalise() //todo - cache/gen the normals once
 
-	v := p.subtract(a)
+	pop := p.subtract(a)
 
 	//get the distance from the point to the plane
-	d := v.dot(n)
+	d := pop.dot(n)
 
 	return d
 
 }
 
-func (t *Tri) contains(pop Vec3) bool {
+func (t *Tri) contains(v []vert, pop Vec3) bool {
 
-	a := verts[t.Vi[0]].p
-	b := verts[t.Vi[1]].p
-	c := verts[t.Vi[2]].p
+	a := v[t.Vi[0]].p
+	b := v[t.Vi[1]].p
+	c := v[t.Vi[2]].p
 
 	//get the normal of the triangle
 	n := b.subtract(a).cross(c.subtract(a)).normalise()
 
 	//project the point onto the plane of the triangle
 	//and get the vector from the point to the plane
-	v := pop.subtract(a)
+	j := pop.subtract(a)
 
 	//get the distance from the point to the plane
-	d := v.dot(n)
+	d := j.dot(n)
 
 	if d > 0.01 || d < -0.01 {
 		panic("point not on plane " + strconv.Itoa(int(d*1000)))
@@ -181,48 +197,50 @@ func (t *Tri) contains(pop Vec3) bool {
 
 }
 
-func (state *State) sendLand() {
+func (state *State) makeLand(splits int, maxHeight float64, dist float64) {
 
-	verts = []vert{} //clear the verts
+	lnd := &state.land   //get a reference to state.land (saves a lot of typing)
+	lnd.verts = []vert{} //clear the verts
 
 	seed := uint64(time.Now().Nanosecond())
 	logit("seed:" + strconv.Itoa(int(seed)))
 
 	rnGen = rand.New(rand.NewPCG(seed+1, seed))
 
-	tenK := float64(10000) //10km each way
-	addVert(newVec3(0, 0, tenK))
-	addVert(newVec3(tenK, 0, -tenK))
-	addVert(newVec3(-tenK, 0, -tenK))
+	state.addVert(newVec3(0, 0, dist))
+	state.addVert(newVec3(dist, 0, -dist))
+	state.addVert(newVec3(-dist, 0, -dist))
 
 	t := NewTri(0, []int{0, 1, 2})
 
-	t.split(0, 6) //spring the triangle 4 times recursively
+	t.split(state, splits, maxHeight) //spring the triangle 4 times recursively
 
-	fi := make([]int, 50000)
+	numFaces := 1 << (2 * splits) //left shift 2*splits - 4 splits = 16 faces
+
+	lnd.fi = make([]int, numFaces*3) //face vert indices (three per triangle)
 
 	p := int(0)
-	t.gather(7, fi, &p) //get all the indices of the verts at depth 4
+	t.gather(splits, state.land.fi, &p) //get all the indices of the verts at depth 4
 
-	fi = fi[:p] //truncate
+	lnd.fi = lnd.fi[:p] //truncate
 
 	//generate normals
-	for i := 0; i < len(fi); i += 3 {
+	for i := 0; i < len(state.land.fi); i += 3 {
 
-		a := verts[fi[i]].p
-		b := verts[fi[i+1]].p
-		c := verts[fi[i+2]].p
+		a := &lnd.verts[lnd.fi[i]]   //& lets us manipulate the verts by reference
+		b := &lnd.verts[lnd.fi[i+1]] //.p
+		c := &lnd.verts[lnd.fi[i+2]] //.p
 
-		n := b.subtract(a).cross(c.subtract(a)).normalise()
+		n := b.p.subtract(a.p).cross(c.p.subtract(a.p)).normalise()
 
 		if n.Y < 0 {
 			//panic("faces down")
 			n = n.multiply(-1)
 		}
 
-		verts[fi[i]].n = verts[fi[i]].n.add(&n) //add the face normal to each vertex
-		verts[fi[i+1]].n = verts[fi[i+1]].n.add(&n)
-		verts[fi[i+2]].n = verts[fi[i+2]].n.add(&n)
+		a.n = a.n.add(&n) //add the face normal to each vertex
+		b.n = b.n.add(&n)
+		c.n = c.n.add(&n)
 	}
 
 	// //cull every trianlge below the sea
@@ -246,81 +264,67 @@ func (state *State) sendLand() {
 	// fi = nfi[:o] //keep the shortened face list
 
 	//move every undewater vertex to the surface
-	yMax := float64(0)
-	for i := 0; i < len(verts); i++ {
-		if verts[i].p.Y < 0 {
-			verts[i].p.Y = 0
-		}
-		// verts[i].p.X += (rnGen.Float64() - float64(.5)) * 100
-		// verts[i].p.Z += (rnGen.Float64() - float64(.5)) * 100
-		if verts[i].p.Y > yMax {
-			yMax = verts[i].p.Y
+	lnd.yMax = float64(0)
+	for i := 0; i < len(lnd.verts); i++ {
+		// 	if verts[i].p.Y < 0 {
+		// 		verts[i].p.Y = 0
+		// 	}
+		// 	// verts[i].p.X += (rnGen.Float64() - float64(.5)) * 100
+		// 	// verts[i].p.Z += (rnGen.Float64() - float64(.5)) * 100
+		if lnd.verts[i].p.Y > lnd.yMax {
+			lnd.yMax = lnd.verts[i].p.Y
 		}
 
 	}
 
 	//generate UVs
-	for i := range verts {
-		v := &verts[i] //DONT use range value here - we need to modify the actual vert (not a copy!)
+	for i := range lnd.verts {
+		v := &lnd.verts[i] //DONT use range value here - we need to modify the actual vert (not a copy!)
 		v.n = v.n.normalise()
 		//use the angle of the normal projected onto x/y as the u component
 		//TODO incororate slope of the terrain - if the terrain is flatter..
 		//that the v component from lower down - this should put now on flat mountaintops
 		//similarly north facing slopes should get their v component from higher in the map
-		v.uv = Vector{math.Atan2(v.n.X, v.n.Z) / float64(6.28), v.p.Y / yMax}
+		v.uv = Vector{math.Atan2(v.n.X, v.n.Z) / float64(6.28), v.p.Y / lnd.yMax}
 	}
 
 	//randomize Ys (AFTER) generating TC's
-	for i := range verts {
-		v := &verts[i]
+	for i := range lnd.verts {
+		v := &lnd.verts[i]
 		v.p.Y += (rnGen.Float64() - float64(.5)) * 100
-		if v.p.Y < 0 {
-			v.p.Y = 0
-		}
+		//if v.p.Y < 0 {
+		//	v.p.Y = 0
+		//}
 	}
 
-	//pour an amount on every vertex proportional to altitude
-	for i := range verts {
-		v := &verts[i]
+	y := []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	t.getY(lnd.verts, 300, 200, y)
 
-		distFromMid := (v.p.Y - (yMax / 2)) / yMax
-		if distFromMid < 0 {
-			distFromMid = 0
-		}
-		rainfall := (1 - distFromMid) * 1 //rainfall is proportional to altitude - the midground is wettest
-		v.wl = v.p.Y + rainfall
-	}
-
-	//flow the water (only along the deepest faces)
-	for iw := 0; iw < 100; iw++ { //iteration of water
-		for i := 0; i < len(fi); i += 3 {
-			flow(fi[i], fi[i+1])
-			flow(fi[i+1], fi[i+2])
-			flow(fi[i+2], fi[i])
-		}
-		//update the water levels (from the accumulators)
-		for v := range verts {
-			verts[v].wl += verts[v].acc
-			verts[v].acc = 0
-		}
-	}
+	logit(y)
 
 	logit(p)
-	logit(len(verts))
+	logit(len(lnd.verts))
 
-	//send all the verts and the indices to the client
+}
 
-	v := make([]int, len(verts)*3)  //position x,y,z, waterlevel quads
-	n := make([]int, len(verts)*3)  //normal x,y,z triples
-	uv := make([]int, len(verts)*2) //u,v pairs
-	wl := make([]int, len(verts))   //water level
+func (state *State) sendLand() {
 
-	for i, p := range verts {
+	lnd := &state.land
+
+	vc := len(lnd.verts)
+	vc2 := vc * 2
+	vc3 := vc * 3
+
+	v := make([]int, vc3)  //position x,y,z
+	n := make([]int, vc3)  //normal x,y,z triples
+	uv := make([]int, vc2) //u,v pairs
+
+	for i, p := range lnd.verts {
 		v[i*3+0] = int(p.p.X * 10)
 		v[i*3+1] = int(p.p.Y * 10)
 		v[i*3+2] = int(p.p.Z * 10)
 		//v[i*4+3] = int(p.wl * 10) //water level
-		wl[i] = int(p.wl * 10)
+		//wl[i] = int(p.wl * 10)
 
 		n[i*3+0] = int(p.n.X * 100)
 		n[i*3+1] = int(p.n.Y * 100)
@@ -331,39 +335,99 @@ func (state *State) sendLand() {
 
 	}
 
-	y := []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-	t.getY(300, 200, y)
-
-	logit(y)
-
-	meshPayload := meshPayload{Verts: v, Faces: fi, Norms: n, UV: uv, WaterLevels: wl}
+	meshPayload := meshPayload{Verts: v, Faces: lnd.fi, Norms: n, UV: uv}
 	state.sendToAll(&reply{Cmd: "land", Payload: meshPayload})
-	//state.q4all(&reply{Cmd: "thing", Payload: thingPayload{Ti: ti, Thing: *state.Things[ti]}})
+}
+
+func (state *State) makeWater() {
+	//pour an amount on every vertex proportional to altitude
+
+	lnd := &state.land
+
+	for i := range lnd.verts {
+		v := &lnd.verts[i]
+		v.wl = v.p.Y
+	}
+
+	state.waterMade = true
+
+}
+
+func (state *State) rain(amount float64) {
+	//pour an amount on every vertex proportional to altitude
+
+	lnd := &state.land
+
+	for i := range lnd.verts {
+		v := &lnd.verts[i]
+
+		distFromMid := (v.p.Y - (lnd.yMax / 2)) / lnd.yMax
+		if distFromMid < 0 {
+			distFromMid = 0
+		}
+		//rainfall := (1 - distFromMid) * 1 //rainfall is proportional to altitude - the midground is wettest
+		rainfall := float64(amount)
+		v.wl += rainfall
+	}
+
+}
+
+func (state *State) flowWater() {
+	lnd := &state.land
+
+	//flow the water (only along the deepest faces)
+	//for iw := 0; iw < 10; iw++ { //iteration of water
+	for i := 0; i < len(lnd.fi); i += 3 {
+		a := &lnd.verts[lnd.fi[i]]
+		b := &lnd.verts[lnd.fi[i+1]]
+		c := &lnd.verts[lnd.fi[i+2]]
+		flow(a, b)
+		flow(b, c)
+		flow(c, a)
+	}
+	//update the water levels (from the accumulators)
+	for v := range lnd.verts {
+		lnd.verts[v].wl += lnd.verts[v].acc
+		lnd.verts[v].acc = 0
+	}
+	//}
+
+}
+
+func (state *State) sendWater() {
+	lnd := &state.land
+
+	vc := len(lnd.verts)
+
+	wl := make([]int, vc) //water level
+
+	for i, p := range lnd.verts {
+		wl[i] = int(p.wl * 10)
+	}
+
+	state.sendToAll(&reply{Cmd: "water", Payload: wl})
 
 }
 
 // flow water between v1 and v2 acording to the absolute wayter level and y-coord of the land
-func flow(v1 int, v2 int) {
-
-	a := &verts[v1]
-	b := &verts[v2]
+func flow(a *vert, b *vert) {
 
 	diff := a.wl - b.wl //uses the absolute water level
 
 	rate := float64(1) //free flow - water is above ground at both ends
-	if a.wl < a.p.Y {
-		rate *= .1
-	} //ground percolation
-	if b.wl < b.p.Y {
-		rate *= .1
+
+	if a.wl < a.p.Y && b.wl < b.p.Y {
+		rate = 0
 	} //ground percolation
 
-	//use an accumulator per vertx for the in/out flow
+	// if b.wl < b.p.Y {
+	// 	rate *= .1
+	// } //ground percolation
+
+	//use an accumulator per vertex for the in/out flow
+
 	a.acc -= diff / 10 * rate //todo - rate (velocity), depending on the difference in water level ground percolation
 	b.acc += diff / 10 * rate
-
-	//a.acc -= diff / 4 * rate //todo - rate (velocity), depending on the difference in water level ground percolation
-	//b.acc += diff / 4 * rate
 
 }
 
@@ -389,6 +453,12 @@ func (state *State) step() {
 	if moved > 0 {
 		state.Sqn++
 		state.sendToAll(&reply{Cmd: "mps", Payload: mm})
+	}
+
+	if state.waterMade {
+		state.rain(0.3)
+		state.flowWater()
+		state.sendWater()
 	}
 
 	//count money and send to player

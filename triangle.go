@@ -12,8 +12,6 @@ type vert struct {
 	acc float64 //accumulated water (during a pass)
 }
 
-var verts = []vert{}
-
 type Tri struct {
 	depth    int
 	Vi       []int  `json:"vi"`
@@ -25,24 +23,27 @@ func NewTri(depth int, vi []int) *Tri {
 	return &Tri{depth: depth, Vi: vi, Children: []*Tri{}}
 }
 
-func addVert(p Vec3) int {
-	for i, v := range verts {
+func (state *State) addVert(p Vec3) int {
+
+	for i, v := range state.land.verts {
 		if v.p.X > p.X-0.01 && v.p.X < p.X+0.01 {
 			if v.p.Z > p.Z-0.01 && v.p.Z < p.Z+0.01 {
 				return i
 			}
 		}
 	}
-	verts = append(verts, vert{p: p, uv: Vector{0, 0}, n: Vec3{0, 0, 0}})
-	return len(verts) - 1
+
+	state.land.verts = append(state.land.verts, vert{p: p, uv: Vector{0, 0}, n: Vec3{0, 0, 0}})
+	return len(state.land.verts) - 1
 }
 
 //creates a new vertex halfway between the indexed verts a and b and returns the index of the new vertex
-func split(a int, b int, dy float64) int {
+func (state *State) splitEdge(a int, b int, dy float64) int {
 
+	verts := state.land.verts
 	p := verts[a].p.tween(&verts[b].p, 0.5)
 	p.Y += dy
-	return addVert(p)
+	return state.addVert(p)
 }
 
 func (t *Tri) addChild(a, b, c int) {
@@ -66,7 +67,7 @@ func (t *Tri) gather(depth int, i []int, p *int) {
 	}
 
 }
-func (t *Tri) split(depth int, maxDepth int) {
+func (t *Tri) split(state *State, maxRdepth int, maxHeight float64) {
 
 	//      0
 	//		/\
@@ -80,18 +81,20 @@ func (t *Tri) split(depth int, maxDepth int) {
 	v1 := t.Vi[1]
 	v2 := t.Vi[2]
 
-	v3 := split(v0, v1, (rnGen.Float64()-.5)*2500/float64(depth+1))
-	v4 := split(v1, v2, (rnGen.Float64()-.5)*2500/float64(depth+1))
-	v5 := split(v2, v0, (rnGen.Float64()-.5)*2500/float64(depth+1))
+	Yrange := maxHeight / float64(t.depth+1) //maximum kink in this edge
+
+	v3 := state.splitEdge(v0, v1, (rnGen.Float64()-.5)*Yrange)
+	v4 := state.splitEdge(v1, v2, (rnGen.Float64()-.5)*Yrange)
+	v5 := state.splitEdge(v2, v0, (rnGen.Float64()-.5)*Yrange)
 
 	t.addChild(v0, v3, v5) //top
 	t.addChild(v3, v1, v4) //right
 	t.addChild(v5, v4, v2) //left
 	t.addChild(v3, v4, v5) //centre
 
-	if depth < maxDepth {
-		for _, c := range t.Children {
-			c.split(depth+1, maxDepth)
+	for _, c := range t.Children {
+		if c.depth < maxRdepth {
+			c.split(state, maxRdepth, maxHeight)
 		}
 	}
 
