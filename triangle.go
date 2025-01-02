@@ -5,9 +5,11 @@ package main
 //import "math/rand/v2"
 
 type vert struct {
-	p  Vec3
-	n  Vec3
-	uv Vector
+	p   Vec3
+	n   Vec3
+	uv  Vector
+	wl  float64 //water level
+	acc float64 //accumulated water (during a pass)
 }
 
 var verts = []vert{}

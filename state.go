@@ -53,10 +53,11 @@ type thingPayload struct {
 }
 
 type meshPayload struct {
-	Verts []int `json:"verts"`
-	Faces []int `json:"faces"`
-	Norms []int `json:"norms"`
-	UV    []int `json:"uv"`
+	Verts       []int `json:"verts"`
+	Faces       []int `json:"faces"`
+	Norms       []int `json:"norms"`
+	UV          []int `json:"uv"`
+	WaterLevels []int `json:"waterLevels"`
 }
 
 //	type pos struct{
@@ -224,25 +225,25 @@ func (state *State) sendLand() {
 		verts[fi[i+2]].n = verts[fi[i+2]].n.add(&n)
 	}
 
-	//cull every trianlge below the water table
-	nfi := make([]int, len(fi))
+	// //cull every trianlge below the sea
+	// nfi := make([]int, len(fi))
 
-	o := 0
-	for i := 0; i < len(fi); i += 3 {
+	// o := 0
+	// for i := 0; i < len(fi); i += 3 {
 
-		a := verts[fi[i]].p
-		b := verts[fi[i+1]].p
-		c := verts[fi[i+2]].p
+	// 	a := verts[fi[i]].p
+	// 	b := verts[fi[i+1]].p
+	// 	c := verts[fi[i+2]].p
 
-		if a.Y > 0 || b.Y > 0 || c.Y > 0 {
-			nfi[o] = fi[i]
-			nfi[o+1] = fi[i+1]
-			nfi[o+2] = fi[i+2]
-			o += 3
-		}
-	}
+	// 	if a.Y > 0 || b.Y > 0 || c.Y > 0 {
+	// 		nfi[o] = fi[i]
+	// 		nfi[o+1] = fi[i+1]
+	// 		nfi[o+2] = fi[i+2]
+	// 		o += 3
+	// 	}
+	// }
 
-	fi = nfi[:o] //keep the shortened face list
+	// fi = nfi[:o] //keep the shortened face list
 
 	//move every undewater vertex to the surface
 	yMax := float64(0)
@@ -250,8 +251,8 @@ func (state *State) sendLand() {
 		if verts[i].p.Y < 0 {
 			verts[i].p.Y = 0
 		}
-		verts[i].p.X += (rnGen.Float64() - float64(.5)) * 100
-		verts[i].p.Z += (rnGen.Float64() - float64(.5)) * 100
+		// verts[i].p.X += (rnGen.Float64() - float64(.5)) * 100
+		// verts[i].p.Z += (rnGen.Float64() - float64(.5)) * 100
 		if verts[i].p.Y > yMax {
 			yMax = verts[i].p.Y
 		}
@@ -263,6 +264,9 @@ func (state *State) sendLand() {
 		v := &verts[i] //DONT use range value here - we need to modify the actual vert (not a copy!)
 		v.n = v.n.normalise()
 		//use the angle of the normal projected onto x/y as the u component
+		//TODO incororate slope of the terrain - if the terrain is flatter..
+		//that the v component from lower down - this should put now on flat mountaintops
+		//similarly north facing slopes should get their v component from higher in the map
 		v.uv = Vector{math.Atan2(v.n.X, v.n.Z) / float64(6.28), v.p.Y / yMax}
 	}
 
@@ -275,19 +279,48 @@ func (state *State) sendLand() {
 		}
 	}
 
+	//pour an amount on every vertex proportional to altitude
+	for i := range verts {
+		v := &verts[i]
+
+		distFromMid := (v.p.Y - (yMax / 2)) / yMax
+		if distFromMid < 0 {
+			distFromMid = 0
+		}
+		rainfall := (1 - distFromMid) * 1 //rainfall is proportional to altitude - the midground is wettest
+		v.wl = v.p.Y + rainfall
+	}
+
+	//flow the water (only along the deepest faces)
+	for iw := 0; iw < 100; iw++ { //iteration of water
+		for i := 0; i < len(fi); i += 3 {
+			flow(fi[i], fi[i+1])
+			flow(fi[i+1], fi[i+2])
+			flow(fi[i+2], fi[i])
+		}
+		//update the water levels (from the accumulators)
+		for v := range verts {
+			verts[v].wl += verts[v].acc
+			verts[v].acc = 0
+		}
+	}
+
 	logit(p)
 	logit(len(verts))
 
 	//send all the verts and the indices to the client
 
-	v := make([]int, len(verts)*3)  //position x,y,z triples
+	v := make([]int, len(verts)*3)  //position x,y,z, waterlevel quads
 	n := make([]int, len(verts)*3)  //normal x,y,z triples
 	uv := make([]int, len(verts)*2) //u,v pairs
+	wl := make([]int, len(verts))   //water level
 
 	for i, p := range verts {
 		v[i*3+0] = int(p.p.X * 10)
 		v[i*3+1] = int(p.p.Y * 10)
 		v[i*3+2] = int(p.p.Z * 10)
+		//v[i*4+3] = int(p.wl * 10) //water level
+		wl[i] = int(p.wl * 10)
 
 		n[i*3+0] = int(p.n.X * 100)
 		n[i*3+1] = int(p.n.Y * 100)
@@ -303,9 +336,34 @@ func (state *State) sendLand() {
 
 	logit(y)
 
-	meshPayload := meshPayload{Verts: v, Faces: fi, Norms: n, UV: uv}
+	meshPayload := meshPayload{Verts: v, Faces: fi, Norms: n, UV: uv, WaterLevels: wl}
 	state.sendToAll(&reply{Cmd: "land", Payload: meshPayload})
 	//state.q4all(&reply{Cmd: "thing", Payload: thingPayload{Ti: ti, Thing: *state.Things[ti]}})
+
+}
+
+// flow water between v1 and v2 acording to the absolute wayter level and y-coord of the land
+func flow(v1 int, v2 int) {
+
+	a := &verts[v1]
+	b := &verts[v2]
+
+	diff := a.wl - b.wl //uses the absolute water level
+
+	rate := float64(1) //free flow - water is above ground at both ends
+	if a.wl < a.p.Y {
+		rate *= .1
+	} //ground percolation
+	if b.wl < b.p.Y {
+		rate *= .1
+	} //ground percolation
+
+	//use an accumulator per vertx for the in/out flow
+	a.acc -= diff / 10 * rate //todo - rate (velocity), depending on the difference in water level ground percolation
+	b.acc += diff / 10 * rate
+
+	//a.acc -= diff / 4 * rate //todo - rate (velocity), depending on the difference in water level ground percolation
+	//b.acc += diff / 4 * rate
 
 }
 
