@@ -22,7 +22,7 @@ type skinPayload struct {
 	Rotation float64 `json:"rotation"`
 }
 
-type land struct {
+type mesh struct {
 	verts []vert  //{}
 	fi    []int   //{} //face indices
 	yMax  float64 //= 0
@@ -91,7 +91,7 @@ type State struct { //the DATA of a game in progress - it can be entirely replac
 	deathList []*Player
 	Tracks    map[string]*track `json:"tracks"` //a stream of point quads by player name
 	Layers    map[string]*Layer `json:"layers"`
-	land      land              //not serialised
+	land      mesh              //not serialised
 	waterMade bool              //has the water been poured yet (don't flow until it has)
 }
 
@@ -102,7 +102,7 @@ func (s *State) AddMass(m *Mass) int {
 
 func (t *Tri) getY(v []vert, x float64, z float64, y []float64) {
 
-	valid, pop := t.probe(v, Vec3{x, -100000, z}, Vec3{x, 100000, z})
+	valid, pop := t.probe(v, &Vec3{x, -100000, z}, &Vec3{x, 100000, z})
 	if valid && t.contains(v, pop) {
 
 		y[t.depth] = pop.Y
@@ -114,7 +114,7 @@ func (t *Tri) getY(v []vert, x float64, z float64, y []float64) {
 }
 
 // return the point of intersection of a ray with the triangle
-func (tri *Tri) probe(v []vert, p0 Vec3, p1 Vec3) (bool, Vec3) {
+func (tri *Tri) probe(v []vert, p0 *Vec3, p1 *Vec3) (bool, *Vec3) {
 	d0 := tri.distanceFrom(v, p0)
 	if d0 < 0 {
 		d0 = -d0
@@ -126,16 +126,16 @@ func (tri *Tri) probe(v []vert, p0 Vec3, p1 Vec3) (bool, Vec3) {
 
 	t := d0 / (d0 + d1)
 	if t > 0 && t < 1 {
-		return true, p0.tween(&p1, t)
+		return true, p0.tween(p1, t)
 	}
-	return false, Vec3{0, 0, 0}
+	return false, &Vec3{0, 0, 0}
 }
 
 // func (p Vec3) distanceFrom(t *Tri, v []vert) float64 {
 // 	return t.distanceFrom(v, p)
 // }
 
-func (t *Tri) distanceFrom(v []vert, p Vec3) float64 {
+func (t *Tri) distanceFrom(v []vert, p *Vec3) float64 {
 
 	a := v[t.Vi[0]].p
 	b := v[t.Vi[1]].p
@@ -153,7 +153,7 @@ func (t *Tri) distanceFrom(v []vert, p Vec3) float64 {
 
 }
 
-func (t *Tri) contains(v []vert, pop Vec3) bool {
+func (t *Tri) contains(v []vert, pop *Vec3) bool {
 
 	a := v[t.Vi[0]].p
 	b := v[t.Vi[1]].p
@@ -238,9 +238,9 @@ func (state *State) makeLand(splits int, maxHeight float64, dist float64) {
 			n = n.multiply(-1)
 		}
 
-		a.n = a.n.add(&n) //add the face normal to each vertex
-		b.n = b.n.add(&n)
-		c.n = c.n.add(&n)
+		a.n = a.n.add(n) //add the face normal to each vertex
+		b.n = b.n.add(n)
+		c.n = c.n.add(n)
 	}
 
 	// //cull every trianlge below the sea
