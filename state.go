@@ -22,17 +22,6 @@ type skinPayload struct {
 	Rotation float64 `json:"rotation"`
 }
 
-type mesh struct {
-	verts []vert  //{}
-	fi    []int   //{} //face indices
-	yMax  float64 //= 0
-
-	//v []int //:= make([]int, len(verts)*3)  //position x,y,z
-	//n []int //:= make([]int, len(verts)*3)  //normal x,y,z triples
-	//uv [] int // := make([]int, len(verts)*2) //u,v pairs
-	//wl [] int //:= make([]int, len(verts))   //water level
-}
-
 type soundPayload struct {
 	Sound    string  `json:"sound"`
 	Position Vector  `json:"position"`
@@ -100,26 +89,26 @@ func (s *State) AddMass(m *Mass) int {
 	return len(s.Masses) - 1 // return the index of the new mass
 }
 
-func (t *Tri) getY(v []vert, x float64, z float64, y []float64) {
+func (t *Tri) getY(x float64, z float64, y []float64) {
 
-	valid, pop := t.probe(v, &Vec3{x, -100000, z}, &Vec3{x, 100000, z})
-	if valid && t.contains(v, pop) {
+	valid, pop := t.probe(&Vec3{x, -100000, z}, &Vec3{x, 100000, z})
+	if valid && t.contains(pop) {
 
 		y[t.depth] = pop.Y
 		for _, c := range t.Children {
-			c.getY(v, x, z, y)
+			c.getY(x, z, y)
 		}
 	}
 
 }
 
 // return the point of intersection of a ray with the triangle
-func (tri *Tri) probe(v []vert, p0 *Vec3, p1 *Vec3) (bool, *Vec3) {
-	d0 := tri.distanceFrom(v, p0)
+func (tri *Tri) probe(p0 *Vec3, p1 *Vec3) (bool, *Vec3) {
+	d0 := tri.distanceFrom(p0)
 	if d0 < 0 {
 		d0 = -d0
 	}
-	d1 := tri.distanceFrom(v, p1)
+	d1 := tri.distanceFrom(p1)
 	if d1 < 0 {
 		d1 = -d1
 	} //becase go has no abs
@@ -135,68 +124,6 @@ func (tri *Tri) probe(v []vert, p0 *Vec3, p1 *Vec3) (bool, *Vec3) {
 // 	return t.distanceFrom(v, p)
 // }
 
-func (t *Tri) distanceFrom(v []vert, p *Vec3) float64 {
-
-	a := v[t.Vi[0]].p
-	b := v[t.Vi[1]].p
-	c := v[t.Vi[2]].p
-
-	//get the normal of the triangle
-	n := b.subtract(a).cross(c.subtract(a)).normalise() //todo - cache/gen the normals once
-
-	pop := p.subtract(a)
-
-	//get the distance from the point to the plane
-	d := pop.dot(n)
-
-	return d
-
-}
-
-func (t *Tri) contains(v []vert, pop *Vec3) bool {
-
-	a := v[t.Vi[0]].p
-	b := v[t.Vi[1]].p
-	c := v[t.Vi[2]].p
-
-	//get the normal of the triangle
-	n := b.subtract(a).cross(c.subtract(a)).normalise()
-
-	//project the point onto the plane of the triangle
-	//and get the vector from the point to the plane
-	j := pop.subtract(a)
-
-	//get the distance from the point to the plane
-	d := j.dot(n)
-
-	if d > 0.01 || d < -0.01 {
-		panic("point not on plane " + strconv.Itoa(int(d*1000)))
-	}
-
-	//get the vectors from the projected point to the vertices of the triangle
-	va := pop.subtract(a)
-	vb := pop.subtract(b)
-	vc := pop.subtract(c)
-
-	//cross each edge with the point-to-vertex vector
-	na := b.subtract(a).cross(va).normalise()
-	nb := c.subtract(b).cross(vb).normalise()
-	nc := a.subtract(c).cross(vc).normalise()
-
-	//get the dot products of the normals with the normal of the triangle
-	da := na.dot(n)
-	db := nb.dot(n)
-	dc := nc.dot(n)
-
-	//if the dot products are all positive, then the point is inside the triangle
-	if da > 0 && db > 0 && dc > 0 {
-		return true
-	}
-
-	return false
-
-}
-
 func (state *State) makeLand(splits int, maxHeight float64, dist float64) {
 
 	lnd := &state.land   //get a reference to state.land (saves a lot of typing)
@@ -207,15 +134,28 @@ func (state *State) makeLand(splits int, maxHeight float64, dist float64) {
 
 	rnGen = rand.New(rand.NewPCG(seed+1, seed))
 
-	state.addVert(newVec3(0, 0, dist))
-	state.addVert(newVec3(dist, 0, -dist))
-	state.addVert(newVec3(-dist, 0, -dist))
+	lnd.addOrReuseVertAtXZ(newVec3(0, 0, dist))
+	lnd.addOrReuseVertAtXZ(newVec3(dist, 0, -dist))
+	lnd.addOrReuseVertAtXZ(newVec3(-dist, 0, -dist))
 
-	t := NewTri(0, []int{0, 1, 2})
+	hdist := dist / 2
+	lnd.addOrReuseVertAtXZ(newVec3(0, 0, hdist))
+	lnd.addOrReuseVertAtXZ(newVec3(hdist, 0, -hdist))
+	lnd.addOrReuseVertAtXZ(newVec3(-hdist, 0, -hdist))
 
-	t.split(state, splits, maxHeight) //spring the triangle 4 times recursively
+	t := lnd.makeTri(0, 0, 1, 2) //make a depth 0 triangle within the mesh
 
-	numFaces := 1 << (2 * splits) //left shift 2*splits - 4 splits = 16 faces
+	r := newRing(0, 1, 2)
+	r.children = append(r.children, newRing(3, 4, 5))
+
+	r.triangulate(t)
+
+	// //Recursively split landscape
+	// t.split(state, splits, maxHeight) //spring the triangle 4 times recursively
+	// numFaces := 1 << (2 * splits) //left shift 2*splits - 4 splits = 16 faces
+
+	numFaces := 100
+	splits = 1
 
 	lnd.fi = make([]int, numFaces*3) //face vert indices (three per triangle)
 
@@ -231,7 +171,7 @@ func (state *State) makeLand(splits int, maxHeight float64, dist float64) {
 		b := &lnd.verts[lnd.fi[i+1]] //.p
 		c := &lnd.verts[lnd.fi[i+2]] //.p
 
-		n := b.p.subtract(a.p).cross(c.p.subtract(a.p)).normalise()
+		n := b.p.sub(a.p).cross(c.p.sub(a.p)).normalise()
 
 		if n.Y < 0 {
 			//panic("faces down")
@@ -298,7 +238,7 @@ func (state *State) makeLand(splits int, maxHeight float64, dist float64) {
 	}
 
 	y := []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-	t.getY(lnd.verts, 300, 200, y)
+	t.getY(300, 200, y)
 
 	logit(y)
 

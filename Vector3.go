@@ -23,7 +23,7 @@ func hypo3(a, b, c float64) float64 {
 }
 
 func (p *Vec3) projectOntoPlane(pop, normal *Vec3) *Vec3 {
-	return p.subtract(normal.multiply(p.dot(normal) - pop.dot(normal)))
+	return p.sub(normal.multiply(p.dot(normal) - pop.dot(normal)))
 
 }
 
@@ -55,7 +55,7 @@ func (a *Vec3) tween(b *Vec3, f float64) *Vec3 {
 	return newVec3(a.X+(b.X-a.X)*f, a.Y+(b.Y-a.Y)*f, a.Z+(b.Z-a.Z)*f)
 }
 
-func (a *Vec3) subtract(b *Vec3) *Vec3 {
+func (a *Vec3) sub(b *Vec3) *Vec3 {
 	return newVec3(a.X-b.X, a.Y-b.Y, a.Z-b.Z)
 }
 
@@ -87,9 +87,9 @@ func (a *Vec3) cross(b *Vec3) *Vec3 {
 }
 
 func (p Vec3) closestPointOnLine(a, b *Vec3) *Vec3 {
-	ab := b.subtract(a)
+	ab := b.sub(a)
 	abn := ab.normalise()
-	dp := p.subtract(a).dot(abn)
+	dp := p.sub(a).dot(abn)
 	return a.add(abn.multiply(dp))
 }
 
@@ -103,10 +103,14 @@ func (p *Vec3) distanceFrom(b *Vec3) float64 {
 
 func (p *Vec3) liesBetween(a *Vec3, b *Vec3) bool {
 
-	v1 := p.subtract(a) //vector from a to p
-	v2 := p.subtract(b) //vector from a to p
+	v1 := p.sub(a) //vector from a to p
+	v2 := p.sub(b) //vector from a to p
 
 	//if the dot product is negative, then the vectors (from the point to the endpoints) are pointing in opposite directions - and the point lies between A-B
 	return v1.dot(v2) < 0
 
+}
+
+func (p *Vec3) distanceFromPlaneOf(t *Tri) float64 {
+	return t.distanceFrom(p)
 }

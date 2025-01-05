@@ -7,6 +7,7 @@
 node_modules/
 dist/
 
+game*.bson
 # Compiled Java class files
 *.class
 
