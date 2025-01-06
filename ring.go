@@ -17,8 +17,12 @@ func newRing(vi ...int) *Ring {
 	return &Ring{vi: vi, children: []*Ring{}}
 }
 
+func (ring *Ring) addChild(vi ...int) {
+	ring.children = append(ring.children, newRing(vi...))
+}
+
 //triangulate an arbitrary polygon, which may have holes
-func (ringWithChildHoles *Ring) triangulate(parentTriangle *Tri) []Tri {
+func (ringWithChildHoles *Ring) triangulate(parentTriangle *Tri) {
 	//return a list of triangles that cover the area of the polygon
 
 	if len(ringWithChildHoles.vi) < 3 {
@@ -28,7 +32,7 @@ func (ringWithChildHoles *Ring) triangulate(parentTriangle *Tri) []Tri {
 		panic("no need to triangulate a triangle")
 	}
 
-	faces := []Tri{}
+	//faces := []Tri{}
 	//edgelist := make([][]int,100) //vert index point pairs
 	for vi, i := range ringWithChildHoles.vi {
 
@@ -51,7 +55,7 @@ func (ringWithChildHoles *Ring) triangulate(parentTriangle *Tri) []Tri {
 
 	}
 
-	return faces
+	//return faces
 }
 
 //you have a tool and some clay
@@ -187,13 +191,80 @@ func sortedSectorVerts(mesh *mesh, ring *Ring, i int) []angleIndex {
 
 // //return 0, 1 or 2 points of intersection of the edges of triangle b, with the plane of triangle a
 type pen struct {
-	p      *Vec3 //the point of penetration
-	v1, v2 int   // the edge of the tool that penetrated - often there will be two penetratins at the same point where an ingoing and outgoing edge (of negbouring faces) pentrate
+	p          *Vec3 //the point of penetration
+	v1, v2     int   // the edge of the tool that penetrated - often there will be two penetratins at the same point where an ingoing and outgoing edge (of negbouring faces) pentrate
+	toolTri    *Tri  //the penatrator
+	clayTri    *Tri  //the penetratee
+	used       bool  //has this been incoroporated into a ring
+	isBoundary bool  //is on an edge of the clar triangle
 }
 
-func (clayTri *Tri) penetrationsBy(toolTri *Tri) []pen {
+type penSet struct {
+	pens      []*pen
+	usedCount int
+}
 
-	pens := []pen{}
+func (ps *penSet) append(pens *penSet) {
+	if ps.usedCount != 0 || pens.usedCount != 0 {
+		panic("cannot append used penSets")
+	}
+	ps.pens = append(ps.pens, pens.pens...)
+}
+
+func (ps *penSet) add(p *Vec3, v1, v2 int, toolTri, clayTri *Tri) {
+	ps.pens = append(ps.pens, &pen{p, v1, v2, toolTri, clayTri, false, false})
+}
+
+func NewPenSet() *penSet {
+	return &penSet{pens: []*pen{}, usedCount: 0}
+}
+
+func (ps *penSet) penetratorIs(tri *Tri) *pen {
+	for _, p := range ps.pens {
+		if p.toolTri == tri {
+			return p
+		}
+	}
+	panic("penetrator not found")
+}
+
+func (ps *penSet) otherPenByToolFace(p1 *pen) *pen {
+
+	var r *pen
+	for _, p := range ps.pens {
+		if p != p1 && p.toolTri == p1.toolTri {
+			if r == nil {
+				r = p
+			} else {
+				panic("more than one other penetration by face")
+			}
+		}
+	}
+	panic("missing second penetratifil by tool face")
+}
+
+func (ps *penSet) oppositePenByEdge(pen *pen) *pen {
+	for _, p := range ps.pens {
+		if p.v1 == pen.v2 && p.v2 == pen.v1 {
+			return p
+		}
+	}
+	return nil
+}
+
+func (ps *penSet) unused() *pen {
+	for _, p := range ps.pens {
+		if !p.used {
+			return p
+		}
+	}
+	return nil
+}
+
+//return 0, 1 or 2 points of intersection of the edges of the tool triangle, with the plane of triangle a
+func (clayTri *Tri) penetrationsBy(toolTri *Tri) *penSet {
+
+	pens := NewPenSet()
 
 	dp := clayTri.normal().dot(toolTri.normal())
 	if dp > 0.9999 || dp < -0.9999 {
@@ -219,8 +290,8 @@ func (clayTri *Tri) penetrationsBy(toolTri *Tri) []pen {
 			dnSquared := d[nxt] * d[nxt]
 			f := diSquared / (diSquared + dnSquared) //squaring both sides avoids sign issues
 			pop := p[i].tween(p[nxt], f)
-			if clayTri.contains(pop) {
-				pens = append(pens, pen{pop, toolTri.Vi[i], toolTri.Vi[nxt]})
+			if clayTri.contains(pop) { //too edge penetration inside clay trianlge
+				pens.add(pop, toolTri.Vi[i], toolTri.Vi[nxt], toolTri, clayTri)
 			}
 		}
 	}

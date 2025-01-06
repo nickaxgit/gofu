@@ -6,6 +6,11 @@ type mesh struct {
 	yMax  float64 //= 0
 }
 
+func (m *mesh) addVert(p *Vec3) int {
+	m.verts = append(m.verts, vert{p: p, uv: Vector{0, 0}, n: &Vec3{0, 0, 0}})
+	return len(m.verts) - 1
+}
+
 func (m *mesh) addOrReuseVertAtXZ(p *Vec3) int {
 
 	for i, v := range m.verts {
@@ -16,8 +21,7 @@ func (m *mesh) addOrReuseVertAtXZ(p *Vec3) int {
 		}
 	}
 
-	m.verts = append(m.verts, vert{p: p, uv: Vector{0, 0}, n: &Vec3{0, 0, 0}})
-	return len(m.verts) - 1
+	return m.addVert(p)
 }
 
 //creates a triangle (which is NOT a face) from the indices of the verts
@@ -37,10 +41,56 @@ func (tool *mesh) cut(clay *mesh) {
 
 	//for each face of the clay
 	for i := 0; i < len(clay.fi); i += 3 {
+		penSet := NewPenSet()
 		ct := clay.triangleFrom(i)
-		//for each face of the tool
+		//for each face of the tool mesh
 		for j := 0; j < len(tool.fi); j += 3 {
-			ct.penetrationsBy(tool.triangleFrom(j))
+			tt := tool.triangleFrom(j)
+			penSet.append(ct.penetrationsBy(tt)) //edges of the tool through the interior face of the clay
+			penSet.append(tt.penetrationsBy(ct)) //edges of the clay through the interior face of the tool
+		}
+
+		//we have gathered penetrations of many tool triangles of one clay triangle
+		//assemble rings from those penetrations
+		//some are of edges (of the clay) - in this case - the edge penetrating is the clay, and the face penetrated is the tool
+
+		ring := newRing(ct.Vi...)
+
+		pen := penSet.unused() //select an arbitrary first unused penetration
+
+		for {
+			childRing := newRing([]int{}...)
+			for {
+				childRing.vi = append(ring.vi, clay.addVert(pen.p))
+				pen.used = true
+				penSet.usedCount++ //this smells
+				//find an 'opposite' penetration, at the same position (from an adjoining face)
+				op := penSet.oppositePenByEdge(pen)
+				if op != nil {
+					op.used = true
+					penSet.usedCount++
+					pen = penSet.otherPenByToolFace(op)
+				} else { //there is no opposite penetration by an edge so this is a clay edge penetration of a tool triangle
+					//find the one other penetration where the penetrator is this penetrators target
+					pen = penSet.penetratorIs(pen.clayTri) //pen.clayTri here is infact the tool
+				}
+
+				if pen.used {
+					break //loop complete
+				}
+			}
+			ring.addChild(childRing.vi...)
+
+			if penSet.usedCount == len(penSet.pens) { //we have used all penatrations
+				break
+			}
+			pen = penSet.unused() //find an unused pen
+			if pen == nil {
+				panic("no unused penetration")
+
+			}
+
+			ring.triangulate(ct) //trangulates around the child holes held in the ring (at ct.depth+1)
 		}
 	}
 
