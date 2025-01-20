@@ -152,9 +152,14 @@ func processMsg(msg msg, state *State, player *Player, ws *websocket.Conn) (*Pla
 		state.scatterCoins(5000, 5000)
 
 		player.Send(&reply{Cmd: "state", Payload: state})
-		state.makeLand(6, 2000, 10000)
-		state.sendLand()
-		//		state.makeWater() //water is flowed and sent every cycle
+		state.land = makeLand(6, 2000, 10000)
+		state.land.offset(&Vec3{0, -1000, 0})
+		state.land.sendToAll("land", state)
+
+		t := tetra()
+		t.sendToAll("tetra", state)
+
+		//state.makeWater() //water is flowed and sent every cycle
 		//state.sendWater()
 
 		logit("Game created", state.GameId)

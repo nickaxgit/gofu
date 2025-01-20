@@ -3,15 +3,13 @@ package main
 //lighteright game state - the objects do not have methods (as they are deserialised from server data)
 import (
 	"bufio"
+	"github.com/gorilla/websocket"
+	"go.mongodb.org/mongo-driver/bson" //once stuctures are stabilised - can probaly just use bufio direclty
 	"io"
 	"math"
 	"math/rand/v2"
 	"os"
 	"strconv"
-	"time"
-
-	"github.com/gorilla/websocket"
-	"go.mongodb.org/mongo-driver/bson" //once stuctures are stabilised - can probaly just use bufio direclty
 )
 
 var rnGen *rand.Rand //nd.NewPCG(42, uint64(time.Microsecond)))
@@ -53,10 +51,11 @@ type thingPayload struct {
 }
 
 type meshPayload struct {
-	Verts []int `json:"verts"`
-	Faces []int `json:"faces"`
-	Norms []int `json:"norms"`
-	UV    []int `json:"uv"`
+	Name  string `json:"name"`
+	Verts []int  `json:"verts"`
+	Faces []int  `json:"faces"`
+	Norms []int  `json:"norms"`
+	UV    []int  `json:"uv"`
 }
 
 //	type pos struct{
@@ -80,7 +79,7 @@ type State struct { //the DATA of a game in progress - it can be entirely replac
 	deathList []*Player
 	Tracks    map[string]*track `json:"tracks"` //a stream of point quads by player name
 	Layers    map[string]*Layer `json:"layers"`
-	land      mesh              //not serialised
+	land      *mesh             //not serialised
 	waterMade bool              //has the water been poured yet (don't flow until it has)
 }
 
@@ -91,8 +90,8 @@ func (s *State) AddMass(m *Mass) int {
 
 func (t *Tri) getY(x float64, z float64, y []float64) {
 
-	valid, pop := t.probe(&Vec3{x, -100000, z}, &Vec3{x, 100000, z})
-	if valid && t.contains(pop) {
+	pop := t.probePlane(&Vec3{x, -100000, z}, &Vec3{x, 100000, z})
+	if pop != nil && t.contains(pop, true, true) {
 
 		y[t.depth] = pop.Y
 		for _, c := range t.Children {
@@ -103,249 +102,82 @@ func (t *Tri) getY(x float64, z float64, y []float64) {
 }
 
 // return the point of intersection of a ray with the triangle
-func (tri *Tri) probe(p0 *Vec3, p1 *Vec3) (bool, *Vec3) {
+func (tri *Tri) probePlane(p0 *Vec3, p1 *Vec3) *Vec3 {
+
+	if p0.equals(p1) {
+		panic("Degenerate probing ray")
+	}
+
+	if tri.normal().dot(p1.sub(p0)) == 0 {
+		return nil //this is legit, consider a traingle on the x/y plane and an edge of a triangle else where that is paralell with the X/Y plane
+		//panic("ray is parallel to the plane of the triangle")
+	}
+
+	if tri.mesh.verts[tri.Vi[0]].p.equals(p0) || tri.mesh.verts[tri.Vi[1]].p.equals(p0) || tri.mesh.verts[tri.Vi[2]].p.equals(p0) {
+		panic("p0 is a vertex of the triangle being probed")
+	}
+
+	if tri.mesh.verts[tri.Vi[0]].p.equals(p1) || tri.mesh.verts[tri.Vi[1]].p.equals(p1) || tri.mesh.verts[tri.Vi[2]].p.equals(p1) {
+		panic("p1 is a vertex of the triangle being probed")
+	}
+
 	d0 := tri.distanceFrom(p0)
+	d1 := tri.distanceFrom(p1)
+
+	// if d0 == 0 || d1 == 0 {
+	// 	logit("probe on the plane")
+	// 	return nil
+	// }
+
+	//if the distances have the same sign, the ray doesnt cross the plane
+	if d0 > 0 && d1 > 0 || d0 < 0 && d1 < 0 {
+		return nil
+	}
+
 	if d0 < 0 {
 		d0 = -d0
 	}
-	d1 := tri.distanceFrom(p1)
+
 	if d1 < 0 {
 		d1 = -d1
 	} //becase go has no abs
 
 	t := d0 / (d0 + d1)
-	if t > 0 && t < 1 {
-		return true, p0.tween(p1, t)
+
+	if t > 1 {
+		panic("t>1")
 	}
-	return false, &Vec3{0, 0, 0}
+
+	if t == 0 || t == 1 {
+		logit("probe touches plane")
+	}
+
+	if t >= 0 && t <= 1 { //this is significant includes ray ends touching planes
+		pop := p0.tween(p1, t)
+		if pop.distanceFromPlaneOf(tri) > 0.01 {
+			panic("tween is not on the plane")
+		}
+		return pop
+	}
+	//	panic("Probe failed")
+
+	return nil
 }
 
 // func (p Vec3) distanceFrom(t *Tri, v []vert) float64 {
 // 	return t.distanceFrom(v, p)
 // }
 
-func (state *State) makeLand(splits int, maxHeight float64, dist float64) {
-
-	lnd := &state.land   //get a reference to state.land (saves a lot of typing)
-	lnd.verts = []vert{} //clear the verts
-
-	seed := uint64(time.Now().Nanosecond())
-	logit("seed:" + strconv.Itoa(int(seed)))
-
-	rnGen = rand.New(rand.NewPCG(seed+1, seed))
-
-	lnd.addOrReuseVertAtXZ(newVec3(0, 0, dist))
-	lnd.addOrReuseVertAtXZ(newVec3(dist, 0, -dist))
-	lnd.addOrReuseVertAtXZ(newVec3(-dist, 0, -dist))
-
-	hdist := dist / 2
-	lnd.addOrReuseVertAtXZ(newVec3(0, 0, hdist))
-	lnd.addOrReuseVertAtXZ(newVec3(hdist, 0, -hdist))
-	lnd.addOrReuseVertAtXZ(newVec3(-hdist, 0, -hdist))
-
-	t := lnd.makeTri(0, 0, 1, 2) //make a depth 0 triangle within the mesh
-
-	r := newRing(0, 1, 2)
-	r.children = append(r.children, newRing(3, 4, 5))
-
-	r.triangulate(t)
-
-	// //Recursively split landscape
-	// t.split(state, splits, maxHeight) //spring the triangle 4 times recursively
-	// numFaces := 1 << (2 * splits) //left shift 2*splits - 4 splits = 16 faces
-
-	numFaces := 100
-	splits = 1
-
-	lnd.fi = make([]int, numFaces*3) //face vert indices (three per triangle)
-
-	p := int(0)
-	t.gather(splits, state.land.fi, &p) //get all the indices of the verts at depth 4
-
-	lnd.fi = lnd.fi[:p] //truncate
-
-	//generate normals
-	for i := 0; i < len(state.land.fi); i += 3 {
-
-		a := &lnd.verts[lnd.fi[i]]   //& lets us manipulate the verts by reference
-		b := &lnd.verts[lnd.fi[i+1]] //.p
-		c := &lnd.verts[lnd.fi[i+2]] //.p
-
-		n := b.p.sub(a.p).cross(c.p.sub(a.p)).normalise()
-
-		if n.Y < 0 {
-			//panic("faces down")
-			n = n.multiply(-1)
-		}
-
-		a.n = a.n.add(n) //add the face normal to each vertex
-		b.n = b.n.add(n)
-		c.n = c.n.add(n)
-	}
-
-	// //cull every trianlge below the sea
-	// nfi := make([]int, len(fi))
-
-	// o := 0
-	// for i := 0; i < len(fi); i += 3 {
-
-	// 	a := verts[fi[i]].p
-	// 	b := verts[fi[i+1]].p
-	// 	c := verts[fi[i+2]].p
-
-	// 	if a.Y > 0 || b.Y > 0 || c.Y > 0 {
-	// 		nfi[o] = fi[i]
-	// 		nfi[o+1] = fi[i+1]
-	// 		nfi[o+2] = fi[i+2]
-	// 		o += 3
-	// 	}
-	// }
-
-	// fi = nfi[:o] //keep the shortened face list
-
-	//move every undewater vertex to the surface
-	lnd.yMax = float64(0)
-	for i := 0; i < len(lnd.verts); i++ {
-		// 	if verts[i].p.Y < 0 {
-		// 		verts[i].p.Y = 0
-		// 	}
-		// 	// verts[i].p.X += (rnGen.Float64() - float64(.5)) * 100
-		// 	// verts[i].p.Z += (rnGen.Float64() - float64(.5)) * 100
-		if lnd.verts[i].p.Y > lnd.yMax {
-			lnd.yMax = lnd.verts[i].p.Y
-		}
-
-	}
-
-	//generate UVs
-	for i := range lnd.verts {
-		v := &lnd.verts[i] //DONT use range value here - we need to modify the actual vert (not a copy!)
-		v.n = v.n.normalise()
-		//use the angle of the normal projected onto x/y as the u component
-		//TODO incororate slope of the terrain - if the terrain is flatter..
-		//that the v component from lower down - this should put now on flat mountaintops
-		//similarly north facing slopes should get their v component from higher in the map
-		v.uv = Vector{math.Atan2(v.n.X, v.n.Z) / float64(6.28), v.p.Y / lnd.yMax}
-	}
-
-	//randomize Ys (AFTER) generating TC's
-	for i := range lnd.verts {
-		v := &lnd.verts[i]
-		v.p.Y += (rnGen.Float64() - float64(.5)) * 100
-		//if v.p.Y < 0 {
-		//	v.p.Y = 0
-		//}
-	}
-
-	y := []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-	t.getY(300, 200, y)
-
-	logit(y)
-
-	logit(p)
-	logit(len(lnd.verts))
-
-}
-
-func (state *State) sendLand() {
-
-	lnd := &state.land
-
-	vc := len(lnd.verts)
-	vc2 := vc * 2
-	vc3 := vc * 3
-
-	v := make([]int, vc3)  //position x,y,z
-	n := make([]int, vc3)  //normal x,y,z triples
-	uv := make([]int, vc2) //u,v pairs
-
-	for i, p := range lnd.verts {
-		v[i*3+0] = int(p.p.X * 10)
-		v[i*3+1] = int(p.p.Y * 10)
-		v[i*3+2] = int(p.p.Z * 10)
-		//v[i*4+3] = int(p.wl * 10) //water level
-		//wl[i] = int(p.wl * 10)
-
-		n[i*3+0] = int(p.n.X * 100)
-		n[i*3+1] = int(p.n.Y * 100)
-		n[i*3+2] = int(p.n.Z * 100)
-
-		uv[i*2+0] = int(p.uv.X * 1000)
-		uv[i*2+1] = int(p.uv.Y * 1000)
-
-	}
-
-	meshPayload := meshPayload{Verts: v, Faces: lnd.fi, Norms: n, UV: uv}
-	state.sendToAll(&reply{Cmd: "land", Payload: meshPayload})
-}
-
 func (state *State) makeWater() {
 	//pour an amount on every vertex proportional to altitude
 
-	lnd := &state.land
+	lnd := state.land
 
-	for i := range lnd.verts {
-		v := &lnd.verts[i]
+	for _, v := range lnd.verts {
 		v.wl = v.p.Y
 	}
 
 	state.waterMade = true
-
-}
-
-func (state *State) rain(amount float64) {
-	//pour an amount on every vertex proportional to altitude
-
-	lnd := &state.land
-
-	for i := range lnd.verts {
-		v := &lnd.verts[i]
-
-		distFromMid := (v.p.Y - (lnd.yMax / 2)) / lnd.yMax
-		if distFromMid < 0 {
-			distFromMid = 0
-		}
-		//rainfall := (1 - distFromMid) * 1 //rainfall is proportional to altitude - the midground is wettest
-		rainfall := float64(amount)
-		v.wl += rainfall
-	}
-
-}
-
-func (state *State) flowWater() {
-	lnd := &state.land
-
-	//flow the water (only along the deepest faces)
-	//for iw := 0; iw < 10; iw++ { //iteration of water
-	for i := 0; i < len(lnd.fi); i += 3 {
-		a := &lnd.verts[lnd.fi[i]]
-		b := &lnd.verts[lnd.fi[i+1]]
-		c := &lnd.verts[lnd.fi[i+2]]
-		flow(a, b)
-		flow(b, c)
-		flow(c, a)
-	}
-	//update the water levels (from the accumulators)
-	for v := range lnd.verts {
-		lnd.verts[v].wl += lnd.verts[v].acc
-		lnd.verts[v].acc = 0
-	}
-	//}
-
-}
-
-func (state *State) sendWater() {
-	lnd := &state.land
-
-	vc := len(lnd.verts)
-
-	wl := make([]int, vc) //water level
-
-	for i, p := range lnd.verts {
-		wl[i] = int(p.wl * 10)
-	}
-
-	state.sendToAll(&reply{Cmd: "water", Payload: wl})
 
 }
 
@@ -396,9 +228,9 @@ func (state *State) step() {
 	}
 
 	if state.waterMade {
-		state.rain(0.3)
-		state.flowWater()
-		state.sendWater()
+		state.land.rain(0.3)
+		state.land.flowWater()
+		state.land.sendWater(state)
 	}
 
 	//count money and send to player
