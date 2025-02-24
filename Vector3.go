@@ -1,14 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"strconv"
 )
 
 type Vec3 struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-	Z float64 `json:"z"`
+	x float64
+	y float64
+	z float64
 }
 
 func newVec3(x, y, z float64) *Vec3 {
@@ -16,11 +18,23 @@ func newVec3(x, y, z float64) *Vec3 {
 }
 
 func (a *Vec3) add(b *Vec3) *Vec3 {
-	return newVec3(a.X+b.X, a.Y+b.Y, a.Z+b.Z)
+	return newVec3(a.x+b.x, a.y+b.y, a.z+b.z)
 }
 
 func hypo3(a, b, c float64) float64 {
 	return math.Sqrt(float64(a*a + b*b + c*c))
+}
+
+func (a *Vec3) addIn(b *Vec3) {
+	a.x += b.x
+	a.y += b.y
+	a.z += b.z
+}
+
+func (a *Vec3) subIn(b *Vec3) {
+	a.x -= b.x
+	a.y -= b.y
+	a.z -= b.z
 }
 
 func (p *Vec3) projectOntoPlane(pop, normal *Vec3) *Vec3 {
@@ -32,8 +46,12 @@ func (p *Vec3) projectOntoPlane(pop, normal *Vec3) *Vec3 {
 // 	return hypo3(a.X-b.X, a.Y-b.Y, a.Z-b.Z)
 // }
 
+func (p *Vec3) payload() Vec3Payload {
+	return Vec3Payload{X: p.x, Y: p.y, Z: p.z}
+}
+
 func (a *Vec3) lengthSq() float64 {
-	return a.X*a.X + a.Y*a.Y + a.Z*a.Z
+	return a.x*a.x + a.y*a.y + a.z*a.z
 }
 
 func (p *Vec3) rotateAbout(axis *Vec3, angle float64) *Vec3 {
@@ -75,35 +93,52 @@ func (p *Vec3) rotateAbout(axis *Vec3, angle float64) *Vec3 {
 // }
 
 func (a *Vec3) multiply(f float64) *Vec3 {
-	return newVec3(a.X*f, a.Y*f, a.Z*f)
+	return newVec3(a.x*f, a.y*f, a.z*f)
 }
 
 func (a *Vec3) tween(b *Vec3, f float64) *Vec3 {
-	return newVec3(a.X+(b.X-a.X)*f, a.Y+(b.Y-a.Y)*f, a.Z+(b.Z-a.Z)*f)
+	return newVec3(a.x+(b.x-a.x)*f, a.y+(b.y-a.y)*f, a.z+(b.z-a.z)*f)
 }
 
 func (a *Vec3) sub(b *Vec3) *Vec3 {
-	return newVec3(a.X-b.X, a.Y-b.Y, a.Z-b.Z)
+	return newVec3(a.x-b.x, a.y-b.y, a.z-b.z)
 }
 
 func (a *Vec3) normalise() *Vec3 {
 	l := a.length()
 	if l == 0 {
-		return a //panic("can't normalise 0 vector")
+		panic("can't normalise 0 vector")
+		//return a
 	}
-	return &Vec3{X: a.X / l, Y: a.Y / l, Z: a.Z / l}
+	return &Vec3{x: a.x / l, y: a.y / l, z: a.z / l}
+}
+
+func (p *Vec3) toByteBuffer(buff *bytes.Buffer, e binary.ByteOrder) {
+	binary.Write(buff, e, float32(p.x)) //NOTE you CANT write a Vec3 directly as it has float64 components
+	binary.Write(buff, e, float32(p.y))
+	binary.Write(buff, e, float32(p.z))
+}
+
+func (p *Vec3) fromByteBuffer(buff *bytes.Buffer, e binary.ByteOrder) {
+
+	floats := make([]float32, 3) //the components of a vector are float64's but we downscale to 32bits for transmission/storage
+	binary.Read(buff, e, &floats)
+	p.x = float64(floats[0])
+	p.y = float64(floats[1])
+	p.z = float64(floats[2])
+
 }
 
 func (a *Vec3) length() float64 {
-	return hypo3(a.X, a.Y, a.Z)
+	return hypo3(a.x, a.y, a.z)
 }
 
 func (a *Vec3) equals(b *Vec3) bool {
-	if a.X == b.X && a.Y == b.Y && a.Z == b.Z {
+	if a.x == b.x && a.y == b.y && a.z == b.z {
 		return true
 	}
 	if a.distanceFrom(b) < 0.0001 {
-		logit("distance is close enough")
+		//logit("distance is close enough")
 		return true
 	}
 	return false
@@ -117,14 +152,62 @@ func (a *Vec3) equals(b *Vec3) bool {
 // }
 
 func (a *Vec3) dot(b *Vec3) float64 {
-	return a.X*b.X + a.Y*b.Y + a.Z*b.Z
+	return a.x*b.x + a.y*b.y + a.z*b.z
 }
 
 func (a *Vec3) cross(b *Vec3) *Vec3 {
 	if (a.length() == 0) || (b.length() == 0) {
 		panic("can't cross 0 vector")
 	}
-	return &Vec3{a.Y*b.Z - a.Z*b.Y, a.Z*b.X - a.X*b.Z, a.X*b.Y - a.Y*b.X}
+	return &Vec3{a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}
+}
+
+func (p *Vec3) signedDistanceFromLineSegment(a, b, n *Vec3) float64 {
+
+	cp := p.closestPointOnLineSegment(a, b)
+
+	ab := b.sub(a)
+	ap := p.sub(a)
+
+	d := p.distanceFrom(cp)
+
+	if ap.cross(ab).dot(n) > 0 {
+		d = -d
+	}
+
+	return d
+
+}
+
+func (p *Vec3) closestPointOnLineSegment(a, b *Vec3) *Vec3 {
+
+	ab := b.sub(a)
+	ap := p.sub(a)
+	bp := p.sub(b)
+	if ap.dot(ab) < 0 {
+		return a //p is outside AB and closest to A
+	}
+	if bp.dot(ab) > 0 { // p is outside AB and closest to B
+		return b
+	}
+
+	return p.closestPointOnLine(a, b)
+
+}
+
+func (p *Vec3) distanceFromLineSegment(a, b *Vec3) float64 {
+	//TEST this
+	ab := b.sub(a)
+	abn := ab.normalise()
+	ap := p.sub(a)
+	bp := p.sub(b)
+	if ap.dot(abn) < 0 {
+		return ap.length() //p is outside AB and closest to A
+	}
+	if bp.dot(abn) > 0 {
+		return bp.length() //p is outside AB and closest to B
+	}
+	return p.distanceFromLine(a, b)
 }
 
 func (p Vec3) closestPointOnLine(a, b *Vec3) *Vec3 {
@@ -139,7 +222,7 @@ func (p *Vec3) distanceFromLine(a, b *Vec3) float64 {
 }
 
 func (p *Vec3) distanceFrom(b *Vec3) float64 {
-	return hypo3(p.X-b.X, p.Y-b.Y, p.Z-b.Z)
+	return hypo3(p.x-b.x, p.y-b.y, p.z-b.z)
 }
 
 func (p *Vec3) liesBetween(a *Vec3, b *Vec3) bool {
@@ -159,19 +242,65 @@ func (p *Vec3) liesBetween(a *Vec3, b *Vec3) bool {
 
 }
 
+// func (p *Vec3) distanceFromFace(f *face) float64 {
+// 	//find the closest point on any edge of the face to the point p
+// 	bestDist := 1000000.0
+// 	verts := len(f.m)
+// 	for mi := 0; mi < verts; mi++ {
+// 		a := f.m[mi].p
+// 		b := f.m[mi+1%verts].p
+
+// 		d := p.distanceFromLineSegment(a, b)
+// 		if d < bestDist {
+// 			bestDist = d
+// 		}
+// 	}
+
+// 	a := f.m[0].p
+// 	b := f.m[1].p
+// 	c := f.m[2].p
+
+// 	dpop := p.distanceFromTriPlane(a, b, c)
+
+// 	if dpop < bestDist {
+// 		bestDist = dpop
+// 	}
+
+//		return bestDist
+//	}
 func (p *Vec3) distanceFromPlaneOf(t *Tri) float64 {
-	return t.distanceFrom(p)
+
+	v := t.mesh.verts
+	a := v[t.vi[0]].p
+	b := v[t.vi[1]].p
+	c := v[t.vi[2]].p
+
+	return p.distanceFromTriPlane(a, b, c)
+
+}
+
+func (p *Vec3) closestPointOnPlane(a, n *Vec3) *Vec3 {
+	//project the point onto the plane
+	pop := p.sub(a)
+	return p.sub(n.multiply(pop.dot(n)))
+}
+
+func (p *Vec3) closestPointOnTriPlane(a, b, c *Vec3) *Vec3 {
+
+	n := b.sub(a).cross(c.sub(a)).normalise() //todo - cache/gen the normals once
+
+	return p.sub(n.multiply(p.distanceFromTriPlane(a, b, c)))
 }
 
 func (p *Vec3) distanceFromTriPlane(a, b, c *Vec3) float64 {
 
 	//get the normal of the triangle
-	n := b.sub(a).cross(c.sub(a)).normalise() //todo - cache/gen the normals once
+	n := b.sub(a).cross(c.sub(a)) //.normalise() //todo - cache/gen the normals once
 
 	pop := p.sub(a)
 
 	//get the distance from the point to the plane
-	d := pop.dot(n)
+	d := pop.dot(n) / n.length()
 
 	return d
 
@@ -198,15 +327,19 @@ func (p *Vec3) isInside(m *mesh) bool {
 
 }
 
-func (pop *Vec3) isInsideTri(a, b, c *Vec3, includeOnEdge bool) bool {
+func (pop *Vec3) isInsideTri(a, b, c *Vec3, includeOnEdge bool, includeOnVert bool) bool {
 	//get the normal of the triangle
+
+	if a.equals(pop) || b.equals(pop) || c.equals(pop) {
+		return includeOnVert // return true or false, depending on the value of includeOnVert
+	}
 
 	ab := b.sub(a)
 	bc := c.sub(b)
 	ca := a.sub(c)
 
 	dp := ab.normalise().dot(bc.normalise())
-	if dp < -.9999 || dp > .9999 {
+	if dp < -.999999 || dp > .999999 {
 		panic("degenerate triangle (has parallel edges)")
 	}
 	cp := ab.cross(bc)
@@ -249,7 +382,8 @@ func (pop *Vec3) isInsideTri(a, b, c *Vec3, includeOnEdge bool) bool {
 		if nc.lengthSq() < tiny && pop.liesBetween(c, a) {
 			return true
 		}
-		panic("point is on an edge but not between the vertices")
+		return false //	point is on an edge but not between the vertices
+		//panic("point is on an edge but not between the vertices")
 
 	}
 
@@ -272,5 +406,37 @@ func (pop *Vec3) isInsideTri(a, b, c *Vec3, includeOnEdge bool) bool {
 
 func (p *Vec3) clone() *Vec3 {
 
-	return newVec3(p.X, p.Y, p.Z)
+	return newVec3(p.x, p.y, p.z)
+}
+
+func (b *Vec3) SignedAngleFrom(a *Vec3, axis *Vec3) float64 {
+
+	dp := a.dot(b)
+	alXbl := (a.length() * b.length())
+	aa := dp / alXbl
+	if aa < -1.001 || aa > 1.001 {
+		panic("aa out of range")
+	}
+	if aa < -1 {
+		aa = -1
+	}
+	if aa > 1 {
+		aa = 1
+	}
+	angle := math.Acos(aa)
+
+	if math.IsNaN(angle) {
+		panic("angle is NaN")
+	}
+
+	if b.cross(a).dot(axis) < 0 {
+		angle = -angle
+	}
+
+	return angle
+
+}
+
+func (v *Vec3) reflect(n *Vec3) *Vec3 {
+	return v.sub(n.multiply(2 * v.dot(n)))
 }

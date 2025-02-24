@@ -57,9 +57,9 @@ func homePage(w http.ResponseWriter, _ *http.Request) {
 	logit("homePage", "called")
 	fmt.Fprintf(w, "<h1>Dozer game server</h1>")
 	for i, g := range games {
-		fmt.Fprintf(w, "<p>Game %d has %d players", i, len(g.Players))
-		for _, p := range g.Players {
-			fmt.Fprintf(w, "<p>Player %s", p.Name)
+		fmt.Fprintf(w, "<p>Game %d has %d players", i, len(g.players))
+		for _, p := range g.players {
+			fmt.Fprintf(w, "<p>Player %s", p.name)
 		}
 	}
 }
@@ -117,7 +117,7 @@ func main() {
 	fs := http.FileServer(http.Dir("../dozer"))
 
 	//important!
-	games = make(map[int]*State)
+	games = make(map[uint32]*state)
 
 	accountsByGuid = make(map[string]*account)
 
@@ -151,12 +151,13 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 		logit(err)
 	}
 
-	var state *State //initially nil set inside processMsg
-	var player *Player
+	//var state *state //initially nil set inside processMsg
+	//var player *player
 
-	//when a player creates of joins a game - their websocket is hooked up to the player
+	//when a player creates or joins a game - their websocket is hooked up to the player
+	var player *player
 	for {
-		// read in a messages forever on this socket
+		// read in a messages forever on this socket (from this player)
 
 		messageType, msgBytes, err := ws.ReadMessage()
 
@@ -172,44 +173,18 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 				logit(err.Error())
 			}
 
-			player, state = processMsg(structuredMessage, state, player, ws) //block.GameId, from, m,player)
+			processMsg(structuredMessage, player, ws) //player is set by creategame/joingame
+
+		} else if messageType == websocket.BinaryMessage {
+			//msgbytes is a slice of bytes
+			if player == nil {
+				player = processCreateOrJoin(msgBytes, ws)
+			} else {
+				player.processBinaryMsg(msgBytes)
+			}
 
 		}
-	} //this is an infinite loop
-
-	// player := state.AddPlayer(playerName, state.RandomStartPos(),ws)
-
-	// 	var block block
-	// 	// n, err := r.Body.Read(jsonBytes)
-
-	// 	w.Header().Set("Access-Control-Allow-Origin", "*") //TODO - tighten this up
-	// 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	// 	w.Header().Set("Access-Control-Allow-Methods", "*") //POST, OPTIONS")
-
-	// 	//logit(r.Method)
-	// 	if r.Method == "POST" {  //it's either a JOIN or CREATE game command
-	// 		err := json.NewDecoder(r.Body).Decode(&block)
-
-	// 		if err != nil {
-	// 			logit(err.Error())
-	// 			w.Write([]byte("Error reading JSON (not a block) ?" + err.Error()))
-	// 			//w.WriteHeader(http.StatusBadRequest)
-	// 			return
-	// 		}
-
-	// 		//its possible there are 0 bytes in the request
-	// 		// if len(block) == 0 {
-	// 		// 	w.WriteHeader(http.StatusNoContent)
-	// 		// 	//nothing in the outbound queue for you
-	// 		// 	//w.response([]byte("{}"))
-	// 		// 	return
-	// 		// }
-	// 		//w.WriteHeader(http.StatusOK)
-
-	// 		response := processBlock(block)
-
-	// 		w.Write(response) //process the request que (from this player) and return the response (typically moved masses)
-	//	}
+	}
 }
 
 func customHeaders(fs http.Handler) http.HandlerFunc {

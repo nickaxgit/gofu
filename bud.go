@@ -43,7 +43,7 @@ func growTree() *mesh {
 	trunk.grow(100, &sprouts)
 	logit("sprouts", sprouts)
 
-	m := NewMesh("tree")
+	m := NewMesh("tree", 20000)
 	trunk.getMesh(m)
 
 	return m

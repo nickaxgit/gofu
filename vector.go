@@ -9,11 +9,11 @@ type Vector struct {
 	Y float64 `json:"y"`
 }
 
-func newVector(x, y float64) Vector {
-	return Vector{x, y}
+func newVector(x, y float64) *Vector {
+	return &Vector{x, y}
 }
 
-func (a *Vector) add(b Vector) Vector {
+func (a *Vector) add(b *Vector) *Vector {
 	return newVector(a.X+b.X, a.Y+b.Y)
 }
 
@@ -38,17 +38,17 @@ func (a *Vector) addIn(b Vector) {
 	a.Y += b.Y
 }
 
-func (a *Vector) multiply(f float64) Vector {
+func (a *Vector) multiply(f float64) *Vector {
 	return newVector(a.X*f, a.Y*f)
 }
 
-func (a *Vector) subtract(b *Vector) Vector {
+func (a *Vector) subtract(b *Vector) *Vector {
 	return newVector(a.X-b.X, a.Y-b.Y)
 }
 
-func (a *Vector) normalise() Vector {
+func (a *Vector) normalise() *Vector {
 	l := a.length()
-	return Vector{X: a.X / l, Y: a.Y / l}
+	return &Vector{X: a.X / l, Y: a.Y / l}
 }
 
 func (a *Vector) length() float64 {
@@ -59,13 +59,13 @@ func (a *Vector) Equals(b *Vector) bool {
 	return a.X == b.X && a.Y == b.Y
 }
 
-func (p Vector) rotate(angle float64) Vector {
+func (p Vector) rotate(angle float64) *Vector {
 	x := p.X*math.Cos(angle) - p.Y*math.Sin(angle)
 	y := p.X*math.Sin(angle) + p.Y*math.Cos(angle)
 	return newVector(x, y)
 }
 
-func (a Vector) dot(b *Vector) float64 {
+func (a *Vector) dot(b *Vector) float64 {
 	return a.X*b.X + a.Y*b.Y
 }
 
@@ -73,10 +73,10 @@ func (a Vector) cross(b Vector) float64 {
 	return (a.X * b.Y) - (a.Y * b.X)
 }
 
-func (p Vector) closestPointOnLine(a, b *Vector) Vector {
+func (p Vector) closestPointOnLine(a, b *Vector) *Vector {
 	ab := b.subtract(a)
 	abn := ab.normalise()
-	dp := p.subtract(a).dot(&abn)
+	dp := p.subtract(a).dot(abn)
 	return a.add(abn.multiply(dp))
 }
 
@@ -90,6 +90,6 @@ func (p *Vector) liesBetween(a *Vector, b *Vector) bool {
 	v2 := p.subtract(b) //vector from a to p
 
 	//if the dot product is negative, then the vectors (from the point to the endpoints) are pointing in opposite directions - and the point lies between A-B
-	return v1.dot(&v2) < 0
+	return v1.dot(v2) < 0
 
 }

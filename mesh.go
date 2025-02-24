@@ -1,406 +1,185 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"math/rand/v2"
 	"slices"
-	"sort"
 	"strconv"
 	"time"
 )
 
-type loop struct {
-	vi []int //an ordered list of vertex indices - that form a closed loop
-}
-
-func NewLoop() *loop {
-	return &loop{vi: []int{}}
-}
-
-func (l *loop) mesh(lm *mesh, ctn *Vec3, m *mesh) *mesh {
-
-	for li := range l.vi { //index
-
-		vi := l.vi[li]
-
-		p := lm.verts[vi].p
-		np := lm.verts[l.vi[(li+1)%len(l.vi)]].p
-		t1 := m.addVert(p, false, 0, 0) //note addvert will combine verts at the same position
-
-		dir := np.sub(p).normalise()
-		t2 := m.addVert(p.sub(dir.cross(ctn).multiply(10)), false, 0, .5)
-		t3 := m.addVert(np, false, 1, 0)
-
-		m.addFi(t2, t1, t3)
-
-	}
-
-	return m
-}
-
-func (t *loop) merge(s *loop) {
-	//merge the vertices of l into this loop (t becomes a degenerate loop)
-	//last := t.vi[len(t.vi)-1]
-	t.vi = append(t.vi, t.vi[0]) //close the first loop (add the 0th vert)
-	t.vi = append(t.vi, s.vi...)
-	t.vi = append(t.vi, s.vi[0])
-	//t.vi = append(t.vi, t.vi[last)
-}
-
-func (loop *loop) triangulate(dbm *mesh, m *mesh, ctn *Vec3) []int {
-	//triangulate this loop using the ear cutting algorithm
-	//return a list of faces (triples of vertex indices)
-	//the loop is assumed to be closed - vert indices may apear more than once as there may be bridges to inner holes
-
-	facelist := []int{}
-
-	ll := len(loop.vi)
-	for {
-		//find an ear
-		facelist = append(facelist, loop.findAndRemoveEar(m, ctn)...) //remove the ear and add it to the face list (mutates l.vi)
-
-		if len(loop.vi) < 3 {
-			break
-		}
-	}
-	logit("loop of ", ll, "verts triangulated into ", len(facelist)/3, " faces")
-
-	return facelist
-}
-
-func (ss *segSet) addFromEdgePens(ct *Tri, tm *mesh, vt, vn int, edgePens []int, cornerIsCut bool, output *mesh) { //collect alternating segments))
-
-	if cornerIsCut {
-		if len(edgePens) > 1 { //if the corner is cut and there is only one edge penetration - that penerataton IS that corner cut
-			for i := 0; i < len(edgePens)-1; i += 2 {
-				ss.add(edgePens[i], edgePens[i+1], 1)
-			}
-		}
-		if len(edgePens)%2 == 1 {
-			if output.verts[vn].p.isInside(tm) { //TODO remove
-				panic("start corner is cut but opposite corner is inside tool, despite an odd number of edge penetrations")
-			}
-			ss.add(edgePens[len(edgePens)-1], vn, 1)
-		}
-	} else {
-		ss.add(vt, edgePens[0], 1)
-		for i := 1; i < len(edgePens)-1; i += 2 {
-			ss.add(edgePens[i], edgePens[i+1], 1)
-		}
-		if len(edgePens)%2 == 0 {
-			if output.verts[vn].p.isInside(tm) { //TODO remove
-				logit("edgepens", len(edgePens))
-				logit("start corner IS NOT cut but opposite corner is inside tool, despite an EVEN number of edge penetrations")
-			}
-			ss.add(edgePens[len(edgePens)-1], vn, 1)
-		}
-	}
-}
-
-func (ss *segSet) otherEnd(v int) int {
-	for _, s := range ss.segs {
-		if s.from == v {
-			return s.to
-		}
-		if s.to == v {
-			return s.from
-		}
-	}
-	panic("other end not found")
-}
-
-func (ss *segSet) normalTo(m *mesh, v int, ctn *Vec3) *Vec3 {
-	//return a vector normal to the segment that contains vertex v
-
-	v2 := ss.otherEnd(v)
-
-	return m.verts[v2].p.sub(m.verts[v].p).cross(ctn)
-}
-
-func (ss *segSet) unused() *seg {
-
-	//ugly - but look for outer segments first
-	for _, s := range ss.segs {
-		if !s.used && s.touchesEdges > 0 {
-			return s
-		}
-	}
-
-	for _, s := range ss.segs {
-		if !s.used {
-			return s
-		}
-	}
-
-	return nil
-}
-
-func (ss *segSet) getLoops(ct *Tri, m *mesh) []*loop {
-	//return a list of loops - each loop is a closed list of segments
-
-	loops := []*loop{}
-
-	for {
-
-		start := ss.unused()
-		if start == nil {
-			break
-		} //no more unused segments
-		at := start
-
-		loop := NewLoop()
-		for {
-			loop.addVert(m, at.from)
-			at.used = true
-			at = ss.findSegFrom(at.to)
-			if at == nil {
-				break //open loop do not add (single triangle penetration)
-			}
-
-			if at.to == start.from {
-				at.used = true
-				loop.addVert(m, at.from) //todo - refactor
-				loops = append(loops, loop)
-				break
-			}
-		}
-
-		logit("loop", loop.vi)
-
-	}
-
-	return loops
-}
-
-func (loop *loop) addVert(m *mesh, vi int) {
-	loop.vi = append(loop.vi, vi)
-
-	//check for verts in a line (can go eventually)
-	if len(loop.vi) > 2 {
-		l := len(loop.vi) - 1
-		if m.inAline(loop.vi[l-2], loop.vi[l-1], loop.vi[l]) {
-			panic("verts in a line")
-		}
-	}
-}
-
-func (l *loop) reverse() {
-	//reverse the order of the verts in the loop
-	//this is used to ensure the loop is wound in the correct direction for the ear cutting algorithm
-	//the loop is mutated
-	ll := len(l.vi)
-	n := make([]int, ll)
-	for i := 0; i < len(l.vi); i++ {
-		n[i] = l.vi[(ll-i)-1]
-	}
-	l.vi = n
-}
-
-// check if the ear is empty (no other verts inside the triangle)
-func (l *loop) isEarEmpty(bi int, m *mesh) bool {
-
-	ll := len(l.vi) //length of the loop
-	ai := (bi + ll - 1) % ll
-	a := m.verts[l.vi[ai]].p
-	b := m.verts[l.vi[bi]].p
-	c := m.verts[l.vi[(bi+1)%ll]].p
-
-	if m.inAline(l.vi[ai], l.vi[bi], l.vi[(bi+1)%ll]) {
-		return false //triangle is degenerate and not one we want to keep
-	}
-
-	if a.equals(b) || a.equals(c) || b.equals(c) {
-		panic("degenerate triangle")
-	}
-
-	for j := (bi + 2) % ll; j%ll != ai; j++ {
-		v := m.verts[l.vi[j%ll]]
-
-		if v.p.equals(a) || v.p.equals(b) || v.p.equals(c) {
-			//panic("on ear vert") = can happen when there are hols
-			return true //false
-		}
-
-		if v.p.isInsideTri(a, b, c, false) {
-			return false
-		}
-	}
-	return true
-
-}
-
-func (l *loop) findAndRemoveEar(m *mesh, ctn *Vec3) (face []int) {
-	//find an ear and remove it from the loop
-	//return the indices of the three verts that make up the ear
-	//the loop is mutated and a vertex is removed
-
-	biggestAngle := float64(0)
-	ear := []int{0, 0, 0}
-	ei := int(-1)
-	logit("loop contains", len(l.vi))
-	for i := 0; i < len(l.vi); i++ {
-
-		a := l.vi[i]
-		bi := (i + 1) % len(l.vi)
-		b := l.vi[bi]
-		c := l.vi[(i+2)%len(l.vi)]
-
-		ap := m.verts[a].p
-		bp := m.verts[b].p
-		cp := m.verts[c].p
-
-		ab := bp.sub(ap)
-		bc := cp.sub(bp)
-
-		if ab.length() < 0.01 || bc.length() < 0.01 {
-			panic("degenerate triangle")
-		}
-
-		turnAngle := -bc.SignedAngleFrom(ab, ctn) //math.Acos((cp.sub(bp)).normalise().dot((bp.sub(ap)).normalise()))
-
-		if turnAngle == 0 {
-			//	panic("zero turn angle") //can happen when ears are cut off
-		}
-
-		if turnAngle > 0 { // angle is postive for a left hand turn,
-			logit("acute angle", turnAngle)
-			if turnAngle > biggestAngle {
-				if l.isEarEmpty(bi, m) {
-					biggestAngle = turnAngle
-					ear = []int{a, b, c}
-					ei = (i + 1) % len(l.vi) //remove the middle 'B' vertex
-				}
-			}
-		} else {
-			logit("reflex angle (right turn)", turnAngle)
-		}
-	}
-
-	if ei == -1 {
-		panic("no acute angle (or empty ear) found")
-	}
-
-	logit("Removing", ei, l.vi[ei])
-
-	l.vi = append(l.vi[:ei], l.vi[ei+1:]...)
-
-	if m.verts[ear[0]].p.equals(m.verts[ear[1]].p) || m.verts[ear[0]].p.equals(m.verts[ear[2]].p) || m.verts[ear[1]].p.equals(m.verts[ear[2]].p) {
-		panic("degenerate ear by area")
-	}
-	if ear[0] == ear[1] || ear[0] == ear[2] || ear[1] == ear[2] {
-		panic("degenerate ear")
-	}
-
-	return ear
-}
-
-// return a sorted list of vertex indices, from segs that meet the edge (by distance from corner)
-func (ss *segSet) getEdgePenetrations(m *mesh, vThis, vNext int) []int {
-
-	dm := map[float64]int{}
-
-	e0 := m.verts[vThis].p
-	e1 := m.verts[vNext].p
-
-	if e0.equals(e1) {
-		panic("degenerate edge")
-	}
-
-	for _, seg := range ss.segs {
-		f := m.verts[seg.from].p
-		t := m.verts[seg.to].p
-
-		if f.distanceFromLine(e0, e1) < 0.01 {
-			dm[f.distanceFrom(e0)] = seg.from
-		}
-		if t.distanceFromLine(e0, e1) < 0.01 {
-			dm[t.distanceFrom(e0)] = seg.to
-		}
-
-	}
-
-	index := make([]float64, len(dm))
-	i := int(0)
-	for k := range dm {
-		index[i] = k
-		i++
-	}
-	sort.Float64s(index)
-
-	sorted := make([]int, len(dm))
-	for i, p := range index {
-		if dm[p] < 3 {
-			panic("bad")
-		}
-		sorted[i] = dm[p]
-	}
-
-	return sorted
-
-}
+// type edge struct {
+// 	v1  uint16
+// 	v2  uint16
+// 	mid uint16
+// 	t1  *Tri
+// 	t2  *Tri
+// }
+
+type msgEnum byte
+
+const (
+	msgGameId        msgEnum = 1
+	msgMesh          msgEnum = 4
+	msgMeshPositions msgEnum = 5
+	msgMeshNormals   msgEnum = 6
+	msgMeshUVs       msgEnum = 7
+	msgMeshFaces     msgEnum = 8
+	msgThings        msgEnum = 11
+	msgMasses        msgEnum = 12
+	msgHighlit       msgEnum = 13
+	msgCamera        msgEnum = 14
+	msgCursor        msgEnum = 15
+	msgMessage       msgEnum = 16
+	msgVectors       msgEnum = 17
+	msgPlayers       msgEnum = 18
+	msgCreateGame    msgEnum = 19
+	msgJoinGame      msgEnum = 20
+)
 
 type mesh struct {
-	name  string
-	verts []*vert //{}
-	fi    []int   //{} //face indices
-	yMax  float64 //= 0
+	name       string
+	verts      []*vert  //{}
+	fi         []uint16 //{} //face indices
+	faceCount  uint16
+	yMax       float64
+	yMin       float64
+	midpoints  map[uint32]uint16 //comound key of the two endpoints of an edge, map contains the index of its midpoint vertex
+	reuseVerts []uint16
+	reuseFaces []uint16
+
+	//faceNormals []*Vec3
 }
 
 type seg struct {
-	from         int
-	to           int
+	from         uint16
+	to           uint16
 	used         bool
 	touchesEdges int
 }
 
-type segSet struct {
-	segs []*seg
+func NewMesh(name string, maxFaces uint16) *mesh {
+
+	//we need three entries per face in fis
+
+	l := int(maxFaces) * 3
+	fis := make([]uint16, l)
+	return &mesh{name: name, verts: []*vert{}, fi: fis, midpoints: make(map[uint32]uint16, 0)}
 }
 
-func (ss *segSet) merge(other *segSet) {
-	ss.segs = append(ss.segs, other.segs...)
-}
-
-func (ss *segSet) add(from, to int, touchesEdges int) {
-	if from == to {
-		panic("//degenerate segment")
+func (m *mesh) midpoint(v1 uint16, v2 uint16) uint16 {
+	//return the index of the midpoint of the edge v1,v2
+	key := uint32(v1) + uint32(65536)*uint32(v2)
+	mid, present := m.midpoints[key]
+	if present {
+		return mid
 	}
-	ss.segs = append(ss.segs, &seg{from, to, false, touchesEdges})
+
+	//look the other way
+	key = uint32(v2) + uint32(65536)*uint32(v1)
+	mid, present = m.midpoints[key]
+	if present {
+		return mid
+	}
+
+	return 65535
 }
 
-func (ss *segSet) findSegFrom(from int) *seg {
-	for _, s := range ss.segs {
-		if s.from == from {
-			return s
+func (m *mesh) neighboursOf(tri *Tri) []*Tri {
+	//return all the triangles sharing two of tris verts
+	//(we know which triangles a vert touches already)
+	neighbours := make([]*Tri, 0, 3)
+	for i := 0; i < 3; i++ {
+		i2 := (i + 1) % 3
+		nextDoor := tri.neighbourSharing(m.verts[tri.vi[i]], m.verts[tri.vi[i2]])
+		if nextDoor != nil {
+			neighbours = append(neighbours, nextDoor)
 		}
 	}
-	return nil // penetrations of single triangles through faces create one segment that does not form a loop
-	//panic("seg not found")
+
+	return neighbours
+
 }
 
-func newSegSet() *segSet {
-	return &segSet{segs: []*seg{}}
+func (tri *Tri) neighbourSharing(v1 *vert, v2 *vert) *Tri {
+
+	for t := range v1.touches {
+		if t != tri {
+			_, present := v2.touches[t]
+			if present {
+				return t
+			}
+		}
+	}
+	return nil
+
 }
 
-func NewMesh(name string) *mesh {
-	return &mesh{name: name, verts: []*vert{}, fi: []int{}}
+// creates a new vertex halfway between the indexed verts a and b and returns the index of the new vertex
+func (m *mesh) splitEdge(a, b uint16, dy float64) uint16 {
+
+	pa := m.verts[a].p
+	pb := m.verts[b].p
+
+	p := pa.tween(pb, 0.5)
+
+	p.y += dy
+
+	//maintain a map of edges to midpoints
+	// key := uint32(a) + uint32(65536)*uint32(b)
+	// existingMid, present := m.midpoints[key]
+
+	vi := m.midpoint(a, b) //will look for an existing midpoints a->b or b->a
+	if vi != 65535 {
+		if vi == 0 {
+			logit("zero midpoint")
+		}
+		return vi
+	}
+
+	if len(m.reuseVerts) > 0 {
+		vi = m.reuseVerts[0]
+		logit("reusing vert", vi)
+		m.verts[vi].p = p
+		m.reuseVerts = m.reuseVerts[1:]
+	} else {
+		vi = m.addVert(p, false, 0, 0) //OrReuseVertAtXZ(p)
+	}
+
+	//add it to the index of midpoints
+	key := uint32(a) + uint32(65536)*uint32(b)
+	m.midpoints[key] = vi
+
+	return vi
 }
 
-func (m *mesh) addVert(p *Vec3, reUseVert bool, u float64, v float64) int {
+func (m *mesh) addVert(p *Vec3, reUseVert bool, u float64, v float64) uint16 {
 
 	if reUseVert {
 		for i, v := range m.verts {
 			if v.p.equals(p) {
-				return i //found an existing vert at this position - return its index
+				return uint16(i)
 			}
 		}
 	}
 
-	m.verts = append(m.verts, &vert{p: p, uv: Vector{u, v}, n: &Vec3{0, 0, 0}})
-	return len(m.verts) - 1
+	m.verts = append(m.verts, newVert(p, u, v))
+	if p.y > m.yMax {
+		m.yMax = p.y
+	} else if p.y < m.yMin {
+		m.yMin = p.y
+	}
+
+	if len(m.verts) > 65500 {
+		panic("Big mesh")
+	}
+
+	return uint16(len(m.verts) - 1)
 }
 
-func (m *mesh) addFi(vi ...int) {
+func (m *mesh) addFi(vi ...uint16) {
 	m.fi = append(m.fi, vi...)
 }
 
@@ -409,7 +188,7 @@ func (m *mesh) rain(amount float64) {
 	//pour an amount on every vertex proportional to altitude
 	for _, v := range m.verts {
 
-		distFromMid := (v.p.Y - (m.yMax / 2)) / m.yMax
+		distFromMid := (v.p.y - (m.yMax / 2)) / m.yMax
 		if distFromMid < 0 {
 			distFromMid = 0
 		}
@@ -441,7 +220,79 @@ func (m *mesh) flowWater() {
 
 }
 
-func (m *mesh) sendWater(state *State) {
+func (m *mesh) getUVs(vc uint32) []float32 {
+
+	uvs := make([]float32, vc*2)
+	for i, v := range m.verts {
+		v.updateUV(m.yMin, m.yMax)
+		uvs[i*2] = float32(v.uv.X)
+		uvs[i*2+1] = float32(v.uv.Y)
+	}
+
+	return uvs
+
+}
+
+func (m *mesh) getPositions(vc uint32) []float32 {
+
+	p := make([]float32, vc*3) //position x,y,z
+
+	for i, v := range m.verts {
+		p[i*3+0] = float32(v.p.x)
+		p[i*3+1] = float32(v.p.y)
+		p[i*3+2] = float32(v.p.z)
+	}
+
+	return p
+
+}
+
+// take a list of face indices - and return the index and 3 vertex indices for each face
+func (t *Tri) getFacesInto(fis []uint16, p *uint32) {
+
+	if len(t.children) == 0 {
+		fis[*p] = t.vi[0]
+		fis[*p+1] = t.vi[1]
+		fis[*p+2] = t.vi[2]
+		*p += 3
+	}
+
+	for _, c := range t.children {
+		c.getFacesInto(fis, p)
+	}
+
+}
+
+// return the normals of the verts specified in vis (vertices we've added)
+func (m *mesh) getNormals(vc uint32) []float32 {
+
+	//for every new vertex, reset the normal to zero, then add the normals of the faces it touches
+	n := make([]float32, vc*3) //position x,y,z
+	for i, v := range m.verts {
+
+		if len(v.touches) > 0 {
+			v.n = &Vec3{0, 0, 0}
+			//usually 6 0- can be 5 - or even 3 at edges and 1 in conrners
+			for t := range v.touches { //for every face this vertex touches
+				if len(t.children) == 0 { //ony include bottom level traingles in the normal calculation
+					v.n.addIn(t.normal)
+				}
+			}
+
+			v.n.normalise() //renormalise the normal
+			n[i*3+0] = float32(v.n.x)
+			n[i*3+1] = float32(v.n.y)
+			n[i*3+2] = float32(v.n.z)
+		} else {
+			logit(v, " touches no tris")
+		}
+	}
+
+	return n
+
+}
+
+func (m *mesh) sendWater(state *state) {
 
 	wl := make([]int, len(m.verts)) //water level
 
@@ -449,144 +300,439 @@ func (m *mesh) sendWater(state *State) {
 		wl[i] = int(p.wl * 10)
 	}
 
-	state.sendToAll(&reply{Cmd: "water", Payload: wl})
+	state.send(nil, &reply{Cmd: "water", Payload: wl})
 
 }
 
-func (m *mesh) sendToAll(name string, state *State) {
+// func encodeFloat64toFloat32Bytes(ar []float64) []byte {
 
-	vc := len(m.verts)
-	vc2 := vc * 2
-	vc3 := vc * 3
+// 	newar := make([]float32, len(ar))
+// 	var v float64
+// 	var i int // delcared outside the range for perofrmance (alegedly)
+// 	for i, v = range ar {
+// 		newar[i] = float32(v)
+// 	}
 
-	v := make([]int, vc3)  //position x,y,z
-	n := make([]int, vc3)  //normal x,y,z triples
-	uv := make([]int, vc2) //u,v pairs
+// 	unsafeBytes := *(*[]byte)(unsafe.Pointer(&newar)) //spicy
+// 	return unsafeBytes
 
-	for i, p := range m.verts {
-		v[i*3+0] = int(p.p.X * 10)
-		v[i*3+1] = int(p.p.Y * 10)
-		v[i*3+2] = int(p.p.Z * 10)
-		//v[i*4+3] = int(p.wl * 10) //water level
-		//wl[i] = int(p.wl * 10)
+// }
 
-		n[i*3+0] = int(p.n.X * 100)
-		n[i*3+1] = int(p.n.Y * 100)
-		n[i*3+2] = int(p.n.Z * 100)
+// func (m *mesh) sendToAll(name string, state *state) {
 
-		uv[i*2+0] = int(p.uv.X * 1000)
-		uv[i*2+1] = int(p.uv.Y * 1000)
+// 	vc := uint16(len(m.verts))
 
+// 	if vc > 65535 {
+// 		panic("too many verts")
+// 	}
+
+// 	vc2 := vc * 2
+// 	vc3 := vc * 3
+
+// 	v := make([]float32, vc3)  //position x,y,z
+// 	n := make([]float32, vc3)  //normal x,y,z triples
+// 	uv := make([]float32, vc2) //u,v pairs
+
+// 	for i, p := range m.verts {
+// 		v[i*3+0] = float32(p.p.x)
+// 		v[i*3+1] = float32(p.p.y)
+// 		v[i*3+2] = float32(p.p.z)
+// 		//v[i*4+3] = float32(p.wl * 10) //water l
+// 		//wl[i] = float32(p.wl )
+
+// 		n[i*3+0] = float32(p.n.x)
+// 		n[i*3+1] = float32(p.n.y)
+// 		n[i*3+2] = float32(p.n.z)
+
+// 		uv[i*2+0] = float32(p.uv.X)
+// 		uv[i*2+1] = float32(p.uv.Y)
+
+// 	}
+
+// 	state.sendMakeMesh(name)
+// 	state.sendData(5, vc, v, 0)                         //positions
+// 	state.sendData(6, vc, n, 0)                         //normals
+// 	state.sendData(7, vc, uv, 0)                        //uvs
+// 	state.sendData(8, m.faceCount, m.getFaces(m.fi), 0) //faces (client will then create mesh)
+
+// }
+
+//see ToByteBuffer in Vector3.go
+// func writeVec3Binary(b *bytes.Buffer, e binary.ByteOrder, v *Vec3) {
+// 	binary.Write(b, e, float32(v.x))
+// 	binary.Write(b, e, float32(v.y))
+// 	binary.Write(b, e, float32(v.z))
+// }
+
+func (player *player) sendThings(things []*thing, e binary.ByteOrder) {
+
+	player.sendBytes(thingsToBytes(things, e))
+
+}
+
+// func (p *player) sendMassDetail(m *mass) {
+// 	buff := new(bytes.Buffer)
+// 	e := binary.LittleEndian
+// 	binary.Write(buff, e, byte(msgMassDetail)) //Mass
+// 	binary.Write(buff, e, uint32(m.index))
+// 	m.writeBinary(e, buff, true)
+
+// 	p.sendBinary(buff.Bytes())
+// }
+
+func (p *player) sendGameId(gameId uint32, e binary.ByteOrder) {
+	buff := new(bytes.Buffer)
+	binary.Write(buff, e, byte(msgGameId)) //masses
+	binary.Write(buff, e, gameId)
+	p.sendBytes(buff.Bytes())
+
+}
+
+func (p *player) sendCamera(e binary.ByteOrder) {
+
+	p.sendBytes(p.camera.toBytes(e))
+
+}
+
+func (p *player) sendCursor(gridCursor *Vec3) {
+	buff := new(bytes.Buffer)
+	e := binary.LittleEndian
+	binary.Write(buff, e, byte(msgCursor)) //masses
+	gridCursor.toByteBuffer(buff, e)
+	p.sendBytes(buff.Bytes())
+}
+
+func (p *player) sendHighlit() {
+	buff := new(bytes.Buffer)
+	e := binary.LittleEndian
+	binary.Write(buff, e, byte(msgHighlit)) //masses
+
+	hm, ht, hs := int32(-1), int32(-1), int32(-1)
+	if p.highlit.mass != nil {
+		logit("hm", p.highlit.mass.index)
+		hm = p.highlit.mass.index
+	}
+	if p.highlit.thing != nil {
+		ht = p.highlit.thing.index
+	}
+	if p.highlit.spring != nil {
+		hs = p.highlit.spring.index
+	}
+	binary.Write(buff, e, hm)
+	binary.Write(buff, e, ht)
+	binary.Write(buff, e, hs) //spring index within the thing
+	p.sendBytes(buff.Bytes())
+
+}
+
+func (p *player) sendMessage(msg string, sev string) {
+
+	logit(msg)
+	buff := new(bytes.Buffer)
+	e := binary.LittleEndian
+	binary.Write(buff, e, byte(msgMessage))
+	binary.Write(buff, e, byte(len(msg)))
+	binary.Write(buff, e, []byte(msg))
+	binary.Write(buff, e, byte(len(sev)))
+	binary.Write(buff, e, []byte(sev))
+
+	p.sendBytes(buff.Bytes())
+
+}
+
+func binaryPlayers(players map[uint32]*player, e binary.ByteOrder) []byte {
+	buff := new(bytes.Buffer)
+
+	binary.Write(buff, e, byte(msgPlayers))
+	binary.Write(buff, e, uint32(len(players))) //number of players
+	for id, p := range players {
+		binary.Write(buff, e, id) //unique player ID (Uint32)
+		binary.Write(buff, e, byte(len(p.name)))
+		binary.Write(buff, e, []byte(p.name))  //curent player name (may change)
+		binary.Write(buff, e, p.vehicle.index) //thing index of their current vehicle
+		binary.Write(buff, e, p.camera.toBytes(e))
 	}
 
-	meshPayload := meshPayload{Name: name, Verts: v, Faces: m.fi, Norms: n, UV: uv}
-	state.sendToAll(&reply{Cmd: "mesh", Payload: meshPayload})
+	return buff.Bytes()
+}
+
+func thingsToBytes(things []*thing, e binary.ByteOrder) []byte {
+
+	buff := new(bytes.Buffer)
+
+	binary.Write(buff, e, byte(msgThings))
+	binary.Write(buff, e, uint32(len(things))) //number of things
+	for _, t := range things {
+		binary.Write(buff, e, uint32(t.index))
+		binary.Write(buff, e, byte(len(t.meshName)))
+		binary.Write(buff, e, []byte(t.meshName))
+		//binary.Write(buff, e, make([]byte, len(t.meshname)%4+2)) //padding
+
+		t.offset.toByteBuffer(buff, e)
+		t.scale.toByteBuffer(buff, e)
+
+		binary.Write(buff, e, uint32(t.omi))
+		binary.Write(buff, e, uint32(t.fmi))
+		binary.Write(buff, e, uint32(t.rmi))
+
+		binary.Write(buff, e, uint32(len(t.springs)))
+		for _, spring := range t.springs {
+			binary.Write(buff, e, uint32(spring.m1.index))
+			binary.Write(buff, e, uint32(spring.m2.index))
+
+		}
+	}
+
+	return buff.Bytes()
 
 }
 
-func makeLand(splits int, maxHeight float64, dist float64) *mesh {
+func massesToBytes(masses []*mass, e binary.ByteOrder, withDetail bool, playerSelected map[*mass]bool) []byte {
 
-	land := NewMesh("land") //&state.land    //get a reference to state.land (saves a lot of typing)
-	land.verts = []*vert{}  //clear the verts
+	buff := new(bytes.Buffer)
 
-	seed := uint64(time.Now().Nanosecond())
+	binary.Write(buff, e, byte(msgMasses)) //masses
+	binary.Write(buff, e, uint32(len(masses)))
+
+	if withDetail {
+		binary.Write(buff, e, byte(1))
+	} else {
+		binary.Write(buff, e, byte(0))
+	}
+
+	//send the masses
+	for _, m := range masses {
+		binary.Write(buff, e, uint32(m.index))
+		selected := byte(0)
+		present, isSelected := playerSelected[m]
+		if present && isSelected {
+			selected = byte(1)
+		}
+
+		m.writeBinary(buff, e, withDetail, selected) //only send the position
+	}
+
+	return buff.Bytes()
+
+}
+func (player *player) sendMasses(masses []*mass, withDetail bool, e binary.ByteOrder) {
+	player.sendBytes(massesToBytes(masses, e, withDetail, player.selectedMasses))
+	player.sendVectors()
+
+}
+
+func (player *player) sendMakeMesh(name string, numVerts uint32, numFaces uint32) {
+	buff := new(bytes.Buffer)
+	e := binary.LittleEndian
+	binary.Write(buff, e, byte(msgMesh))
+	binary.Write(buff, e, byte(len(name)))
+	binary.Write(buff, e, []byte(name))
+	binary.Write(buff, e, make([]byte, len(name)%4+2)) //padding
+	binary.Write(buff, e, numVerts)
+	binary.Write(buff, e, numFaces)
+
+	player.sendBytes(buff.Bytes())
+}
+
+func (player *player) sendVectors() {
+
+	//send the mass index, vector and color - show lift at the wingtips (althoug it is actually shared between the three verts)
+
+	buff := new(bytes.Buffer)
+	e := binary.LittleEndian
+	binary.Write(buff, e, byte(msgVectors))
+
+	white := uint32(0xffffff)
+
+	for _, m := range player.state.masses {
+		if m.axle != nil {
+			m.p.toByteBuffer(buff, e)
+			m.axle.p.toByteBuffer(buff, e)
+			binary.Write(buff, e, white) //16 (or whatever) standard colours
+		}
+		if m.wingRoot != nil {
+
+			m.p.toByteBuffer(buff, e)
+			m.wingRoot.p.toByteBuffer(buff, e)
+			binary.Write(buff, e, white)
+
+			centreOfLift := m.p.add(m.wingRoot.p).add(m.axle.p).multiply(1.0 / 3.0)
+			centreOfLift.toByteBuffer(buff, e)
+
+			liftVector := m.axle.p.sub(m.wingRoot.p).cross(m.axle.p.sub(m.p)).normalise()
+			wingAxis := m.axle.p.sub(m.p).normalise()
+			liftVector = liftVector.rotateAbout(wingAxis, m.aoa) //additional angle of attack (in radians)
+			centreOfLift.add(liftVector).toByteBuffer(buff, e)
+
+			binary.Write(buff, e, white)
+
+			//todo - acutal lift and drag vectors
+
+		}
+	}
+
+	player.sendBytes(buff.Bytes())
+}
+
+// used for sending section of the interleaved (often) floating point data that makes up vertex, normal, position and index buffers
+// in a format very close to that need by the GPU (or three.js buffers)
+func (player *player) sendData(name string, opCode msgEnum, elementOffset uint32, elementCount uint32, data interface{}) {
+	buff := new(bytes.Buffer)
+	e := binary.LittleEndian
+	binary.Write(buff, e, opCode)
+	binary.Write(buff, e, byte(len(name)))
+	binary.Write(buff, e, []byte(name))
+	binary.Write(buff, e, make([]byte, len(name)%4+2)) //padding
+
+	binary.Write(buff, e, elementOffset)
+	binary.Write(buff, e, elementCount)
+	binary.Write(buff, e, data)    //x,y,z float32 triples (or uint16 face indices)
+	player.sendBytes(buff.Bytes()) //&reply{Cmd: "mesh", Payload: meshPayload})
+
+}
+
+func (player *player) makeLand(pos *Vec3, splits int, maxHeight float64, dist float64) {
+
+	player.landMesh = NewMesh("land", 65000) //&state.land    //get a reference to state.land (saves a lot of typing)
+	land := player.landMesh
+	player.lastLandPos = pos
+
+	land.verts = []*vert{} //clear the verts
+
+	seed := uint64(0) //uint64(time.Now().Nanosecond())
 	logit("seed:" + strconv.Itoa(int(seed)))
 
 	rnGen = rand.New(rand.NewPCG(seed+1, seed))
 
-	land.addOrReuseVertAtXZ(newVec3(0, 0, dist))
-	land.addOrReuseVertAtXZ(newVec3(dist, 0, -dist))
-	land.addOrReuseVertAtXZ(newVec3(-dist, 0, -dist))
+	//(rnGen.Float64()-.5)*maxHeight
+	land.addVert(newVec3(0, 0, dist), false, 0, 0)
+	land.addVert(newVec3(dist, 0, -dist), false, 0, 0)
+	land.addVert(newVec3(-dist, 0, -dist), false, 0, 0)
 
-	// hdist := dist / 2
-	// lnd.addOrReuseVertAtXZ(newVec3(0, 0, hdist))
-	// lnd.addOrReuseVertAtXZ(newVec3(hdist, 0, -hdist))
-	// lnd.addOrReuseVertAtXZ(newVec3(-hdist, 0, -hdist))
+	t := newTri(land, []uint16{0, 1, 2}, 0)
+	player.landTri = t
 
-	t := land.makeTri(0, 0, 1, 2) //make a depth 0 triangle within the mesh
+	ts := time.Now()
+	t.split(land, pos, splits, maxHeight) //split the triangle into 4 recursively
+	t.patch(land)
+	logit("splitting took", time.Since(ts).Milliseconds())
 
-	// r := newRing(0, 1, 2)
-	// r.children = append(r.children, newRing(3, 4, 5))
-
-	// r.triangulate(t)
-
-	// //Recursively split landscape
-	t.split(land, splits, maxHeight) //spring the triangle 4 times recursively
-	numFaces := 1 << (2 * splits)    //left shift 2*splits - 4 splits = 16 faces
-
-	land.fi = make([]int, numFaces*3) //face vert indices (three per triangle)
-
-	p := int(0)
-	t.gather(splits, land.fi, &p) //get all the indices of the verts at depth 4
-
-	land.fi = land.fi[:p] //truncate (actually redundant)
-
-	land.generateNormals()
-
-	// //cull every trianlge below the sea
-	// nfi := make([]int, len(fi))
-
-	// o := 0
-	// for i := 0; i < len(fi); i += 3 {
-
-	// 	a := verts[fi[i]].p
-	// 	b := verts[fi[i+1]].p
-	// 	c := verts[fi[i+2]].p
-
-	// 	if a.Y > 0 || b.Y > 0 || c.Y > 0 {
-	// 		nfi[o] = fi[i]
-	// 		nfi[o+1] = fi[i+1]
-	// 		nfi[o+2] = fi[i+2]
-	// 		o += 3
-	// 	}
-	// }
-
-	// fi = nfi[:o] //keep the shortened face list
-
-	//move every undewater vertex to the surface
-	land.yMax = float64(0)
-	for i := 0; i < len(land.verts); i++ {
-		// 	if verts[i].p.Y < 0 {
-		// 		verts[i].p.Y = 0
-		// 	}
-		// 	// verts[i].p.X += (rnGen.Float64() - float64(.5)) * 100
-		// 	// verts[i].p.Z += (rnGen.Float64() - float64(.5)) * 100
-		if land.verts[i].p.Y > land.yMax {
-			land.yMax = land.verts[i].p.Y
-		}
-
-	}
-
-	//generate UVs
-	for _, v := range land.verts {
-		//v := &lnd.verts[i] //DONT use range value here - we need to modify the actual vert (not a copy!)
-		v.n = v.n.normalise()
-		//use the angle of the normal projected onto x/y as the u component
-		//TODO incororate slope of the terrain - if the terrain is flatter..
-		//that the v component from lower down - this should put now on flat mountaintops
-		//similarly north facing slopes should get their v component from higher in the map
-		v.uv = Vector{math.Atan2(v.n.X, v.n.Z) / float64(6.28), v.p.Y / land.yMax}
-	}
-
-	//randomize Ys (AFTER) generating TC's
-	for _, v := range land.verts {
-		v.p.Y += (rnGen.Float64() - float64(.5)) * 100
-		//if v.p.Y < 0 {
-		//	v.p.Y = 0
-		//}
-	}
-
-	y := []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-	t.getY(300, 200, y)
-
-	logit(y)
-
-	logit(p)
-	logit(len(land.verts))
-
-	return land
+	player.sendLand("land", true)
 
 }
+
+func (m *mesh) slowProbe(p0, p1 *Vec3) *Vec3 {
+
+	sd := 100000000.0
+	var p *Vec3 = nil
+	for i := 0; i < len(m.fi); i += 3 {
+		t := m.triangleFrom(i)
+		pop := t.probePlane(p0, p1)
+
+		if pop != nil {
+			d := pop.distanceFrom(p0)
+			if d < sd {
+				if t.contains(pop, true, true) {
+					p = pop
+					sd = d
+				}
+			}
+		}
+	}
+	return p
+
+}
+
+func (t *Tri) bltCount(count *int) {
+
+	if len(t.children) == 0 {
+		*count++
+	}
+
+	for _, c := range t.children {
+		c.bltCount(count)
+	}
+
+}
+
+// func (m *mesh) makeFaces(t *Tri) {
+
+// 	bltCount := 0
+// 	t.bltCount(&bltCount) //count the bottom level triangles
+
+// 	logit("bltCount", bltCount)
+// 	logit(len(m.verts), " verts")
+
+// 	m.fi = make([]uint16, bltCount*3) //face vert indices (three per triangle)
+
+// 	p := 0
+// 	t.gather(m.fi, &p) //get all the indices of triangles with no children
+
+// 	m.generateNormals() //generates the face normals and avergaes them to all of their verts
+
+// 	// //cull every trianlge below the sea
+// 	// nfi := make([]int, len(fi))
+
+// 	// o := 0
+// 	// for i := 0; i < len(fi); i += 3 {
+
+// 	// 	a := verts[fi[i]].p
+// 	// 	b := verts[fi[i+1]].p
+// 	// 	c := verts[fi[i+2]].p
+
+// 	// 	if a.Y > 0 || b.Y > 0 || c.Y > 0 {
+// 	// 		nfi[o] = fi[i]
+// 	// 		nfi[o+1] = fi[i+1]
+// 	// 		nfi[o+2] = fi[i+2]
+// 	// 		o += 3
+// 	// 	}
+// 	// }
+
+// 	// fi = nfi[:o] //keep the shortened face list
+
+// 	//move every undewater vertex to the surface
+// 	m.yMax = float64(-1000000)
+// 	m.yMin = float64(100000)
+// 	for i := 0; i < len(m.verts); i++ {
+// 		// 	if verts[i].p.Y < 0 {
+// 		// 		verts[i].p.Y = 0
+// 		// 	}
+// 		// 	// verts[i].p.X += (rnGen.Float64() - float64(.5)) * 100
+// 		// 	// verts[i].p.Z += (rnGen.Float64() - float64(.5)) * 100
+// 		y := m.verts[i].p.y
+// 		if y > m.yMax {
+// 			m.yMax = y
+// 		}
+// 		if y < m.yMin {
+// 			m.yMin = y
+// 		}
+
+// 	}
+
+// 	//generate UVs
+// 	for _, v := range m.verts {
+// 		//v := &lnd.verts[i] //DONT use range value here - we need to modify the actual vert (not a copy!)
+// 		v.n = v.n.normalise()
+// 		//use the angle of the normal projected onto x/y as the u component
+// 		//TODO incororate slope of the terrain - if the terrain is flatter..
+// 		//that the v component from lower down - this should put now on flat mountaintops
+// 		//similarly north facing slopes should get their v component from higher in the map
+
+// 		v.calcUV(m.yMin, m.yMax)
+// 		//v.uv = Vector{math.Atan2(v.n.x, v.n.z) / float64(6.28), v.p.y / m.yMax}
+// 	}
+
+// 	//randomize Ys (AFTER) generating TC's
+// 	// for _, v := range m.verts {
+// 	// 	v.p.Y += (rnGen.Float64() - float64(.5)) * 100
+// 	// 	//if v.p.Y < 0 {
+// 	// 	//	v.p.Y = 0
+// 	// 	//}
+// 	// }
+
+// 	logit(p, "faces indices", p/3, " faces")
+
+// }
 
 func testFloat(name string, f func() float64, expect float64, failMsg string) {
 
@@ -612,17 +758,17 @@ func testBool(name string, f func() bool, expect bool, failMsg string) {
 func tests() {
 
 	s := float64(100)
-	t1 := NewMesh("t1")
+	t1 := NewMesh("t1", 4)
 	t1.addVert(newVec3(0, 0, s), false, 0, 0)   //far
 	t1.addVert(newVec3(s, 0, -s), false, 0, 0)  //right
 	t1.addVert(newVec3(-s, 0, -s), false, 0, 0) //left
 
-	t1.fi = []int{0, 1, 2}
+	t1.fi = []uint16{0, 1, 2}
 
 	tt := t1.triangleFrom(0)
 
-	testFloat("Triangle, distance from point/plane (negative)", func() float64 { return tt.distanceFrom(newVec3(0, -50, 0)) }, -50, "distanceFrom wrong")
-	testFloat("Triangle, distance from point/plane (positive)", func() float64 { return tt.distanceFrom(newVec3(0, 50, 0)) }, 50, "distanceFrom wrong")
+	testFloat("Triangle, distance from point/plane (negative)", func() float64 { return newVec3(0, -50, 0).distanceFromPlaneOf(tt) }, -50, "distanceFrom wrong")
+	testFloat("Triangle, distance from point/plane (positive)", func() float64 { return newVec3(0, 50, 0).distanceFromPlaneOf(tt) }, 50, "distanceFrom wrong")
 
 	testBool("Triangle contains, (exclude verts and edges) - point inside",
 		func() bool { return tt.contains(newVec3(0, 0, 0), false, false) }, true, "contains wrong")
@@ -633,7 +779,7 @@ func tests() {
 	testBool("Triangle contains - on vertex - true", func() bool { return tt.contains(newVec3(0, 0, 100), false, false) }, false, "contains (on vertex)wrong")
 	testBool("Triangle contains - on edge - true ", func() bool { return tt.contains(newVec3(0, 0, 100), true, true) }, true, "contains (on vertex) wrong")
 
-	testFloat("Normal and edge are orthogonal ", func() float64 { return tt.normal().dot(tt.edge0()) }, 0, "normal and edge are not orthogonal")
+	testFloat("Normal and edge are orthogonal ", func() float64 { return tt.normal.dot(tt.edge0()) }, 0, "normal and edge are not orthogonal")
 
 	a := &Vec3{0, 2, 0}
 	b := &Vec3{1.1, 0, 0}
@@ -643,18 +789,18 @@ func tests() {
 
 	testFloat("Cross product orthogonal", func() float64 { return a.cross(b).dot(a) }, 0, "cross product not orthogonal")
 
-	clay := NewMesh("clay")
+	clay := NewMesh("clay", 4)
 	clay.addVert(newVec3(0, 100, 0), false, .5, 0)
 	clay.addVert(newVec3(100, 0, -100), false, 1, 1)
 	clay.addVert(newVec3(-100, 0, -100), false, 0, 1)
-	clay.fi = []int{0, 1, 2}
+	clay.fi = []uint16{0, 1, 2}
 	ct := clay.triangleFrom(0)
 
-	tool := NewMesh("tool")
+	tool := NewMesh("tool", 4)
 	tool.addVert(newVec3(0, 200, 0), false, 0, 0)
 	tool.addVert(newVec3(100, -50, -100), false, 0, 0)
 	tool.addVert(newVec3(-100, -50, -100), false, 0, 0)
-	tool.fi = []int{0, 1, 2}
+	tool.fi = []uint16{0, 1, 2}
 	tt = tool.triangleFrom(0)
 
 	facePens := ct.penetrationsByEdgesOf(tt, false)
@@ -682,13 +828,13 @@ func tetra() *mesh {
 
 	// t1.cut(t0)
 
-	tetra := NewMesh("clay")
+	tetra := NewMesh("clay", 4)
 	far := tetra.addVert(newVec3(0, 0, s), false, 0.5, 0)
-	right := tetra.addVert(newVec3(s, 0, -s), false, 1, 1)
-	left := tetra.addVert(newVec3(-s, 0, -s), false, 0, 1)
+	right := tetra.addVert(newVec3(-s, 0, -s), false, 1, 1)
+	left := tetra.addVert(newVec3(s, 0, -s), false, 0, 1)
 	top := tetra.addVert(newVec3(0, s, 0), false, 0.5, 0)
 
-	tetra.fi = []int{
+	tetra.fi = []uint16{
 		far, left, right, //bottom
 		top, right, left, //near/front face
 		top, far, right, //right face
@@ -703,23 +849,26 @@ func tetra() *mesh {
 
 	t2 := tetra.clone()
 	t2.name = "tool"
-	t2.verts[3].p.Y = 200 //make a tall and pointy tool
-	t2.verts[3].p.Z = 0   //make a tall and pointy tool
-	t2.verts[3].p.X = 0   //make a tall and pointy tool
+	t2.verts[3].p.y = 200 //make a tall and pointy tool
+	//t2.verts[3].p.Z = 0   //make a tall and pointy tool
+	//t2.verts[3].p.X = 0   //make a tall and pointy tool
 
-	t2.offset(newVec3(0, -50, 0)) //move it down 50 (and for towards the cam)
-	t2.rotateAbout(newVec3(0, 1, 0), math.Pi/6)
+	t2.offset(newVec3(0, 0, 0)) //move it down 50 (and for towards the cam)
+	//t2.rotateAbout(newVec3(0, 1, 0), math.Pi)
 
-	debugMesh := NewMesh("loop")
-	result := t2.cut(tetra, debugMesh)
+	//debugMesh := NewMesh("loop")
+	//result := t2.cut(tetra, debugMesh)
 
-	result.generateNormals()
+	//result.generateNormals()
 
 	//tree.generateNormals()
 	//return tree //tetra //tetra //return the mutated tetra
 
-	debugMesh.generateNormals()
-	return debugMesh //result
+	//debugMesh.generateNormals()
+
+	t2.generateNormals()
+
+	return t2 //result
 
 }
 
@@ -734,7 +883,7 @@ func (m *mesh) clone() *mesh {
 	//return a copy of this mesh
 	//the new mesh will have new verts, but the same faces
 	//the new mesh will have the same yMax as the old mesh
-	newMesh := NewMesh("clone of " + m.name)
+	newMesh := NewMesh("clone of "+m.name, uint16(len(m.fi)/3))
 	for _, v := range m.verts {
 		newMesh.addVert(v.p.clone(), false, v.uv.X, v.uv.Y) //newVec3(v.p.X, v.p.Y, v.p.Z))
 	}
@@ -751,20 +900,25 @@ func (m *mesh) offset(offset *Vec3) {
 
 func (m *mesh) generateNormals() {
 	//generate normals
+
+	j := 0
 	for i := 0; i < len(m.fi); i += 3 {
 
-		a := m.verts[m.fi[i]]   //& lets us manipulate the verts by reference
-		b := m.verts[m.fi[i+1]] //.p
-		c := m.verts[m.fi[i+2]] //.p
+		a := m.verts[m.fi[i]]
+		b := m.verts[m.fi[i+1]]
+		c := m.verts[m.fi[i+2]]
 
 		ab := b.p.sub(a.p)
 		ac := c.p.sub(a.p)
 
-		n := ab.cross(ac).normalise()
+		n := (ab.cross(ac)).normalise()
 
-		if n.Y < 0 {
+		//m.faceNormals[j] = n
+		j++
+
+		if n.y < 0 {
 			//panic("faces down")
-			n = n.multiply(-1)
+			//	n = n.multiply(-1)
 		}
 
 		a.n = a.n.add(n) //add the face normal to each vertex
@@ -774,39 +928,54 @@ func (m *mesh) generateNormals() {
 
 }
 
-func (m *mesh) addOrReuseVertAtXZ(p *Vec3) int {
+// func (m *mesh) addOrReuseVertAtXZ(p *Vec3) uint16 {
 
-	for i, v := range m.verts {
-		if v.p.X > p.X-0.01 && v.p.X < p.X+0.01 {
-			if v.p.Z > p.Z-0.01 && v.p.Z < p.Z+0.01 {
-				return i
-			}
-		}
-	}
+// 	for i, v := range m.verts {
+// 		if v.p.x > p.x-0.01 && v.p.x < p.x+0.01 {
+// 			if v.p.z > p.z-0.01 && v.p.z < p.z+0.01 {
+// 				return uint16(i)
+// 			}
+// 		}
+// 	}
 
-	return m.addVert(p, true, 0, 0)
-}
+// 	return m.addVert(p, false, 0, 0)
+// }
 
 // creates a triangle (which is NOT a face) from the indices of the verts
 // holds a pointer to this mesh for access to its verts
 // note - it does not add vertices or face indices to the mesh
-func (m *mesh) makeTri(depth int, vi ...int) *Tri {
-	if vi[0] == vi[1] || vi[0] == vi[2] || vi[1] == vi[2] {
-		panic("degenerate triangle")
-	}
+// func (m *mesh) makeTri(depth int, fi uint16, vi ...uint16) *Tri {
+// 	if m == nil {
+// 		panic("mesh is nil")
+// 	}
 
-	p0 := m.verts[vi[0]].p
-	p1 := m.verts[vi[1]].p
-	p2 := m.verts[vi[2]].p
+// 	if vi[0] == vi[1] || vi[0] == vi[2] || vi[1] == vi[2] {
+// 		panic("degenerate triangle")
+// 	}
 
-	if p0.equals(p1) || p0.equals(p2) || p1.equals(p2) {
-		panic("infinitely thin triangle")
-	}
+// 	p0 := m.verts[vi[0]].p
+// 	p1 := m.verts[vi[1]].p
+// 	p2 := m.verts[vi[2]].p
 
-	return &Tri{depth: depth, Vi: vi, Children: []*Tri{}, mesh: m}
-}
+// 	if p0.equals(p1) || p0.equals(p2) || p1.equals(p2) {
+// 		panic("infinitely thin triangle")
+// 	}
 
-func (m *mesh) inAline(a, b, c int) bool {
+// 	if fi == 65535 {
+// 		if len(m.reuseFaces) > 0 {
+// 			fi = m.reuseFaces[0]
+// 			logit("reusing face", fi)
+// 			m.reuseFaces = m.reuseFaces[1:]
+// 		} else {
+// 			fi = m.faceCount
+// 			m.faceCount++
+// 		}
+// 	}
+
+// 	return newTri(m, fi, vi, depth) //&Tri{depth: depth, Vi: vi, Children: []*Tri{}, mesh: m}
+// }
+
+func (m *mesh) inAline(a, b, c uint16) bool {
 
 	ap := m.verts[a].p
 	bp := m.verts[b].p
@@ -826,6 +995,9 @@ func (m *mesh) inAline(a, b, c int) bool {
 
 func (m *mesh) triangleFrom(fi int) *Tri {
 
+	if m == nil {
+		panic("mesh is nil")
+	}
 	if fi%3 != 0 {
 		panic("panic - not a face index")
 	}
@@ -839,7 +1011,8 @@ func (m *mesh) triangleFrom(fi int) *Tri {
 		panic("infinitely thin triangle")
 	}
 
-	return &Tri{depth: 0, Vi: vi, Children: []*Tri{}, mesh: m}
+	return newTri(m, vi, 0)
+	//return &Tri{depth: 0, Vi: vi, Children: []*Tri{}, mesh: m}
 }
 
 // func (ps *penSet) setNeighbours() {
@@ -865,7 +1038,7 @@ func (tool *mesh) cut(clay *mesh, debugMesh *mesh) *mesh {
 		panic("tool and clay are the same mesh")
 	}
 
-	facelist := []int{}
+	facelist := []uint16{}
 
 	//for each face of the clay - DONT include the ones we add !!
 
@@ -875,7 +1048,9 @@ func (tool *mesh) cut(clay *mesh, debugMesh *mesh) *mesh {
 	for i := 0; i < len(clay.fi); i += 3 {
 
 		ct := clay.triangleFrom(i)
-		ctn := ct.normal()
+		ct.check()
+
+		ctn := ct.normal
 
 		//for each triangle face of the tool mesh
 		logit("before", len(output.verts))
@@ -891,28 +1066,28 @@ func (tool *mesh) cut(clay *mesh, debugMesh *mesh) *mesh {
 		//we now have many directed segments - that should form closed loops, none of which should intersect
 		//some of them may entirely contain others
 
-		loops := segs.getLoops(ct, output)
-
-		for l := 1; l < len(loops); l++ {
-			//loops[l].reverse()
-			loops[0].merge(loops[l])
+		loopSet := segs.getLoops(output)
+		if len(loopSet.loops) == 0 {
+			panic("no loops")
 		}
 
-		loops[0].mesh(output, ctn, debugMesh)
+		compoundLoop := loopSet.merge()
 
-		//trianglulate loop 0 (which contains all bridged/merged loops)
-		if len(loops) == 0 {
-			logit("no loops !!")
-		} else {
-			facelist = append(facelist, loops[0].triangulate(debugMesh, output, ctn)...) //triangulates around the child holes held in the ring (at ct.depth+1)
-		}
+		compoundLoop.debugMesh(output, ctn, debugMesh)
 
+		facelist = append(facelist, compoundLoop.triangulate(debugMesh, output, ctn)...) //triangulates around the child holes held in the ring (at ct.depth+1)
 	}
 
 	output.fi = facelist
 	output.generateNormals()
 
 	debugMesh.generateNormals()
-	return output //debugmesh
+	return debugMesh
 
+}
+
+func (l *loop) clone() *loop {
+	n := NewLoop()
+	n.vi = slices.Clone(l.vi)
+	return n
 }

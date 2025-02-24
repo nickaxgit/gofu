@@ -1,83 +1,73 @@
 package main
 
-import (
-	"strconv"
-)
+import ()
 
-type Spring struct {
-	Length      float64 `json:"-"` //length is not needed clientside
-	M1          int     `json:"m1"`
-	M2          int     `json:"m2"`
-	Collideable bool    `json:"-"` //collision are not handled client side (so the client doesn't need to know)
+type spring struct {
+	index       int32
+	restLength  float64 `json:"-"` //length is not needed clientside
+	m1          *mass
+	m2          *mass
+	collideable bool `json:"-"` //collision are not handled client side (so the client doesn't need to know)
 }
 
-func NewSpring(masses []*Mass, m1 int, m2 int, collideable bool) *Spring {
+func NewSpring(m1 *mass, m2 *mass, collideable bool) *spring {
 	//set rest length at constrcution
 	if m1 == m2 {
-		panic(`degenerate spring (both ends same mass) at construction ` + strconv.Itoa(m1))
+		panic(`degenerate spring (both ends same mass) at construction `)
 	}
-	length := masses[m1].P.distanceFrom(&masses[m2].P)
-	if length == 0 {
+	restLength := m1.p.distanceFrom(m2.p)
+	if restLength == 0 {
 		panic(`zero length spring at construction`)
 	}
-	return &Spring{length, m1, m2, collideable}
+	return &spring{-1, restLength, m1, m2, collideable}
 }
 
-func (s *Spring) crosses(m []*Mass, p1 *Vector, p2 *Vector) bool {
-	//do the lines p1,p2 and p3,p4 cross
-	return lineSegmentsCross(p1, p2, &m[s.M1].P, &m[s.M2].P) //TODO tidy/refactor
+// func (s *Spring) crosses(m []*Mass, p1 *Vector, p2 *Vector) bool {
+// 	//do the lines p1,p2 and p3,p4 cross
+// 	return lineSegmentsCross(p1, p2, &m[s.M1].P, &m[s.M2].P) //TODO tidy/refactor
+
+// }
+
+func (s *spring) closestPointTo(p *Vec3) *Vec3 {
+	return p.closestPointOnLine(s.m1.p, s.m2.p)
 
 }
 
-func (s *Spring) closestPointTo(masses []*Mass, p *Vector) Vector {
-	return p.closestPointOnLine(&masses[s.M1].P, &masses[s.M2].P)
+func (s *spring) stretch(masses []*mass) {
 
-}
-
-func (s *Spring) stretch(masses []*Mass) {
-	m1 := masses[s.M1]
-	m2 := masses[s.M2]
-
-	if m1.Fixed && m2.Fixed {
+	if s.m1.fixed && s.m2.fixed {
 		return
 	} //if both ends are pinned, then the spring does not stretch
 
-	delta := m2.P.subtract(&m1.P)
-	distance := delta.length()
+	springVector := s.m2.p.sub(s.m1.p)
+	currentLength := springVector.length()
 
-	if distance == 0 {
+	if currentLength == 0 {
 		panic(`zero length spring`)
 	}
 
-	difference := (s.Length - distance) / distance
-	move := delta.multiply(difference * 0.5 * 0.6) //stiffness
-	if !m1.Fixed {
-		m1.P.subIn(move)
+	err := (s.restLength - currentLength) / currentLength //what is the error as a fraction of the current vector
+	move := springVector.multiply(err * 0.4)              //0.6) //stiffness
+	if !s.m1.fixed {
+		s.m1.p.subIn(move)
 	} //unless they're pinned
-	if !m2.Fixed {
-		m2.P.addIn(move)
+	if !s.m2.fixed {
+		s.m2.p.addIn(move)
 	}
-}
-
-func (s *Spring) contains(masses []*Mass, p *Vector) bool {
-
-	m1 := masses[s.M1]
-	m2 := masses[s.M2]
-
-	return p.liesBetween(&m1.P, &m2.P)
 
 }
 
-func (s *Spring) distanceFrom(p *Vector, masses []*Mass) float64 {
+func (s *spring) contains(p *Vec3) bool {
+	return p.liesBetween(s.m1.p, s.m2.p)
+}
 
-	m1 := masses[s.M1]
-	m2 := masses[s.M2]
+func (s *spring) distanceFrom(p *Vec3) float64 {
 
-	if s.contains(masses, p) {
-		return p.distanceFromLine(&m1.P, &m2.P)
+	if s.contains(p) {
+		return p.distanceFromLine(s.m1.p, s.m2.p)
 	} else {
-		d1 := p.distanceFrom(&m1.P)
-		d2 := p.distanceFrom(&m2.P)
+		d1 := p.distanceFrom(s.m1.p)
+		d2 := p.distanceFrom(s.m2.p)
 		if d1 < d2 {
 			return d1
 		} else {
@@ -87,9 +77,13 @@ func (s *Spring) distanceFrom(p *Vector, masses []*Mass) float64 {
 
 }
 
-func (s *Spring) direction(m []*Mass) Vector {
-	v := m[s.M2].P.subtract(&m[s.M1].P)
+func (s *spring) direction() *Vec3 {
+	v := s.m2.p.sub(s.m1.p)
 	return v.normalise()
+}
+
+func (s *spring) send(player *player, state *state) {
+	state.send(player, &reply{Cmd: "spring", Payload: s})
 }
 
 func lineSegmentsCross(a1 *Vector, a2 *Vector, b1 *Vector, b2 *Vector) bool {
