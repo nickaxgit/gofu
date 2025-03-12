@@ -477,7 +477,7 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 				tm2 := transformed[s.m2]
 				if tm1 != nil || tm2 != nil {
 					if tm1 == nil {
-						tm1 = s.m1
+						tm1 = s.m1 //needs to be the mass at the transformed positions
 					}
 					if tm2 == nil {
 						tm2 = s.m2
