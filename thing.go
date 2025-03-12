@@ -1,59 +1,33 @@
 package main
 
+import (
+	"bytes"
+	"encoding/binary"
+)
+
 type thing struct {
 	//a thing is really a collection of Springs (which never intersect)
 	//to which we pin an image
-	state    *state // a reference back to the game/state it belongs to
-	index    int32
-	omi      int32 // *mass //origin mass
-	fmi      int32 // *mass // forward mass (defines z axis)
-	rmi      int32 // *mass // right mass (deinfes x axis)
-	springs  []*spring
-	faces    []*face
-	meshName string
-	offset   *Vec3
-	scale    *Vec3
-	masses   map[*mass]bool //all the masses in the thing (once) (used for applying lift)
+	state      *state // a reference back to the game/state it belongs to
+	index      int32
+	om         *mass //origin mass
+	fm         *mass //forward mass (defines z axis)
+	rm         *mass // right mass (deinfes x axis)
+	springs    []*spring
+	faces      []*face
+	meshName   string
+	offset     *vec3
+	scale      *vec3
+	masses     map[*mass]bool //all the masses in the thing (once) (used for applying lift)
+	visibility byte
 }
 
 func NewThing(meshName string) *thing {
-	return &thing{meshName: meshName, scale: newVec3(1, 1, 1), offset: newVec3(0, 0, 0), springs: []*spring{}, faces: []*face{}, masses: make(map[*mass]bool)}
+	return &thing{meshName: meshName, scale: newVec3(1, 1, 1), offset: newVec3(0, 0, 0), springs: []*spring{}, faces: []*face{}, masses: make(map[*mass]bool), visibility: 1}
 }
 
-// func (t *thing) payload() thingPayload {
-// 	return thingPayload{
-// 		Ti:         t.index,
-// 		MeshName:   t.meshName,
-// 		Offset:     t.offset.payload(),
-// 		Scale:      t.scale.payload(),
-// 		Omi:        t.omi,
-// 		Fmi:        t.fmi,
-// 		Rmi:        t.rmi,
-// 		SpringEnds: t.springEnds()} //mass index pairs
-// }
-
-//a compact from of the sping mass indices for transmission
-// func (t *thing) springEnds() []int {
-// 	ends := make([]int, len(t.springs)*2)
-// 	for i, s := range t.springs {
-// 		ends[i*2] = s.m1.index
-// 		ends[i*2+1] = s.m2.index
-// 	}
-// 	return ends
-// }
-
-// func (t *thing) send(player *player) {
-
-// 	player.sendThing(t.index, t.meshName, t.offset, t.scale, t.omi, t.fmi, t.rmi, smi)
-
-// 	//msg := &reply{Cmd: "thing", Payload: t.payload()}
-
-// 	//t.state.send(player, msg)
-
-// }
-
-//find the closest point on any face in the thing to the point p
-func (thing *thing) distanceFrom(p *Vec3) float64 {
+// find the closest point on any face in the thing to the point p
+func (thing *thing) distanceFrom(p *vec3) float64 {
 	bestDist := 1000000.0
 	// for _, f := range thing.faces {
 	// 	d := p.distanceFromFace(f) //f.distanceFrom(m, p, false)
@@ -73,7 +47,7 @@ func (thing *thing) contains(p *Vector, m []*mass) bool {
 
 }
 
-func (thing *thing) centreOfMass(m []*mass) *Vec3 {
+func (thing *thing) centreOfMass(m []*mass) *vec3 {
 	//return the centre of mass of the thing
 	//this is the average of the masses of the springs
 	//TODO - account for weights
@@ -85,7 +59,7 @@ func (thing *thing) centreOfMass(m []*mass) *Vec3 {
 	return c.multiply(1.0 / float64(len(thing.springs)))
 }
 
-func (thing *thing) closestPointOnEdge(masses []*mass, wp *Vec3) *Vec3 {
+func (thing *thing) closestPointOnEdge(masses []*mass, wp *vec3) *vec3 {
 	bestDist := float64(1000000)
 	bestPoint := newVec3(0, 0, 0)
 	for _, s := range thing.springs {
@@ -99,4 +73,70 @@ func (thing *thing) closestPointOnEdge(masses []*mass, wp *Vec3) *Vec3 {
 		}
 	}
 	return bestPoint
+}
+func (t *thing) toByteBuffer(buff *bytes.Buffer) {
+	binary.Write(buff, le, t.index)
+	binary.Write(buff, le, byte(len(t.meshName)))
+	binary.Write(buff, le, []byte(t.meshName))
+	//binary.Write(buff, le, make([]byte, len(t.meshname)%4+2)) //padding
+
+	t.offset.toByteBuffer(buff)
+	t.scale.toByteBuffer(buff)
+
+	binary.Write(buff, le, t.om.index)
+	binary.Write(buff, le, t.fm.index)
+	binary.Write(buff, le, t.rm.index)
+	binary.Write(buff, le, t.visibility)
+
+	binary.Write(buff, le, uint32(len(t.springs)))
+	for _, spring := range t.springs {
+		if spring.m1.index == spring.m2.index {
+			panic("degenerate spring whilst serialising")
+		}
+		binary.Write(buff, le, spring.m1.index)
+		binary.Write(buff, le, spring.m2.index)
+		binary.Write(buff, le, spring.collideable)
+		binary.Write(buff, le, float32(spring.restLength))
+
+	}
+}
+
+func (t *thing) fromByteBuffer(buff *bytes.Buffer, e binary.ByteOrder) {
+
+	mnl := byte(0)
+	binary.Read(buff, e, &mnl)
+	meshName := make([]byte, mnl)
+	binary.Read(buff, e, &meshName)
+	t.meshName = string(meshName)
+
+	t.offset.fromByteBuffer(buff)
+	t.scale.fromByteBuffer(buff)
+
+	var omi, fmi, rmi int32
+	binary.Read(buff, e, &omi)
+	binary.Read(buff, e, &fmi)
+	binary.Read(buff, e, &rmi)
+	t.om = t.state.masses[omi]
+	t.fm = t.state.masses[fmi]
+	t.rm = t.state.masses[rmi]
+	binary.Read(buff, e, &t.visibility)
+
+	ns := uint32(0)
+	binary.Read(buff, e, &ns)
+	t.springs = make([]*spring, 0)
+	for i := 0; i < int(ns); i++ {
+
+		m1 := int32(0)
+		m2 := int32(0)
+		collideable := byte(0)
+		restLength := float32(0)
+		binary.Read(buff, e, &m1)
+		binary.Read(buff, e, &m2)
+		binary.Read(buff, e, &collideable)
+		binary.Read(buff, e, &restLength)
+
+		spring := t.AddSpring(t.state.masses[m1], t.state.masses[m2], collideable)
+		spring.restLength = float64(restLength)
+
+	}
 }

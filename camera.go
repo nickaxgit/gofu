@@ -4,28 +4,62 @@ import "encoding/binary"
 import "bytes"
 
 type camera struct {
-	position  *Vec3
-	direction *Vec3
-	up        *Vec3
-	farPos    *Vec3
+	position  *vec3
+	direction *vec3
+	up        *vec3
+	farPos    *vec3
 }
 
-func (c *camera) readBinary(buff *bytes.Buffer, e binary.ByteOrder) {
+func (cam *camera) follow(t *thing) {
 
-	c.position.fromByteBuffer(buff, e)
-	c.direction.fromByteBuffer(buff, e)
-	c.up.fromByteBuffer(buff, e)
+	o := t.springs[0].m2.p
+
+	// if p.landTri != nil {
+	// 	y0pos := newVec3(o.x, 0, o.z)
+	// 	if y0pos.distanceFrom(p.lastLandPos) > 50 {
+	// 		p.makeLand(y0pos, 10, 2000, 10000) //makes and sends new land
+	// 	}
+	// }
+
+	fl := t.springs[1].m2.p
+	//xa:=  o.sub(m[t.springs[0].m1].P)
+	za := fl.sub(o).normalise()
+
+	cam.position = o.sub(za.multiply(50))
+	// leaf := p.landTri.vProbe(newVec3(p.camera.position.x, 0, p.camera.position.z))
+
+	// if leaf != nil {
+
+	//cp = leaf.probePlane(newVec3(cp.x, -10000, cp.z), newVec3(cp.x, 10000, cp.z))
+	cam.position.y = o.y + 10
+
+	//cp.y = 2000
+	cam.direction = o.sub(cam.position).normalise()
 
 }
 
-func (c *camera) toBytes(e binary.ByteOrder) []byte {
+func (c *camera) fromByteBuffer(buff *bytes.Buffer, e binary.ByteOrder) {
+
+	msg := byte(0)
+	binary.Read(buff, e, &msg)
+	if msgEnum(msg) != msgCamera {
+		panic("camera not next")
+	}
+	c.position.fromByteBuffer(buff)
+	c.direction.fromByteBuffer(buff)
+	c.up.fromByteBuffer(buff)
+
+}
+
+func (c *camera) toBytes() []byte {
 
 	buff := new(bytes.Buffer)
-	binary.Write(buff, e, byte(msgCamera))
+	binary.Write(buff, le, byte(msgCamera))
 
-	c.position.toByteBuffer(buff, e)
-	c.direction.toByteBuffer(buff, e)
-	c.up.toByteBuffer(buff, e)
+	c.position.toByteBuffer(buff)
+	c.direction.toByteBuffer(buff)
+	c.up.toByteBuffer(buff)
 
 	return buff.Bytes()
+
 }

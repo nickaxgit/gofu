@@ -11,16 +11,10 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
-
-// type block struct {
-// 	//GameId     int
-// 	//PlayerName string
-// 	Msgs []msg
-// }
 
 // these must be upper cased or theu don't get unmarshalled
 type msg struct {
@@ -28,23 +22,6 @@ type msg struct {
 	Key     string    `json:"key"`
 	Payload []float64 `json:"payload"`
 }
-
-// type inKeyPayload struct {
-// 	key   string
-// 	shift bool
-// 	ctrl  bool
-// 	alt   bool
-// }
-
-// type VectorPayload struct {
-// 	x float64
-// 	y float64
-// }
-
-// type qHolder struct {
-// 	mutex *sync.Mutex
-// 	q     map[int][]*reply //sets of replies by sqn
-// }
 
 // these must be uppercased for marshalling
 type reply struct {
@@ -55,26 +32,16 @@ type reply struct {
 type ModeEnum string
 
 const (
-	editing      = "Editing"
-	playing      = "Running"
-	addingSpring = "Adding spring"
-	startMove    = "Select the start point of the move"
-	moving       = "Moving - Select the destination"
+	editing = "Editing"
+	//playing      = "Running"
+	adding     = "Adding"
+	stretching = "Stretching"
+	startMove  = "Select the start point of the move"
+	moving     = "Moving - Select the destination"
 )
 
-var games map[uint32]*state //the data of games in progress - by id
+var games map[string]*state //the data of games in progress - by id
 var accountsByGuid map[string]*account
-
-//var obq map[string]*qHolder //*reply //qued outbound JSON data (replies), per player (new mass index, position triples)
-
-// func spotOccupied(props []Prop, p *Vector, clearance float64) bool {
-// 	for _, prop := range props {
-// 		if prop.Position.distanceFrom(p) < prop.Radius+clearance {
-// 			return true
-// 		}
-// 	}
-// 	return false
-// }
 
 func stepWorlds() {
 
@@ -103,7 +70,7 @@ func stepWorlds() {
 }
 
 // find a random start pos on a triangular land of size +/- s
-func (state *state) RandomStartPos(s float64) *Vec3 {
+func (state *state) RandomStartPos(s float64) *vec3 {
 
 	z := (rand.Float64() - .5) * s * 2
 	xr := (1 - (z+s)/(2*s)) * s //range of x at z (to stay on dry land)
@@ -116,7 +83,7 @@ func (state *state) RandomStartPos(s float64) *Vec3 {
 }
 
 // what is distance is the closest thing to P
-func (state *state) thingClearance(p *Vec3) float64 {
+func (state *state) thingClearance(p *vec3) float64 {
 
 	clearance := float64(10000)
 	var c float64
@@ -132,23 +99,25 @@ func (state *state) thingClearance(p *Vec3) float64 {
 
 func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player {
 	//create a new game
-	state := NewState() //asigns a random game id
-	games[state.gameId] = state
+	id := fmt.Sprintf("%d", uint32(rand.Float32()*1000000))
+	state := NewState(id) //asigns a random game id
+	games[state.filename] = state
 
 	s := float64(10000) //+/- 10km land = 200 km^2
 
 	y0pos := state.RandomStartPos(s)
 	player := state.AddPlayer(playerId, playerName, y0pos, ws)
-	//player.makeLand(y0pos, 10, 2000, s)
+	player.makeLand(y0pos, 10, 2000, s) //makes and sends land
 	player.makeDozer(y0pos)
 
 	//state.scatterCoins(2000, 2000)
 
-	e := binary.LittleEndian
-	player.sendCamera(e)
-	player.sendMasses(state.masses, true, e)
-	player.sendThings([]*thing{player.vehicle}, e) //sends mesh name and springs
-	player.sendGameId(state.gameId, e)             //game id starts it running
+	player.camera.follow(player.vehicle)
+	player.sendCamera()
+
+	player.sendMasses(state.masses, true)
+	player.sendThings([]*thing{player.vehicle}) //sends mesh name and springs
+	player.sendGameId()                         //game id starts it running
 
 	//player.send(&reply{Cmd: "state", Payload: state.payload()})
 
@@ -168,7 +137,7 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 	//state.makeWater() //water is flowed and sent every cycle
 	//state.sendWater()
 
-	logit("Game created", state.gameId)
+	logit("Game created", state.filename)
 
 	state.qSound("dozer", player.vehicle.centreOfMass(state.masses), 0.1, "revs-"+playerName, true)
 
@@ -177,55 +146,48 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 	return player
 }
 
-func joinGame(gameId uint32, playerId uint32, playerName string, ws *websocket.Conn) *player {
+func joinGame(gameId string, playerId uint32, playerName string, ws *websocket.Conn) *player {
 	state := games[gameId]
 	if state == nil {
-		state = load("game" + fmt.Sprint(gameId) + ".bin")
+		state = load(gameId)
 		games[gameId] = state
 		for _, p := range state.players {
 			p.mtx = &sync.Mutex{}
 		}
 	}
 
-	var player *player = nil
-	if state.players[playerId] != nil { //player already in game - joining to control them from another device
-		player = state.players[playerId]
-		//i am joining to control an existing player (whos is already in)
-		//player.send(&reply{Cmd: "state", Payload: state.payload()}) //inst important that state is sent bedore the change of name
-		//from now on the client will prefix its playerName with "control-" to indicate that it is controlling another player
-		//player.send(&reply{Cmd: "prefix", Payload: "control-"})
-		//p := NewPlayer("control-"+playerName, -1, state, ws)  TODO BROKEN By REFACTORE of THING (to a ref )
-		//state.Players[p.Name] = p TODO
+	p, present := state.players[playerId]
 
-	} else {
-		player := state.AddPlayer(playerId, playerName, state.RandomStartPos(10000), ws)
-		//player.send(&reply{Cmd: "state", Payload: state})
-		state.send(nil, &reply{Cmd: "playerJoined", Payload: player})    //tell everyone about the new player
-		player.sendMasses(state.masses, true, binary.LittleEndian)       //send all the masses
-		player.sendThings([]*thing{player.vehicle}, binary.LittleEndian) //sends mesh name and springs
-		state.qSound("dozer", player.vehicle.centreOfMass(state.masses), 0.1, "revs-"+playerName, true)
+	if !present {
+		p = state.AddPlayer(playerId, playerName, state.RandomStartPos(10000), ws)
 	}
 
-	return player
+	p.socket = ws //this is important!
+	//player.send(&reply{Cmd: "state", Payload: state})
+	//state.send(nil, &reply{Cmd: "playerJoined", Payload: player})    //tell everyone about the new player
+	p.sendCamera()                    //send the camera position
+	p.sendMasses(state.masses, true)  //send all the masses
+	p.sendThings([]*thing{p.vehicle}) //sends mesh name and springs
+	p.sendGameId()                    //game id starts it running
+	state.qSound("dozer", p.vehicle.centreOfMass(state.masses), 0.1, "revs-"+playerName, true)
+
+	return p
 }
 
 func processCreateOrJoin(mb []byte, ws *websocket.Conn) *player {
 
 	buff := bytes.NewBuffer(mb)
-	e := binary.LittleEndian
 
 	cmd := [1]byte{}
-	binary.Read(buff, e, &cmd)
+	binary.Read(buff, le, &cmd)
 
-	gameId := uint32(0)
 	playerId := uint32(0)
-	sl := byte(0)
 
-	binary.Read(buff, e, &gameId)
-	binary.Read(buff, e, &playerId)
-	binary.Read(buff, e, &sl)
-	playerName := make([]byte, sl)
-	binary.Read(buff, e, &playerName)
+	gameId := readString(buff)
+
+	binary.Read(buff, le, &playerId)
+
+	playerName := readString(buff)
 
 	if cmd[0] == byte(msgCreateGame) {
 		return createGame(playerId, string(playerName), ws) //returns a player
@@ -237,19 +199,15 @@ func processCreateOrJoin(mb []byte, ws *websocket.Conn) *player {
 
 }
 
-func processMsg(msg msg, player *player, ws *websocket.Conn) {
+func processMsg(msg msg, p *player, ws *websocket.Conn) {
 
 	//var fpn string //firstPlayer *Player
-
-	state := player.state
-
-	endian := binary.LittleEndian
 
 	dx, dy := float64(0), float64(0) //used for sliding skins
 	prop := "offset"
 	step := float64(3)
 
-	if player == nil && msg.Cmd != "createGame" && msg.Cmd != "joinGame" {
+	if p == nil && msg.Cmd != "createGame" && msg.Cmd != "joinGame" {
 		logit("No player for message", msg)
 	}
 
@@ -257,7 +215,7 @@ func processMsg(msg msg, player *player, ws *websocket.Conn) {
 
 	if msg.Cmd == "keyUp" {
 		//a key was released
-		player.keys[msg.Key] = false
+		p.keys[msg.Key] = false
 
 		if msg.Key == "ArrowLeft" || msg.Key == "ArrowRight" {
 			dx = 0
@@ -272,167 +230,133 @@ func processMsg(msg msg, player *player, ws *websocket.Conn) {
 		// if strings.HasPrefix(player.name, "control-") {
 		// 	player = state.players[strings.TrimPrefix(player.name, "control-")]
 		// }
-		player.leftDrive = msg.Payload[0]  //no need to echo them back - local versions are used for knobs only
-		player.rightDrive = msg.Payload[1] //no need to echo them back - local versions are used for knobs only
-		player.thrust = msg.Payload[2]
+		p.leftDrive = msg.Payload[0]  //no need to echo them back - local versions are used for knobs only
+		p.rightDrive = msg.Payload[1] //no need to echo them back - local versions are used for knobs only
+		p.thrust = msg.Payload[2]
 
 	} else if msg.Cmd == "mw" { //mousewheel
 
-		player.camera.position.y += msg.Payload[0] * -0.01 //up and down
+		//player.camera.position.y += msg.Payload[0] * -0.01 //up and down
 
-		player.sendCamera(binary.LittleEndian)
+		p.camera.position.addIn(p.grid.normal().multiply(msg.Payload[0] * -0.005))
+		p.zOff += msg.Payload[0] * -0.005
+
+		p.processMouseMove()
+		p.sendCamera()
 
 	} else if msg.Cmd == "mm" { //mouse move
 
-		player.movedSinceMouseDown = true
+		p.movedSinceMouseDown = true
 
-		player.buttons = byte(msg.Payload[0])
-		player.camera.farPos = newVec3(msg.Payload[1], msg.Payload[2], msg.Payload[3])
-		player.cursor.X = msg.Payload[4]
-		player.cursor.Y = msg.Payload[5]
+		p.buttons = byte(msg.Payload[0])
+		p.camera.farPos = newVec3(msg.Payload[1], msg.Payload[2], msg.Payload[3])
+		p.cursor.X = msg.Payload[4]
+		p.cursor.Y = msg.Payload[5]
 
-		if player.mode != playing {
-
-			//a point on the far plane (where the mouse cursor is pointing)
-
-			if player.buttons == 2 {
-
-				delta := (player.cursor.subtract(player.grab)).multiply(2)
-
-				if delta.lengthSq() != 0 {
-
-					logit("delta", delta.X, delta.Y)
-
-					camRight := player.downCamDirection.cross(player.downCamUp).normalise()
-
-					player.camera.up = player.downCamUp.rotateAbout(camRight, delta.Y).normalise()
-					pitched := player.downCamDirection.rotateAbout(camRight, delta.Y)
-					yawed := pitched.rotateAbout(player.camera.up, -delta.X)
-					//player.camUp = player.camUp.rotateAbout(player.downCamUp, delta.X).normalise()
-					player.camera.direction = yawed
-					player.camera.up = newVec3(0, 1, 0) //auto level the camera
-
-					// worldUp := newVec3(0, 1, 0)
-					// camDir := (player.camLookAt.sub(player.camPosition)).normalise()
-					// player.camUp = camDir.cross(worldUp).normalise().cross(camDir).normalise()
-
-					player.sendCamera(binary.LittleEndian)
-				}
-				return
-			}
-
-			gn := player.gridXaxis.cross(player.gridYaxis)
-			c2g := player.camera.position.closestPointOnPlane(player.gridOrigin, gn).sub(player.camera.position) //vector from the camera pos to the grid
-			ttg := player.camera.farPos.closestPointOnPlane(player.gridOrigin, gn).sub(player.camera.farPos)
-
-			if c2g.dot(ttg) < 0 {
-				d0 := c2g.length()
-				d1 := ttg.length()
-				f := d0 / (d0 + d1)
-				player.gridPos = player.camera.position.tween(player.camera.farPos, f)
-			}
-
-			player.highlit.spring, player.highlit.thing = state.closestSpring(player.gridPos)
-
-			cm := state.closestMassToRay(player.camera.position, player.camera.farPos)
-
-			if cm != player.highlit.mass {
-				player.highlit.mass = cm
-				player.sendHighlit()
-			}
-
-			if player.mode == moving {
-				moveDelta := player.gridPos.sub(player.moveStart)
-				for m := range player.selectedMasses {
-					m.p = player.massStartPos[m].add(moveDelta)
-				}
-				player.sendMasses(slices.Collect(maps.Keys(player.selectedMasses)), false, endian) //just send the new positions
-			}
-
-			if player.buttons == 1 {
-				delta := player.gridPos.sub(player.downGridPos).multiply(.9)
-				player.camera.position = player.downCamPos.sub(delta)
-
-				player.sendCamera(endian)
-			}
-
-			player.sendCursor(player.gridPos)
-		}
+		p.processMouseMove()
 
 	} else if msg.Cmd == "mu" {
-		player.buttons = byte(msg.Payload[0])
-		player.springStart = nil
-		if player.mode == moving && !player.movedSinceMouseDown {
-			//	player.setMode(editing)
+
+		if p.buttons == 2 && p.movedSinceMouseDown == false && p.highlit.mass != nil {
+
+			degreesToRadians := float32(180.0) / float32(math.Pi)
+			p.boundValues = make(map[string]boundValue, 0)
+			p.bindValue("radius", p.highlit.mass, &p.highlit.mass.r, 0.01, 10.00, .1, 1)
+			p.bindValue("aoa", p.highlit.mass, &p.highlit.mass.aoaRads, -20, +20, 1, degreesToRadians)
+			p.bindValue("wingArea", p.highlit.mass, &p.highlit.mass.wingArea, 0.1, 500.00, 1, 1)
+			p.bindValue("dihedral", p.highlit.mass, &p.highlit.mass.dihedralDegrees, -10, 10, 1, degreesToRadians)
+
+			p.sendBoundValues() //will pop up a context menu clientside
+
 		}
+
+		p.buttons = byte(msg.Payload[0])
 
 	} else if msg.Cmd == "md" {
 
-		player.movedSinceMouseDown = false
-		player.buttons = byte(msg.Payload[0])
+		p.buttons = byte(msg.Payload[0])
 
-		player.grab = &Vector{player.cursor.X, player.cursor.Y} //clone
-		player.downGridPos = player.gridPos.clone()
-		player.downCamPos = player.camera.position.clone()
-		player.downCamDirection = player.camera.direction.clone()
-		player.downCamUp = player.camera.up.clone()
+		p.movedSinceMouseDown = false
 
-		if player.mode == editing {
-			//toggle selection of highlit mass
-			phm := player.highlit.mass
-			if phm != nil {
-				psm := player.selectedMasses
+		p.grab = &Vector{p.cursor.X, p.cursor.Y} //clone
 
-				there, _ := psm[phm]
-				if there {
-					delete(psm, phm)
-				} else {
-					psm[phm] = true
-				}
-				player.sendMasses([]*mass{phm}, true, endian)
-			}
-		}
+		p.downGridPos = p.gridPos.clone()
+		p.downCamPos = p.camera.position.clone()
+		p.downCamDirection = p.camera.direction.clone()
+		p.downCamUp = p.camera.up.clone()
 
-		if player.mode == startMove {
-			player.recordSelectedMassPositions()
-			if player.highlit.mass != nil {
-				player.moveStart = player.highlit.mass.p.clone()
+		if p.buttons == 1 {
+
+			if p.highlit.mass != nil {
+				p.moveStart = p.highlit.mass.p.clone()
 			} else {
-				player.moveStart = player.gridPos.clone() //may be snapped
-			}
-			player.setMode(moving)
-
-		} else if player.mode == moving {
-			player.setMode(editing)
-
-		}
-
-		if player.mode == addingSpring {
-			//we are adding a spring to nowhere .. make a new mass
-			if player.highlit.mass != nil {
-				logit("Spring to/from nowhere - adding a mass")
-
-				m := state.AddMass(NewMass(player.gridPos, 10, false, false, true, player.currentThing))
-				//state.send(nil, &reply{Cmd: "mass", Payload: massPayload{I: m.index, P: m.P,}}) //we receive a new thing sfrom someone -
-
-				player.sendMasses([]*mass{m}, false, endian)
-				player.highlit.mass = m
+				p.moveStart = p.spacePos.clone() //may be snapped
 			}
 
-			if player.springStart == nil { //starting a new spring
-				logit("Starting a new spring")
-				player.springStart = player.highlit.mass //closestMass(this.cursor)
-				logit("Spring starts at mass", player.springStart)
-			} else { //continuing the chain of springs
+			p.recordMassPositions()
 
-				s := player.currentThing.AddSpring(player.springStart, player.highlit.mass, true) //this is a spring-like thing (but not an acutal spring.. it has no length for example)
-				s.send(nil, state)
+			if p.mode == editing {
+				//toggle selection of highlit mass
+				phm := p.highlit.mass
+				if phm != nil {
+					psm := p.selectedMasses
 
-				//this.currentThing.springs.push(new Spring(this.state.masses,me.springStart,this.highlit.mass,true))
-				logit("Continued chain of springs from mass ", player.springStart, " to ", player.highlit.mass)
-				//console.log("Current thing has", t.springs.length, "springs")
-				player.springStart = player.highlit.mass
+					there, _ := psm[phm]
+					if there {
+						delete(psm, phm)
+					} else {
+						psm[phm] = true
+					}
+					p.sendMasses([]*mass{phm}, true)
+				}
 			}
+
+			if p.highlit.mass != nil {
+				m := p.highlit.mass
+				p.zOff = m.p.distanceFrom(m.p.closestPointOnPlane(p.grid.origin, p.grid.normal()))
+
+				p.sendCursor()
+			}
+
+			if p.mode == startMove {
+
+				p.setMode(moving)
+
+			} else if p.mode == moving {
+				p.setMode(editing)
+
+			}
+
+			if p.mode == adding {
+				//we will make the spring between the highlit mass and a new mass
+				//if there is no highlit mass, then we add one
+				//on mouseup - we will collapse the new mass into any we are on top op
+				//first (possibly highlit) mass
+				p.makeNextSpring()
+
+				p.setMode(stretching)
+
+			} else if p.mode == stretching {
+
+				if p.highlit.mass != nil {
+					logit("substituting mass")
+					p.highlit.spring.m2 = p.highlit.mass
+
+					//remove it clientside
+					p.springCursor.r = 0
+					p.sendMasses([]*mass{p.springCursor}, true)
+
+					p.state.masses = p.state.masses[:len(p.state.masses)] //delete the last mass
+
+					p.sendThings([]*thing{p.currentThing}) //sends the new spring (once on mousedown)
+				} else {
+					p.highlit.mass = p.springCursor
+				}
+
+				p.makeNextSpring()
+
+			}
+
 		}
 
 		//player.send(&reply{Cmd: "gridPos", Payload: player.gridPos.payload()})
@@ -440,8 +364,8 @@ func processMsg(msg msg, player *player, ws *websocket.Conn) {
 	} else if msg.Cmd == "pickRay" {
 		o := newVec3(msg.Payload[0], msg.Payload[1], msg.Payload[2])
 		dir := newVec3(msg.Payload[3], msg.Payload[4], msg.Payload[5])
-		if player.landMesh != nil {
-			p := player.landMesh.slowProbe(o, o.add(dir.multiply(1000)))
+		if p.landMesh != nil {
+			p := p.landMesh.slowProbe(o, o.add(dir.multiply(1000)))
 			if p != nil {
 				//grow a simple tree here
 				m := growTree()
@@ -453,7 +377,9 @@ func processMsg(msg msg, player *player, ws *websocket.Conn) {
 	} else if msg.Cmd == "keyDown" {
 
 		k := msg.Key
-		player.keys[k] = true
+		kl := strings.ToLower(k)
+
+		p.keys[k] = true
 
 		logit("key down", k)
 		shift := msg.Payload[0]
@@ -471,81 +397,195 @@ func processMsg(msg msg, player *player, ws *websocket.Conn) {
 
 		if k == "ArrowLeft" {
 			dx = -step
-			player.aileron--
+			p.aileron--
 		} else if k == "ArrowRight" {
 			dx = +step
-			player.aileron++
+			p.aileron++
 		} else if k == "ArrowUp" {
-			player.elevator++
-			logit("elevator", player.elevator)
+			p.elevator++
+			logit("elevator", p.elevator)
 			dy = +step
 		} else if k == "ArrowDown" {
-			player.elevator--
-			logit("elevator", player.elevator)
+			p.elevator--
+			logit("elevator", p.elevator)
 			dy = -step //see the end of the if block for where the transform is send if dx or dy are set
-		} else if k == "t" {
-			player.setMode(addingSpring)
-			player.currentThing = state.addThing("dozer")
-			player.sendThings([]*thing{player.currentThing}, endian)
-		} else if k == "k" {
-			player.setMode(addingSpring)
-		} else if k == "m" {
-			player.setMode(startMove)
-		} else if k == "x" { //define the axle/wing axis
-			if len(player.selectedMasses) == 1 && player.highlit.mass != nil {
-				for m := range player.selectedMasses {
-					m.axle = player.highlit.mass
-				}
-				player.sendMessage("Wing axis/wheel afle defined", "info")
-			} else {
-				player.sendMessage("Select one mass, and higlight the axle mass when defining it", "error")
-			}
-		} else if k == "z" { //define wing root/plane
-			if len(player.selectedMasses) == 1 && player.highlit.mass != nil {
+		} else if kl == "t" {
+			p.setMode(adding)
 
-				for m := range player.selectedMasses {
-					m.wingRoot = player.highlit.mass
-				}
-				player.sendMasses(slices.Collect(maps.Keys(player.selectedMasses)), true, endian)
-				player.sendMessage("Wing root defined", "info")
-			} else {
-				player.sendMessage("Select one mass, and higlight the root mass when defining it", "error")
+		} else if kl == "e" {
+			p.setMode(editing)
+		} else if p.keys["Control"] && kl == "d" { //deselect all
+			//deselect all masses
+			p.selectedMasses = make(map[*mass]bool)
+			p.sendMasses(p.state.masses, true)
+		} else if p.keys["Control"] && kl == "a" { //select all
+			//deselect all masses
+			for _, m := range p.state.masses {
+				p.selectedMasses[m] = true
 			}
-		} else if k == "f" {
-			player.highlit.mass.aoa += math.Pi
-			player.sendMasses([]*mass{player.highlit.mass}, true, endian)
+			p.sendMasses(p.state.masses, true)
+		} else if k == "0" {
+			p.zOff = 0
+			p.processMouseMove()
+			p.sendCamera()
+		} else if kl == "o" {
+			p.currentThing.om = p.highlit.mass
+			p.sendThings([]*thing{p.currentThing})
+		} else if kl == "f" {
+			p.currentThing.fm = p.highlit.mass
+			p.sendThings([]*thing{p.currentThing})
+		} else if kl == "r" {
+			p.currentThing.rm = p.highlit.mass
+			p.sendThings([]*thing{p.currentThing})
 
-		} else if k == "p" {
-			m := player.highlit.mass
-			m.fixed = !m.fixed
-			player.sendMasses([]*mass{m}, true, endian)
-		} else if k == "v" {
-			state.save((`game` + fmt.Sprint(state.gameId) + `.bin`), endian, player.selectedMasses)
-			player.sendMessage("Game saved "+strconv.Itoa(int(state.gameId)), "info")
-			logit("Game saved", state.gameId)
-		} else if k == "l" {
-			state = load((`game` + fmt.Sprint(state.gameId) + `.bin`))
-			logit("Game loaded", state.gameId)
-		} else if k == "delete" {
-			if player.highlit.mass != nil {
-				state.deleteMass(player.highlit.mass)
-			} else if player.highlit.spring != nil {
-				player.highlit.thing.deleteSpring(player.highlit.spring)
+		} else if kl == "g" { //align the grid
+			p.grid.origin = p.highlit.mass.p.clone()
+			s := slices.Collect(maps.Keys(p.selectedMasses))
+			p.grid.Xaxis = s[0].p.sub(p.grid.origin).normalise()
+			p.grid.Yaxis = s[1].p.sub(p.grid.origin).normalise()
+			p.grid.send(p)
+		} else if kl == "m" && p.keys["Shift"] {
+			p.currentThing.visibility = 1 - p.currentThing.visibility
+			p.sendThings([]*thing{p.currentThing})
+
+		} else if kl == "m" && p.keys["Control"] {
+			//mirror the selected masses (in the grid)
+			//more generally - we will add the selected masses to the current transformation
+			//note - some masses will map the the same position (we will want to discard/reinstate them when hooking up springs)
+
+			sm := maps.Keys(p.selectedMasses)
+			transformed := make(map[*mass]*mass)
+			for m := range sm {
+				transformed[m] = p.state.addMass(newMass(m.p, m.r, m.fixed, m.isCoin, m.collideable, m.thing, m)) //add 'shadow' mass
+			}
+			p.regenTransformed() //position all transformed masses
+
+			for k, v := range transformed {
+				v.wingRoot = transformed[k.wingRoot]
+				v.axle = transformed[k.axle]
+				v.aoaRads = k.aoaRads + math.Pi
+				v.dihedralDegrees = -k.dihedralDegrees
+				v.wingArea = k.wingArea
+			}
+
+			//wire up the springs - once. We will need to remove transformed masses which map onto their own point of origin
+			//note we are adding to the collection we are iterating over - but that it ok (in Go)
+			//mirror the springs
+			for _, s := range p.currentThing.springs {
+				//todo - if only one end is selected (and transformed) we should still create a spring
+				tm1 := transformed[s.m1]
+				tm2 := transformed[s.m2]
+				if tm1 != nil || tm2 != nil {
+					if tm1 == nil {
+						tm1 = s.m1
+					}
+					if tm2 == nil {
+						tm2 = s.m2
+					}
+					if tm1 == tm2 {
+						logit("spring to self")
+					}
+					p.currentThing.AddSpring(tm1, tm2, s.collideable)
+				}
+			}
+			p.sendThings([]*thing{p.currentThing})
+
+		} else if k == "Escape" {
+			if p.mode == stretching {
+				p.springCursor.r = 0
+				p.sendMasses([]*mass{p.springCursor}, true)
+				p.state.masses = p.state.masses[:len(p.state.masses)]                           //delete the last mass
+				p.currentThing.springs = p.currentThing.springs[:len(p.currentThing.springs)-1] //delete the last spring
+				p.sendThings([]*thing{p.currentThing})                                          //one less spring
+				p.setMode(adding)
+			} else if p.mode == moving { // cancel a move
+				for m := range p.selectedMasses {
+					m.p = p.moveStart
+				}
+
+				s := slices.Collect(maps.Keys(p.selectedMasses))
+				p.sendMasses(s, false)
+				p.setMode(editing)
+
+			} else {
+				p.snapMasses()
+				p.sendThings(p.state.things)
+				p.state.running = !p.state.running
+				p.sendVectors()
+				logit("running", p.state.running)
+			}
+
+		} else if kl == "m" {
+			p.setMode(startMove)
+			// } else if k == "x" { //define the axle/wing axis
+			// 	selected:=slices.Collect(maps.Keys(player.selectedMasses))
+			// 	if len(player.selectedMasses) == 1 && player.highlit.mass != nil && player.highlit.mass != selected[0] {
+			// 		for m := range player.selectedMasses {
+			// 			m.axle = player.highlit.mass
+			// 		}
+			// 		player.sendMessage("Wing axis/wheel axle defined", "info")
+			// 	} else {
+			// 		player.sendMessage("Select the wingtip/wheel hub mass, and higlight the axle mass when defining it", "error")
+			// 	}
+		} else if kl == "z" || kl == "x" { //define wing root/plane
+			selectedMass := slices.Collect(maps.Keys(p.selectedMasses))[0]
+
+			if p.highlit.mass != nil && len(p.selectedMasses) == 1 && p.highlit.mass != selectedMass {
+				if k == "z" {
+					selectedMass.wingRoot = p.highlit.mass
+					p.sendMessage("Wing root defined", "info")
+				} else if k == "x" {
+					selectedMass.axle = p.highlit.mass
+					p.sendMessage("Axis/Axle defined", "info")
+				}
+				p.sendMasses([]*mass{selectedMass}, true)
+
+			} else {
+				p.sendMessage("Select one mass, and higlight another when setting axes", "error")
+			}
+		} else if kl == "f" {
+			p.highlit.mass.aoaRads += math.Pi
+			if p.highlit.mass.aoaRads > math.Pi*2 {
+				p.highlit.mass.aoaRads -= math.Pi * 2
+			}
+			logit("aoa", p.highlit.mass.aoaRads)
+			p.sendVectors() //[]*mass{player.highlit.mass}, true, endian)
+
+		} else if kl == "p" {
+			m := p.highlit.mass
+			if m != nil {
+				m.fixed = !m.fixed
+				p.sendMasses([]*mass{m}, true)
+			}
+
+		} else if k == "Delete" {
+			if p.highlit.mass == nil && p.highlit.spring != nil {
+				p.highlit.thing.deleteSpring(p.highlit.spring)
+				p.sendThings([]*thing{p.highlit.thing})
+			} else if p.highlit.mass != nil {
+				if p.state.massFree(p.highlit.mass) {
+					p.highlit.mass.r = 0
+					p.sendMasses([]*mass{p.highlit.mass}, true)
+
+					p.state.deleteMass(p.highlit.mass) //less than straightforward
+					p.sendMasses(p.state.masses, true)
+					p.sendThings(p.state.things)
+				}
 			}
 		}
 	}
 
-	//sends any tranform of the skin (done with cursor keys and/or shift)
+	//sends any transform of the skin (done with cursor keys and/or shift)
 	if dx != 0 || dy != 0 {
-		if player.currentThing != nil {
-			ct := player.currentThing
+		if p.currentThing != nil {
+			ct := p.currentThing
 			if prop == "rotation" {
 				//ct.Rotation += dx
 			} else { //if prop=="scale" {
 				ct.scale.x += dx
 				ct.scale.y += dy
 			}
-			player.sendThings([]*thing{ct}, endian) //will need to send the offset, rotation and scale of the mesh/skin
+			// - may be required in future (aliging tex/mesh/masses) p.sendThings([]*thing{ct}) //will need to send the offset, rotation and scale of the mesh/skin
 		}
 	}
 

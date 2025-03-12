@@ -7,8 +7,8 @@ package main
 import "math"
 
 type vert struct {
-	p       *Vec3
-	n       *Vec3
+	p       *vec3
+	n       *vec3
 	uv      Vector
 	wl      float64       //water level
 	acc     float64       //accumulated water (during a pass)
@@ -21,7 +21,7 @@ type Tri struct {
 	vi       []uint16 `json:"vi"`
 	children []*Tri   `json:"children"`
 	mesh     *mesh    //a reference to the mesh this tri is part of (that the vi's point into v's of)
-	normal   *Vec3
+	normal   *vec3
 	//faceIndex uint16
 	//isPatch   bool
 }
@@ -48,8 +48,8 @@ func (vt *vert) updateUV(yMin, yMax float64) {
 	//	vt.uv = Vector{1, 1}
 }
 
-func newVert(p *Vec3, u, v float64) *vert {
-	return &vert{p: p, uv: Vector{u, v}, n: &Vec3{0, 0, 0}, touches: make(map[*Tri]bool, 6)}
+func newVert(p *vec3, u, v float64) *vert {
+	return &vert{p: p, uv: Vector{u, v}, n: &vec3{0, 0, 0}, touches: make(map[*Tri]bool, 6)}
 }
 
 func (t *Tri) addChild(a, b, c uint16) *Tri {
@@ -163,7 +163,7 @@ func (t *Tri) removeFromTouches() {
 	}
 }
 
-func (t *Tri) split(m *mesh, pos *Vec3, maxRdepth int, maxHeight float64) {
+func (t *Tri) split(m *mesh, pos *vec3, maxRdepth int, maxHeight float64) {
 
 	//      0
 	//		/\
@@ -195,9 +195,9 @@ func (t *Tri) split(m *mesh, pos *Vec3, maxRdepth int, maxHeight float64) {
 				//rnGen = &rand.New(rand.NewPCG(seed+1, seed))
 				//rnGen = &rand.New(rand.NewPCG(m.verts[v0].p.x, m.verts[v0].p.y))
 
-				rn1 := 0.0 //math.Sin(math.Round(m.verts[v0].p.x))
-				rn2 := 0.0 //math.Sin(math.Round(m.verts[v1].p.z))
-				rn3 := 0.0 //math.Sin(math.Round(m.verts[v2].p.z))
+				rn1 := math.Sin(math.Round(m.verts[v0].p.x))
+				rn2 := math.Sin(math.Round(m.verts[v1].p.z))
+				rn3 := math.Sin(math.Round(m.verts[v2].p.z))
 
 				// v3 := m.splitEdge(v0, v1, (rnGen.Float64()-.5)*Yrange)
 				// v4 := m.splitEdge(v1, v2, (rnGen.Float64()-.5)*Yrange)
@@ -228,12 +228,12 @@ func (t *Tri) split(m *mesh, pos *Vec3, maxRdepth int, maxHeight float64) {
 
 }
 
-func (t *Tri) centre() *Vec3 {
+func (t *Tri) centre() *vec3 {
 	v := t.mesh.verts
 	return v[t.vi[0]].p.add(v[t.vi[1]].p).add(v[t.vi[2]].p).multiply(float64(1) / 3)
 }
 
-func (t *Tri) contains(pop *Vec3, includeOnVert bool, includeOnEdge bool) bool {
+func (t *Tri) contains(pop *vec3, includeOnVert bool, includeOnEdge bool) bool {
 
 	v := t.mesh.verts //this is a reference not a copy
 
@@ -245,7 +245,7 @@ func (t *Tri) contains(pop *Vec3, includeOnVert bool, includeOnEdge bool) bool {
 
 }
 
-func (t *Tri) probeLand(p *Vec3) (surfacePoint *Vec3, surfaceNormal *Vec3) {
+func (t *Tri) probeLand(p *vec3) (surfacePoint *vec3, surfaceNormal *vec3) {
 
 	found := t.vProbe(p) //recursively find the leaf tri that contains the point
 
@@ -256,7 +256,7 @@ func (t *Tri) probeLand(p *Vec3) (surfacePoint *Vec3, surfaceNormal *Vec3) {
 	return found.probePlane(newVec3(p.x, -10000, p.z), newVec3(p.x, 10000, p.z)), found.normal
 }
 
-func (t *Tri) vProbe(p *Vec3) *Tri {
+func (t *Tri) vProbe(p *vec3) *Tri {
 
 	if p.y != 0 {
 		panic("tri vProbe Y must be 0")
@@ -287,7 +287,7 @@ func (t *Tri) vProbe(p *Vec3) *Tri {
 
 }
 
-func (t *Tri) calcNormal() *Vec3 {
+func (t *Tri) calcNormal() *vec3 {
 
 	v := t.mesh.verts
 
@@ -362,6 +362,75 @@ func (ss *segSet) discardOpenSegments() *segSet {
 
 }
 
+// return the point of intersection of a ray with the triangle
+func (tri *Tri) probePlane(p0 *vec3, p1 *vec3) *vec3 {
+
+	if p0.equals(p1) {
+		panic("Degenerate probing ray")
+	}
+
+	if tri.normal.length() < 0.999 {
+		panic("normal not normalised")
+	}
+
+	if tri.normal.dot(p1.sub(p0)) == 0 {
+		return nil //this is legit, consider a traingle on the x/y plane and an edge of a triangle else where that is paralell with the X/Y plane
+		//panic("ray is parallel to the plane of the triangle")
+	}
+
+	if tri.mesh.verts[tri.vi[0]].p.equals(p0) || tri.mesh.verts[tri.vi[1]].p.equals(p0) || tri.mesh.verts[tri.vi[2]].p.equals(p0) {
+		//panic("p0 is a vertex of the triangle being probed")
+		return p0
+	}
+
+	if tri.mesh.verts[tri.vi[0]].p.equals(p1) || tri.mesh.verts[tri.vi[1]].p.equals(p1) || tri.mesh.verts[tri.vi[2]].p.equals(p1) {
+		//panic("p1 is a vertex of the triangle being probed")
+		return p1
+	}
+
+	d0 := p0.distanceFromPlaneOf(tri) //))tri.distanceFrom(p0, true)
+	d1 := p1.distanceFromPlaneOf(tri)
+
+	// if d0 == 0 || d1 == 0 {
+	// 	logit("probe on the plane")
+	// 	return nil
+	// }
+
+	//if the distances have the same sign, the ray doesnt cross the plane
+	if d0 > 0 && d1 > 0 || d0 < 0 && d1 < 0 {
+		return nil
+	}
+
+	if d0 < 0 {
+		d0 = -d0
+	}
+
+	if d1 < 0 {
+		d1 = -d1
+	} //becase go has no abs
+
+	t := d0 / (d0 + d1)
+
+	if t > 1 {
+		panic("t>1")
+	}
+
+	if t == 0 || t == 1 {
+		logit("probe touches plane")
+	}
+
+	if t >= 0 && t <= 1 { //this is significant includes ray ends touching planes
+		pop := p0.tween(p1, t)
+		if pop.distanceFromPlaneOf(tri) > 0.01 {
+			panic("tween is not on the plane")
+		}
+		return pop
+	}
+	//	panic("Probe failed")
+
+	return nil
+}
+
 func (s *seg) connectsToEdge(ss *segSet) bool {
 
 	//TODO Implement !
@@ -369,7 +438,7 @@ func (s *seg) connectsToEdge(ss *segSet) bool {
 }
 
 //for testing
-func (t *Tri) edge0() *Vec3 {
+func (t *Tri) edge0() *vec3 {
 	return t.mesh.verts[t.vi[1]].p.sub(t.mesh.verts[t.vi[0]].p)
 }
 

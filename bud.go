@@ -2,9 +2,9 @@ package main
 
 //buds are a template for adding segments to the tree - they are the DNA .. not the wood
 type bud struct {
-	position  Vec3    //in segment space
+	position  vec3    //in segment space
 	twist     float64 //radians
-	direction *Vec3
+	direction *vec3
 	grows     *segmentType //what this bud is likely to sprout as it ages
 	sproutAge int          //how old the segment is before its buds generate new segments
 }
@@ -15,10 +15,10 @@ type segmentType struct {
 }
 
 type segment struct {
-	p     *Vec3
-	xAxis *Vec3 //direction of (accumulated) twist
-	yAxis *Vec3 //direction of growth
-	zAxis *Vec3 //ortho to x and y
+	p     *vec3
+	xAxis *vec3 //direction of (accumulated) twist
+	yAxis *vec3 //direction of growth
+	zAxis *vec3 //ortho to x and y
 
 	segType  *segmentType
 	age      int
@@ -110,7 +110,7 @@ func (seg *segment) getMesh(m *mesh) {
 
 }
 
-func NewSegment(p *Vec3, yAxis *Vec3, xAxis *Vec3, segType *segmentType, age int) *segment {
+func NewSegment(p *vec3, yAxis *vec3, xAxis *vec3, segType *segmentType, age int) *segment {
 
 	yal := yAxis.length()
 	if yal < .999 || yal > 1.0001 {

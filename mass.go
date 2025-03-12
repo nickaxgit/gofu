@@ -15,64 +15,91 @@ import (
 type mass struct {
 	index       int32
 	thing       *thing
-	p           *Vec3
+	p           *vec3
+	transformOf *mass
 	r           float64
 	fixed       bool
 	isCoin      bool
 	collideable bool
-	op          *Vec3
-	v           *Vec3 //"velocity" - the change in position of this mass
+	op          *vec3
+	v           *vec3 //"velocity" - the change in position of this mass
 	enabled     bool
 	//selected         bool //needs to be per player - see player.selectedMasses map
 	lastThingTouched *thing
 	axle             *mass   //if the mass is a wheel - the vector to this mass is the axle
 	wingRoot         *mass   //if the mass is a wing tip - this is the TE root (the axle is the LE root)
-	aoa              float64 //(additional) angle of attack
+	axi              int32   //index of the axle (used only temporarily while loading)
+	wri              int32   //index of the wing root (used only temporarily while loading)
+	aoaRads          float64 //(additional) angle of attack
+	wingArea         float64
+	dihedralDegrees  float64
+	lift             *vec3
+
 	//grounded         bool
 }
 
-func NewMass(p *Vec3, r float64, fixed bool, isCoin bool, collideable bool, thing *thing) *mass {
+func newMass(p *vec3, r float64, fixed bool, isCoin bool, collideable bool, thing *thing, transFormOf *mass) *mass {
 
-	return &mass{p: p, r: r, fixed: fixed, isCoin: isCoin, collideable: collideable, thing: thing, enabled: true, op: p, v: newVec3(0, 0, 0)}
+	return &mass{p: p, r: r, fixed: fixed, isCoin: isCoin, collideable: collideable, thing: thing, enabled: true, op: p, v: newVec3(0, 0, 0), transformOf: transFormOf}
 }
 
-func (m *mass) readBinary(s *state, buff *bytes.Buffer, e binary.ByteOrder, withDetail byte) {
+func (m *mass) overlaps(masses []*mass) *mass {
 
-	floats := make([]float32, 3)
-	binary.Read(buff, e, &floats) //reads all 12 bytes of the position (we can't read the float32's directly into float64s)
-	m.p.fromByteBuffer(buff, e)
+	for _, m2 := range masses {
+		if m != m2 && m.p.distanceFrom(m2.p) < m.r+m2.r {
+			return m2
+		}
+	}
+	return nil
+
+}
+
+func (m *mass) fromByteBuffer(buff *bytes.Buffer, e binary.ByteOrder, withDetail byte, s *state) {
+
+	binary.Read(buff, e, &m.index)
+	m.p.fromByteBuffer(buff)
 
 	if withDetail != 0 {
-		binary.Read(buff, e, &m.r)
+		r := float32(0)
+		binary.Read(buff, e, &r)
+		m.r = float64(r)
+
 		binary.Read(buff, e, &m.fixed)
 		binary.Read(buff, e, &m.isCoin)
 		binary.Read(buff, e, &m.collideable)
 		selected := byte(0)
 		binary.Read(buff, e, &selected)
-		wr := int32(-1)
-		ax := int32(-1)
-		binary.Read(buff, e, &ax)
-		binary.Read(buff, e, &wr)
-		if wr > -1 {
-			m.wingRoot = s.masses[wr]
-		}
-		if ax > -1 {
-			m.axle = s.masses[ax]
+
+		binary.Read(buff, e, &m.wri)
+		binary.Read(buff, e, &m.axi)
+		f32 := float32(0)
+		binary.Read(buff, e, &f32)
+		m.aoaRads = float64(f32)
+		binary.Read(buff, e, &f32)
+		m.wingArea = float64(f32)
+		binary.Read(buff, e, &f32)
+		m.dihedralDegrees = float64(f32)
+
+		i32 := int32(0)
+		binary.Read(buff, e, &i32)
+		if i32 != -1 {
+			m.transformOf = s.masses[i32]
 		}
 
 	}
 }
 
-func (m *mass) writeBinary(buff *bytes.Buffer, e binary.ByteOrder, withDetail bool, selected byte) {
+func (m *mass) toByteBuffer(buff *bytes.Buffer, withDetail bool, selected byte) {
 
-	m.p.toByteBuffer(buff, e)
+	binary.Write(buff, le, m.index)
+	m.p.toByteBuffer(buff)
 
 	if withDetail {
-		binary.Write(buff, e, float32(m.r))
-		binary.Write(buff, e, m.fixed)
-		binary.Write(buff, e, m.isCoin)
-		binary.Write(buff, e, m.collideable)
-		binary.Write(buff, e, selected) //note highlit mass is not done this way (becuase there must be only one)
+		binary.Write(buff, le, float32(m.r))
+		binary.Write(buff, le, m.fixed)
+		binary.Write(buff, le, m.isCoin)
+		binary.Write(buff, le, m.collideable)
+		binary.Write(buff, le, selected) //note highlit mass is not done this way (becuase there must be only one)
 		ax := int32(-1)
 		if m.axle != nil {
 			ax = m.axle.index
@@ -83,11 +110,50 @@ func (m *mass) writeBinary(buff *bytes.Buffer, e binary.ByteOrder, withDetail bo
 		}
 
 		//although the client doesnt need to know about axles, and wingroots - we do need to persist them
-		binary.Write(buff, e, ax) //note highlit mass is not done this way (becuase there must be only one)
-		binary.Write(buff, e, wr) //note highlit mass is not done this way (becuase there must be only one)
+		binary.Write(buff, le, ax) //note highlit mass is not done this way (becuase there must be only one)
+		binary.Write(buff, le, wr) //note highlit mass is not done this way (becuase there must be only one)
+		binary.Write(buff, le, float32(m.aoaRads))
+		binary.Write(buff, le, float32(m.wingArea))
+		binary.Write(buff, le, float32(m.dihedralDegrees))
+
+		if m.transformOf != nil {
+			binary.Write(buff, le, m.transformOf.index)
+		} else {
+			binary.Write(buff, le, int32(-1))
+		}
 
 		//todo - mass
 	}
+
+}
+
+// selectedmasses are used when sending the client to implement the player-specific selection set
+func massesToBytes(masses []*mass, withDetail bool, playerSelected map[*mass]bool) []byte {
+
+	buff := new(bytes.Buffer)
+
+	binary.Write(buff, le, byte(msgMasses)) //masses
+	binary.Write(buff, le, uint32(len(masses)))
+
+	if withDetail {
+		binary.Write(buff, le, byte(1))
+	} else {
+		binary.Write(buff, le, byte(0))
+	}
+
+	//send the masses
+	for _, m := range masses {
+		selected := byte(0)
+
+		present, isSelected := playerSelected[m]
+		if present && isSelected {
+			selected = byte(1)
+		}
+
+		m.toByteBuffer(buff, withDetail, selected) //only send the position
+	}
+
+	return buff.Bytes()
 
 }
 

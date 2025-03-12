@@ -24,7 +24,7 @@ var rnGen *rand.Rand //nd.NewPCG(42, uint64(time.Microsecond)))
 
 type soundPayload struct {
 	Sound    string  `json:"sound"`
-	Position Vec3    `json:"position"`
+	Position vec3    `json:"position"`
 	Volume   float32 `json:"volume"`
 	Label    string  `json:"label"`
 	Loop     bool    `json:"loop"`
@@ -36,52 +36,52 @@ type revsPayload struct {
 }
 
 // the client doesn't need to know about springs, faces (except for editing)
-type statePayload struct {
-	GameId  int             `json:"gameId"`
-	Players []playerPayload `json:"players"`
-	Masses  []int           `json:"masses"` //mass info x,y,z,r,fixed,isCoin
-	Things  []thingPayload  `json:"things"` //thing info
-}
+// type statePayload struct {
+// 	GameId  int             `json:"gameId"`
+// 	Players []playerPayload `json:"players"`
+// 	Masses  []int           `json:"masses"` //mass info x,y,z,r,fixed,isCoin
+// 	Things  []thingPayload  `json:"things"` //thing info
+// }
 
-type playerPayload struct {
-	Dozer       int32  `json:"dozer"`
-	Name        string `json:"name"`
-	Coins       int    `json:"coins"`
-	Damage      byte   `json:"damage"`
-	Temperature byte   `json:"temperature"`
-}
+// type playerPayload struct {
+// 	Dozer       int32  `json:"dozer"`
+// 	Name        string `json:"name"`
+// 	Coins       int    `json:"coins"`
+// 	Damage      byte   `json:"damage"`
+// 	Temperature byte   `json:"temperature"`
+// }
 
-type massPayload struct {
-	//index: I, mass: state.masses[I]}}) //we receive a new thing sfrom someone -
-	I      int     `json:"i"`
-	P      Vec3    `json:"p"`
-	R      float64 `json:"r"`
-	Fixed  bool
-	isCoin bool
-}
+// type massPayload struct {
+// 	//index: I, mass: state.masses[I]}}) //we receive a new thing sfrom someone -
+// 	I      int     `json:"i"`
+// 	P      vec3    `json:"p"`
+// 	R      float64 `json:"r"`
+// 	Fixed  bool
+// 	isCoin bool
+// }
 
-type springPayload struct {
-	Ti     int    `json:"ti"`
-	Si     int    `json:"si"`
-	Spring spring `json:"spring"`
-}
+// type springPayload struct {
+// 	Ti     int    `json:"ti"`
+// 	Si     int    `json:"si"`
+// 	Spring spring `json:"spring"`
+// }
 
-type Vec3Payload struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-	Z float64 `json:"z"`
-}
+// type Vec3Payload struct {
+// 	X float64 `json:"x"`
+// 	Y float64 `json:"y"`
+// 	Z float64 `json:"z"`
+// }
 
-type thingPayload struct {
-	Ti         int32       `json:"ti"`
-	MeshName   string      `json:"meshName"`
-	Omi        int32       `json:"omi"`
-	Fmi        int32       `json:"fmi"`
-	Rmi        int32       `json:"rmi"`
-	Scale      Vec3Payload `json:"scale"`
-	Offset     Vec3Payload `json:"offset"`
-	SpringEnds []int       `json:"springEnds"` //m1,m2 index pairs
-}
+// type thingPayload struct {
+// 	Ti         int32       `json:"ti"`
+// 	MeshName   string      `json:"meshName"`
+// 	Omi        int32       `json:"omi"`
+// 	Fmi        int32       `json:"fmi"`
+// 	Rmi        int32       `json:"rmi"`
+// 	Scale      Vec3Payload `json:"scale"`
+// 	Offset     Vec3Payload `json:"offset"`
+// 	SpringEnds []int       `json:"springEnds"` //m1,m2 index pairs
+// }
 
 type meshPayload struct {
 	Name  string `json:"name"`
@@ -103,8 +103,8 @@ type track struct {
 }
 
 type state struct { //the DATA of a game in progress - it can be entirely replaced at any point by rejoining a game
-	gameId uint32
-	Sqn    int
+	filename string
+	Sqn      int
 	//host      string
 	players   map[uint32]*player
 	masses    []*mass
@@ -117,151 +117,10 @@ type state struct { //the DATA of a game in progress - it can be entirely replac
 	running   bool
 }
 
-func (s *state) AddMass(m *mass) *mass {
+func (s *state) addMass(m *mass) *mass {
 	s.masses = append(s.masses, m)
 	m.index = int32(len(s.masses) - 1)
 	return m
-}
-
-// func (t *Tri) getY(x float64, z float64, y []float64) {
-
-// 	pop := t.probePlane(&Vec3{x, -100000, z}, &Vec3{x, 100000, z})
-// 	if pop != nil && t.contains(pop, true, true) {
-
-// 		y[t.depth] = pop.Y
-// 		for _, c := range t.Children {
-// 			c.getY(x, z, y)
-// 		}
-// 	}
-
-// }
-
-// func (s *state) payload() statePayload {
-
-// 	return statePayload{
-// 		GameId:  s.gameId,
-// 		Players: s.playersPayload(),
-// 		Masses:  s.allMassesCompactPayload(),
-// 		Things:  s.thingsPayLoad(),
-// 	}
-
-// }
-
-func (s *state) playersPayload() []playerPayload {
-	pp := make([]playerPayload, len(s.players))
-	i := 0
-	for _, p := range s.players {
-		pp[i] = p.payload()
-		i++
-	}
-	return pp
-}
-
-func (p *player) payload() playerPayload {
-	return playerPayload{
-		Dozer:       p.vehicle.index,
-		Name:        p.name,
-		Coins:       p.coins,
-		Damage:      p.damage,
-		Temperature: p.temperature,
-	}
-}
-
-// func (s *state) thingsPayLoad() []thingPayload {
-// 	tp := make([]thingPayload, len(s.things))
-// 	for i, t := range s.things {
-// 		tp[i] = t.payload()
-// 	}
-// 	return tp
-// }
-
-func (s *state) allMassesCompactPayload() []int {
-	//mass info x,y,z,r,fixed|isCoin
-	mi := make([]int, len(s.masses)*5)
-	for i, m := range s.masses {
-		bits := 0
-		if m.fixed {
-			bits = bits | 1
-		}
-		if m.isCoin {
-			bits = bits | 2
-		}
-		if m.collideable {
-			bits = bits | 4
-		}
-
-		copy(mi[i*5:i*5+5], []int{int(m.p.x * 100), int(m.p.y * 100), int(m.p.z * 100), int(m.r * 100), bits})
-	}
-	return mi
-}
-
-// return the point of intersection of a ray with the triangle
-func (tri *Tri) probePlane(p0 *Vec3, p1 *Vec3) *Vec3 {
-
-	if p0.equals(p1) {
-		panic("Degenerate probing ray")
-	}
-
-	if tri.normal.length() < 0.999 {
-		panic("normal not normalised")
-	}
-
-	if tri.normal.dot(p1.sub(p0)) == 0 {
-		return nil //this is legit, consider a traingle on the x/y plane and an edge of a triangle else where that is paralell with the X/Y plane
-		//panic("ray is parallel to the plane of the triangle")
-	}
-
-	if tri.mesh.verts[tri.vi[0]].p.equals(p0) || tri.mesh.verts[tri.vi[1]].p.equals(p0) || tri.mesh.verts[tri.vi[2]].p.equals(p0) {
-		//panic("p0 is a vertex of the triangle being probed")
-		return p0
-	}
-
-	if tri.mesh.verts[tri.vi[0]].p.equals(p1) || tri.mesh.verts[tri.vi[1]].p.equals(p1) || tri.mesh.verts[tri.vi[2]].p.equals(p1) {
-		//panic("p1 is a vertex of the triangle being probed")
-		return p1
-	}
-
-	d0 := p0.distanceFromPlaneOf(tri) //))tri.distanceFrom(p0, true)
-	d1 := p1.distanceFromPlaneOf(tri)
-
-	// if d0 == 0 || d1 == 0 {
-	// 	logit("probe on the plane")
-	// 	return nil
-	// }
-
-	//if the distances have the same sign, the ray doesnt cross the plane
-	if d0 > 0 && d1 > 0 || d0 < 0 && d1 < 0 {
-		return nil
-	}
-
-	if d0 < 0 {
-		d0 = -d0
-	}
-
-	if d1 < 0 {
-		d1 = -d1
-	} //becase go has no abs
-
-	t := d0 / (d0 + d1)
-
-	if t > 1 {
-		panic("t>1")
-	}
-
-	if t == 0 || t == 1 {
-		logit("probe touches plane")
-	}
-
-	if t >= 0 && t <= 1 { //this is significant includes ray ends touching planes
-		pop := p0.tween(p1, t)
-		if pop.distanceFromPlaneOf(tri) > 0.01 {
-			panic("tween is not on the plane")
-		}
-		return pop
-	}
-	//	panic("Probe failed")
-
-	return nil
 }
 
 // func (p Vec3) distanceFrom(t *Tri, v []vert) float64 {
@@ -315,16 +174,57 @@ func (player *player) sendLand(name string, init bool) {
 
 }
 
-func (s *state) closestMassToRay(start *Vec3, end *Vec3) *mass {
+// func (s *state) mirrorMass(m *mass, g *grid) *mass {
+
+// 	a := g.origin
+// 	b := g.origin.add(g.Xaxis)
+// 	c := g.origin.add(g.Yaxis)
+
+// 	d := m.p.distanceFromTriPlane(a, b, c)
+// 	if d < -0.01 || d > 0.01 { //not on the mirror - make a new mass
+// 		mm := s.addMass(newMass(m.p.reflectInPlane(g.origin, g.normal()), m.r, m.fixed, m.collideable, m.isCoin, m.thing))
+
+// 		return mm
+// 	} else {
+// 		return m //on the mirror - return the original
+// 	}
+
+// }
+
+func (s *state) closestSpringToRay(start *vec3, end *vec3) (*thing, *spring) {
+
+	closestDistance := float64(1000)
+	var closestSpring *spring = nil
+	var closestThing *thing = nil
+
+	for _, t := range s.things {
+		for _, s := range t.springs {
+
+			d := distanceBetweenLines(start, end, s.m1.p, s.m2.p)
+			if d < closestDistance {
+				closestDistance = d
+				closestSpring = s
+				closestThing = t
+			}
+
+		}
+	}
+
+	return closestThing, closestSpring
+}
+
+func (s *state) closestMassToRay(start *vec3, end *vec3, exclude *mass) *mass {
 
 	closestDistance := float64(1000)
 	var closestMass *mass = nil
 
 	for _, m := range s.masses {
-		d := m.p.distanceFromLine(start, end)
-		if d < m.r && d < closestDistance {
-			closestDistance = d
-			closestMass = m
+		if m != exclude {
+			d := m.p.distanceFromLine(start, end)
+			if d < m.r && d <= closestDistance { //<= selected the LAST mass at the point (mirrored masses, on the mirror)
+				closestDistance = d
+				closestMass = m
+			}
 		}
 	}
 
@@ -362,37 +262,8 @@ func (state *state) step() {
 	// }
 
 	for _, p := range state.players {
-		dz := p.vehicle
-		if dz != nil {
-
-			o := dz.springs[0].m2.p
-
-			y0pos := newVec3(o.x, 0, o.z)
-			if y0pos.distanceFrom(p.lastLandPos) > 50 {
-				p.makeLand(y0pos, 10, 2000, 10000) //makes and sends new land
-			}
-
-			fl := dz.springs[1].m2.p
-			//xa:=  o.sub(m[t.springs[0].m1].P)
-			za := fl.sub(o).normalise()
-
-			p.camera.position = o.sub(za.multiply(50))
-			leaf := p.landTri.vProbe(newVec3(p.camera.position.x, 0, p.camera.position.z))
-
-			if leaf != nil {
-
-				//cp = leaf.probePlane(newVec3(cp.x, -10000, cp.z), newVec3(cp.x, 10000, cp.z))
-				p.camera.position.y = o.y + 10
-				//cp.y = 2000
-
-			} else {
-				//logit("off world")
-			}
-			//p.send(&reply{Cmd: "campos", Payload: surface.payload()})
-			p.send(&reply{Cmd: "campos", Payload: p.camera.position.payload()})
-			p.send(&reply{Cmd: "camlookat", Payload: o.add(newVec3(0, 8, 0)).payload()})
-		}
-
+		p.camera.follow(p.vehicle)
+		p.sendCamera()
 	}
 
 	//count money and send to player
@@ -433,9 +304,9 @@ func (state *state) step() {
 
 // }
 
-func (s *state) save(filename string, e binary.ByteOrder, selectedMasses map[*mass]bool) {
+func (s *state) save(filename string, selectedMasses map[*mass]bool) {
 
-	file, err := os.Create(filename)
+	file, err := os.Create(filename + ".bin")
 	if err != nil {
 		logit(err.Error() + " save failed")
 		return
@@ -444,16 +315,16 @@ func (s *state) save(filename string, e binary.ByteOrder, selectedMasses map[*ma
 
 	writer := bufio.NewWriter(file)
 
-	writer.Write(massesToBytes(s.masses, e, true, selectedMasses)) //write all masses, with detail
-	writer.Write(thingsToBytes(s.things, e))                       //write all things (springs, meshnames, offsets, scales, rotations)
-	writer.Write(binaryPlayers(s.players, e))                      //write all players (dozer index, name, coins, damage, temperature, cameras, selections)
+	writer.Write(massesToBytes(s.masses, true, selectedMasses)) //write all masses, with detail
+	writer.Write(thingsToBytes(s.things))                       //write all things (springs, meshnames, offsets, scales, rotations)
+	writer.Write(playersToBytes(s.players))                     //write all players (dozer index, name, coins, damage, temperature, cameras, selections)
 	writer.Flush()
 
 	//write the bytes slice to a file
 
 }
 
-func (s *state) massesFromBytes(buff *bytes.Buffer) {
+func (s *state) massesFromByteBuffer(buff *bytes.Buffer) {
 
 	le := binary.LittleEndian
 
@@ -470,16 +341,20 @@ func (s *state) massesFromBytes(buff *bytes.Buffer) {
 	binary.Read(buff, le, &withDetail)
 
 	for i := 0; i < int(nm); i++ {
-		idx := uint32(0)
-		binary.Read(buff, le, &idx)
-		m := NewMass(newVec3(0, 0, 0), 0, false, false, false, nil)
-		m.readBinary(s, buff, le, withDetail)
+
+		m := newMass(newVec3(0, 0, 0), 0, false, false, false, nil, nil)
+
+		m.fromByteBuffer(buff, le, withDetail, s)
+		if m.index != int32(i) {
+			panic("mass index mismatch")
+		}
+		s.masses[m.index] = m
 	}
 }
 
 func load(filename string) *state {
 
-	file, err := os.Open(filename)
+	file, err := os.Open(filename + ".bin")
 	if err != nil {
 		logit(err.Error() + " load failed")
 		return &state{}
@@ -495,10 +370,11 @@ func load(filename string) *state {
 	//buff := bytes.NewBuffer(mb)
 	buff := bytes.NewBuffer(allBytes)
 
-	state := NewState()
-	state.massesFromBytes(buff)
-	state.readBinaryThings(buff)
-	state.readPlayersFromBytes(buff)
+	state := NewState(filename)
+	state.massesFromByteBuffer(buff)
+	state.referenceMasses() //uses mass.axi and mass.wri to restore the m.wingroot and m.axle mass references
+	state.thingsFromByteBuffer(buff)
+	state.playersFromByteBuffer(buff)
 
 	logit("Loaded state from " + filename)
 
@@ -506,7 +382,7 @@ func load(filename string) *state {
 
 }
 
-func (s *state) readPlayersFromBytes(buff *bytes.Buffer) {
+func (s *state) playersFromByteBuffer(buff *bytes.Buffer) {
 
 	le := binary.LittleEndian
 
@@ -516,27 +392,17 @@ func (s *state) readPlayersFromBytes(buff *bytes.Buffer) {
 		panic("Players are not next")
 	}
 
-	np := uint32(0)
-	binary.Read(buff, binary.LittleEndian, &np)
+	numPlayers := uint32(0)
+	binary.Read(buff, binary.LittleEndian, &numPlayers)
 	s.players = make(map[uint32]*player)
 
-	for i := 0; i < int(np); i++ {
-
-		id := uint32(0)
-		binary.Read(buff, le, &id)
-		p := NewPlayer(id, "", nil, nil)
-		s.players[id] = p
-		lpn := byte(0)
-		binary.Read(buff, le, &lpn)
-		name := make([]byte, lpn)
-		binary.Read(buff, le, &name)
-		p.name = string(name)
-		binary.Read(buff, le, &p.vehicle.index)
-		p.camera.readBinary(buff, le)
+	for i := 0; i < int(numPlayers); i++ {
+		p := playerFromByteBuffer(buff, le, s)
+		s.players[p.id] = p
 	}
 }
 
-func (s *state) readBinaryThings(buff *bytes.Buffer) {
+func (s *state) thingsFromByteBuffer(buff *bytes.Buffer) {
 
 	le := binary.LittleEndian
 
@@ -547,38 +413,17 @@ func (s *state) readBinaryThings(buff *bytes.Buffer) {
 	}
 
 	nt := uint32(0)
-	binary.Read(buff, binary.LittleEndian, &nt)
-	s.things = make([]*thing, nt)
+	binary.Read(buff, le, &nt)
+	s.things = make([]*thing, 0)
 
 	for i := 0; i < int(nt); i++ {
-		idx := uint32(0)
+		idx := int32(-1)
 		binary.Read(buff, le, &idx)
-		t := NewThing("")
-		t.readBinary(buff, le)
-	}
-}
-
-func (t *thing) readBinary(buff *bytes.Buffer, e binary.ByteOrder) {
-
-	mnl := byte(0)
-	binary.Read(buff, e, &mnl)
-	meshName := make([]byte, mnl)
-	binary.Read(buff, e, &meshName)
-	t.meshName = string(meshName)
-
-	binary.Read(buff, e, &t.offset)
-	binary.Read(buff, e, &t.scale)
-
-	binary.Read(buff, e, &t.omi)
-	binary.Read(buff, e, &t.fmi)
-	binary.Read(buff, e, &t.rmi)
-
-	ns := uint32(0)
-	binary.Read(buff, e, &ns)
-	t.springs = make([]*spring, ns)
-	for i := 0; i < int(ns); i++ {
-		binary.Read(buff, e, &t.springs[i].m1.index)
-		binary.Read(buff, e, &t.springs[i].m1.index)
+		t := s.addThing("")
+		if idx != t.index {
+			panic("thing index mismatch")
+		}
+		t.fromByteBuffer(buff, le)
 	}
 }
 
@@ -591,7 +436,7 @@ func (s *state) addThing(meshName string) *thing {
 	return t //len(s.Things) - 1 // return the index of the new thing
 }
 
-func (t *thing) AddSpring(m1 *mass, m2 *mass, collideable bool) *spring {
+func (t *thing) AddSpring(m1 *mass, m2 *mass, collideable byte) *spring {
 	s := NewSpring(m1, m2, collideable)
 	t.springs = append(t.springs, s)
 	t.masses[m1] = true
@@ -606,7 +451,7 @@ func (t *thing) addFace(m ...*mass) {
 	t.faces = append(t.faces, f)
 }
 
-func (state *state) AddPlayer(playerId uint32, name string, position *Vec3, ws *websocket.Conn) *player {
+func (state *state) AddPlayer(playerId uint32, name string, position *vec3, ws *websocket.Conn) *player {
 
 	p := NewPlayer(playerId, name, state, ws)
 
@@ -623,68 +468,73 @@ func (state *state) moveCameras() {
 
 }
 
-func (player *player) makeDozer(y0pos *Vec3) {
+func (p *player) makeDozer(y0pos *vec3) {
 
-	state := player.state
+	state := p.state
 
 	pos := newVec3(0, 0, 0)
-	if player.landTri != nil {
-		pos, _ = player.landTri.probeLand(y0pos)
+	if p.landTri != nil {
+		pos, _ = p.landTri.probeLand(y0pos)
 	}
+
+	p.grid.origin = pos.clone()
+	p.grid.send(p)
 
 	pos.y += 5 //lift it 5metres
 
 	dozer := state.addThing("plane") // position,0,radius,"",0,false,"dozers",1)
+	p.currentThing = dozer
 
 	//note masses do not belong to things .. this allows two things to be joined by a spring
 
 	massRadius := float64(0.15)
 
-	rl := state.AddMass(NewMass(pos, massRadius, false, false, true, dozer))
+	rl := state.addMass(newMass(pos, massRadius, false, false, true, dozer, nil))
 	w := float64(3)
 	h := float64(5)
-	rr := state.AddMass(NewMass(pos.add(newVec3(w, 0, 0)), massRadius, false, false, true, dozer))
-	fl := state.AddMass(NewMass(pos.add(newVec3(0, 0, -h)), massRadius, false, false, true, dozer))
-	fr := state.AddMass(NewMass(pos.add(newVec3(w, 0, -h)), massRadius, false, false, true, dozer))
+	rr := state.addMass(newMass(pos.add(newVec3(w, 0, 0)), massRadius, false, false, true, dozer, nil))
+	fl := state.addMass(newMass(pos.add(newVec3(0, 0, -h)), massRadius, false, false, true, dozer, nil))
+	fr := state.addMass(newMass(pos.add(newVec3(w, 0, -h)), massRadius, false, false, true, dozer, nil))
 
 	rl.axle = rr
 	rr.axle = rl
 	fl.axle = fr
 	fr.axle = fl
 
-	dozer.AddSpring(rr, rl, true) // bottom
-	dozer.AddSpring(rl, fl, true) // left
-	dozer.AddSpring(fl, fr, true) // top
-	dozer.AddSpring(fr, rr, true) // right
+	collideable := byte(1)
+	dozer.AddSpring(rr, rl, collideable) // bottom
+	dozer.AddSpring(rl, fl, collideable) // left
+	dozer.AddSpring(fl, fr, collideable) // top
+	dozer.AddSpring(fr, rr, collideable) // right
 
-	dozer.AddSpring(rr, fl, false) // cross members (not collideable)
-	dozer.AddSpring(rl, fr, false)
+	dozer.AddSpring(rr, fl, 0) // cross members (not collideable)
+	dozer.AddSpring(rl, fr, 0)
 
-	bh := newVec3(0, 1, 0)                                                            //blade height
-	bl := state.AddMass(NewMass(fl.p.add(bh), massRadius, false, false, true, dozer)) //blade left top
-	br := state.AddMass(NewMass(fr.p.add(bh), massRadius, false, false, true, dozer)) //blade left top
+	bh := newVec3(0, 1, 0)                                                                 //blade height
+	bl := state.addMass(newMass(fl.p.add(bh), massRadius, false, false, true, dozer, nil)) //blade left top
+	br := state.addMass(newMass(fr.p.add(bh), massRadius, false, false, true, dozer, nil)) //blade left top
 
-	dozer.AddSpring(bl, rr, true) //blade diagonal suppport
-	dozer.AddSpring(br, rl, true) //blade diagonal suppport
-	dozer.AddSpring(fl, bl, true) //blade left side
-	dozer.AddSpring(fr, br, true) //blade right side
-	dozer.AddSpring(rr, br, true) //blade right side support
-	dozer.AddSpring(rl, bl, true) //blade left side support
+	dozer.AddSpring(bl, rr, collideable) //blade diagonal suppport
+	dozer.AddSpring(br, rl, collideable) //blade diagonal suppport
+	dozer.AddSpring(fl, bl, collideable) //blade left side
+	dozer.AddSpring(fr, br, collideable) //blade right side
+	dozer.AddSpring(rr, br, collideable) //blade right side support
+	dozer.AddSpring(rl, bl, collideable) //blade left side support
 
-	dozer.AddSpring(bl, br, true) //blade top edge
+	dozer.AddSpring(bl, br, collideable) //blade top edge
 
 	dozer.addFace(fl, fr, br, bl)
 
 	//set the orientation masses
-	dozer.omi = rl.index
-	dozer.rmi = rr.index
-	dozer.fmi = fl.index
+	dozer.om = rl
+	dozer.rm = rr
+	dozer.fm = fl
 
-	player.vehicle = dozer
+	p.vehicle = dozer
 
 }
 
-func (state *state) closestSpring(wp *Vec3) (*spring, *thing) {
+func (state *state) closestSpring(wp *vec3) (*spring, *thing) {
 
 	var closestSpring *spring
 	var closestThing *thing
@@ -708,7 +558,7 @@ func (state *state) closestSpring(wp *Vec3) (*spring, *thing) {
 
 }
 
-func (state *state) closestMass(wp *Vec3) *mass {
+func (state *state) closestMass(wp *vec3) *mass {
 
 	//let closestDistance=within
 	for _, m := range state.masses {
@@ -773,33 +623,35 @@ func (state *state) resolvePenetrations() bool {
 			//surface := state.landTri.probeLand(newVec3(m.P.X, m.P.Y-m.R, m.P.Z), m.P.add(up))
 			np := state.nearestPlayer(m.p)
 			if np != nil {
-				surface, normal := np.landTri.probeLand(newVec3(m.p.x, 0, m.p.z))
-				//am i beneath the land
-				if surface != nil {
+				if np.landTri != nil {
+					surface, normal := np.landTri.probeLand(newVec3(m.p.x, 0, m.p.z))
+					//am i beneath the land
+					if surface != nil {
 
-					pen := surface.y - (m.p.y - m.r)
+						pen := surface.y - (m.p.y - m.r)
 
-					if pen > 0 { //m.p.y < surface.y+m.r {
-						v := m.p.sub(m.op)
-						vr := v.reflect(normal)
+						if pen > 0 { //m.p.y < surface.y+m.r {
+							v := m.p.sub(m.op)
+							vr := v.reflect(normal)
 
-						if pen > 0.1 {
-							logit("deep penetration", v.length()*30, "m/s")
+							if pen > 0.1 {
+								logit("deep penetration", v.length()*30, "m/s")
+							}
+
+							m.p.y = surface.y + m.r
+
+							vr = vr.sub(normal.multiply(vr.dot(normal) * .8)) //kill 80% of the vertical velocity (20% bounce)
+
+							if m.axle != nil {
+								axle := m.axle.p.sub(m.p).normalise()
+								vr = vr.sub(axle.multiply(vr.dot(axle))) //kill (only the) sideways velocity of the wheel
+							} else { //not a wheel
+								vr = vr.multiply(.8) //kill 80% of the velocity
+							}
+
+							m.op = m.p.sub(vr)
+
 						}
-
-						m.p.y = surface.y + m.r
-
-						vr = vr.sub(normal.multiply(vr.dot(normal) * .8)) //kill 80% of the vertical velocity (20% bounce)
-
-						if m.axle != nil {
-							axle := m.axle.p.sub(m.p).normalise()
-							vr = vr.sub(axle.multiply(vr.dot(axle))) //kill (only the) sideways velocity of the wheel
-						} else { //not a wheel
-							vr = vr.multiply(.8) //kill 80% of the velocity
-						}
-
-						m.op = m.p.sub(vr)
-
 					}
 				}
 			}
@@ -809,7 +661,7 @@ func (state *state) resolvePenetrations() bool {
 	return penetrated
 }
 
-func (state *state) nearestPlayer(p *Vec3) *player {
+func (state *state) nearestPlayer(p *vec3) *player {
 
 	var nearestPlayer *player
 	var nearestDistance float64 = 100000
@@ -846,7 +698,7 @@ func (state *state) pushApart(m *mass, thing *thing) bool {
 }
 
 // Used client side as the objects are dehyrdrated
-func (state *state) centreOf(thingNum int) *Vec3 {
+func (state *state) centreOf(thingNum int) *vec3 {
 
 	thing := state.things[thingNum]
 	r := newVec3(0, 0, 0) //Vector{0, 0}
@@ -889,6 +741,56 @@ func (state *state) tumbleCoins() {
 	// }
 }
 
+func (state *state) flyMasses(p *player) {
+
+	//	gravity := 9.81 * (1 / 30.0 * 1 / 30.0) //DONT half this
+
+	ntm := 0.00000005 //newtons to metres of movement per substep
+
+	for _, m := range state.masses {
+		if m.wingRoot != nil {
+			if m.axle == nil {
+				panic("no wing axis")
+			}
+			if m.wingArea == 0 {
+				panic("no wing area")
+			}
+			wingAxis := m.p.sub(m.axle.p).normalise()
+			rootAxis := m.axle.p.sub(m.wingRoot.p).normalise()
+			v := m.p.sub(m.op)
+			vms := v.length() * 30.0 * 5.0
+
+			if vms > 0.1 {
+				logit(vms, "m/s")
+				v2 := v.lengthSq()
+				direction := v.normalise()
+
+				//the lift direction is always orthogonal to the direction of travel (regardless of the Aoa)
+				liftDir := wingAxis.cross(direction).normalise().rotateAbout(rootAxis, m.dihedralDegrees)
+				wingUp := rootAxis.cross(wingAxis).normalise()
+				aoaDegrees := (math.Asin(direction.dot(wingUp)) + m.aoaRads) / math.Pi * 180
+				cl := lerp(aoaDegrees, state.liftCurve)
+				cd := lerp(aoaDegrees, state.dragCurve)
+				liftNewtons := v2 * cl * m.wingArea
+				lift := liftDir.multiply(liftNewtons)
+
+				dragNewtons := v2 * cd * m.wingArea
+				drag := direction.multiply(-dragNewtons)
+
+				m.lift = lift.multiply(ntm * 100.0) //visualise at 10x movement
+				//todo - spread across the three masess
+				if p.thrust > 0 {
+					logit("thrust", p.thrust)
+				}
+				m.p.addIn(rootAxis.multiply(p.thrust * ntm))
+				m.p.addIn(lift.multiply(ntm))
+				m.p.addIn(drag.multiply(ntm))
+			}
+
+		}
+	}
+
+}
 func (state *state) stretchSprings() {
 	for _, t := range state.things {
 		for _, s := range t.springs {
@@ -901,14 +803,14 @@ func (state *state) anyPlayers() bool {
 	return len(state.players) > 0
 }
 
-func (state *state) scatterCoins(w float64, h float64) {
+func (s *state) scatterCoins(w float64, h float64) {
 
 	countValues := []int{100, 1, 20, 2, 10, 5, 5, 10}
 	for i := 0; i < len(countValues); i += 2 {
 		v := countValues[i+1]
 		for j := 0; j < countValues[i]; j++ {
-			p := Vec3{x: rand.Float64() * w, y: -400, z: rand.Float64() * h}
-			state.AddMass(NewMass(&p, float64(v), false, true, true, nil)) //coins don't have a thingNum
+			p := vec3{x: rand.Float64() * w, y: -400, z: rand.Float64() * h}
+			s.addMass(newMass(&p, float64(v), false, true, true, nil, nil)) //coins don't have a thingNum
 		}
 	}
 }
@@ -946,6 +848,28 @@ func (state *state) checkDeaths() {
 func (state *state) deleteMass(m *mass) {
 	state.masses = append(state.masses[:m.index], state.masses[m.index+1:]...)
 	//todo reindex all springs above
+
+	for i, j := range state.masses {
+		if j.index > m.index {
+			j.index--
+		}
+		if j.index != int32(i) {
+			panic("mass index mismatch")
+		}
+
+	}
+}
+
+// if this mass unattached (to a any spring)
+func (state *state) massFree(m *mass) bool {
+	for _, t := range state.things {
+		for _, s := range t.springs {
+			if s.m1 == m || s.m2 == m {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (t *thing) deleteSpring(s *spring) {
@@ -956,6 +880,11 @@ func (t *thing) deleteSpring(s *spring) {
 		panic("spring does not belong to thing")
 	}
 	t.springs = append(t.springs[:s.index], t.springs[s.index+1:]...)
+	for _, rs := range t.springs {
+		if rs.index > s.index {
+			rs.index--
+		}
+	}
 
 }
 
@@ -966,7 +895,7 @@ func (t *thing) deleteSpring(s *spring) {
 
 func (state *state) resetDozer(player *player) {
 
-	var pos *Vec3 = state.RandomStartPos(10000)
+	var pos *vec3 = state.RandomStartPos(10000)
 
 	w := float64(100)
 	h := float64(140)
@@ -1028,6 +957,8 @@ func (state *state) moveAll(substeps int) {
 				m.p.addIn(m.v.multiply(.999)) //inertia and friction
 
 			}
+
+			state.flyMasses(state.players[0])
 
 			for _, p := range state.players {
 				if p.vehicle != nil { //controller players don't have dozers
@@ -1196,8 +1127,25 @@ func (state *state) setupTiledLayer(layerName string, pic string, tileSize float
 	}
 }
 
-func NewState() *state {
-	gameId := uint32(rand.Float32() * 1000000)
+func (s *state) referenceMasses() {
+	for _, m := range s.masses {
+		if m.axi > -1 {
+			if s.masses[m.axi] == nil {
+				panic("mass axis not found")
+			}
+			m.axle = s.masses[m.axi]
+		}
+		if m.wri > -1 {
+			if s.masses[m.wri] == nil {
+				panic("mass wri not found")
+			}
+			m.wingRoot = s.masses[m.wri]
+		}
+
+	}
+}
+func NewState(filename string) *state {
+	gameId := filename //uint32(rand.Float32() * 1000000)
 
 	//looseley basedon  https://aerospaceweb.org/question/airfoils/q0150b.shtml (for high alpha values)
 	liftCurve := []float64{
@@ -1221,7 +1169,7 @@ func NewState() *state {
 		90, 1,
 	}
 
-	return &state{gameId: gameId, players: map[uint32]*player{}, masses: []*mass{}, things: []*thing{}, deathList: []*player{}, Layers: map[string]*Layer{}, Tracks: map[string]*track{}, liftCurve: liftCurve, dragCurve: dragCurve}
+	return &state{filename: gameId, players: map[uint32]*player{}, masses: []*mass{}, things: []*thing{}, deathList: []*player{}, Layers: map[string]*Layer{}, Tracks: map[string]*track{}, liftCurve: liftCurve, dragCurve: dragCurve}
 }
 
 func lerp(x float64, data []float64) float64 {
@@ -1245,7 +1193,7 @@ func lerp(x float64, data []float64) float64 {
 
 }
 
-func (state *state) qSound(sound string, position *Vec3, volume float32, label string, loop bool) {
+func (state *state) qSound(sound string, position *vec3, volume float32, label string, loop bool) {
 
 	payload := soundPayload{Sound: sound, Position: *position, Volume: volume, Label: label, Loop: loop}
 	state.send(nil, &reply{Cmd: "sound", Payload: payload})

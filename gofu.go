@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"github.com/gorilla/websocket"
 	//"golang.org/x/tools/playground/socket"
 )
+
+var le = binary.LittleEndian
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -57,7 +60,7 @@ func homePage(w http.ResponseWriter, _ *http.Request) {
 	logit("homePage", "called")
 	fmt.Fprintf(w, "<h1>Dozer game server</h1>")
 	for i, g := range games {
-		fmt.Fprintf(w, "<p>Game %d has %d players", i, len(g.players))
+		fmt.Fprintf(w, "<p>Game %s has %d players", i, len(g.players))
 		for _, p := range g.players {
 			fmt.Fprintf(w, "<p>Player %s", p.name)
 		}
@@ -117,7 +120,7 @@ func main() {
 	fs := http.FileServer(http.Dir("../dozer"))
 
 	//important!
-	games = make(map[uint32]*state)
+	games = make(map[string]*state)
 
 	accountsByGuid = make(map[string]*account)
 
@@ -163,17 +166,20 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 
 		if err != nil {
 			logit("Error reading message from websocket: " + err.Error())
+			break
 		}
 
 		if messageType == websocket.TextMessage {
-			var structuredMessage msg
-			//err = json.NewDecoder(msg).Decode(&block)
-			err := json.Unmarshal(msgBytes, &structuredMessage)
-			if err != nil {
-				logit(err.Error())
-			}
+			if player != nil {
+				var structuredMessage msg
+				//err = json.NewDecoder(msg).Decode(&block)
+				err := json.Unmarshal(msgBytes, &structuredMessage)
+				if err != nil {
+					logit(err.Error())
+				}
 
-			processMsg(structuredMessage, player, ws) //player is set by creategame/joingame
+				processMsg(structuredMessage, player, ws) //player is set by creategame/joingame
+			}
 
 		} else if messageType == websocket.BinaryMessage {
 			//msgbytes is a slice of bytes
@@ -185,6 +191,9 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 
 		}
 	}
+	player.socket.Close()
+	player.socket = nil
+	logit("socket error/ended for", player.name)
 }
 
 func customHeaders(fs http.Handler) http.HandlerFunc {

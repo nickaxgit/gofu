@@ -2,7 +2,7 @@ package main
 
 // import "math"
 
-func (ps *penSet) penAt(p *Vec3) *pen {
+func (ps *penSet) penAt(p *vec3) *pen {
 	for _, pen := range ps.pens {
 		if pen.p.equals(p) {
 			return pen
@@ -44,7 +44,7 @@ func (ps *penSet) penAt(p *Vec3) *pen {
 // //penetrations will always come in pairs, sometimes two face penetrations, sometimes to edge penetrations, sometimes one of each
 type pen struct {
 	ps *penSet //hold a reference to the set a belong to
-	p  *Vec3   //the point of penetration
+	p  *vec3   //the point of penetration
 	//vi	   	 int       //the new vertex of penetration
 	v1, v2     uint16 // for face penetrations, the edge of the tool that penetrated
 	toolTri    *Tri   //the penatrator
@@ -59,7 +59,7 @@ type penSet struct {
 	usedCount int
 }
 
-func (ps *penSet) add(p *Vec3, v1, v2 uint16, toolTri, clayTri *Tri, isBoundary bool) {
+func (ps *penSet) add(p *vec3, v1, v2 uint16, toolTri, clayTri *Tri, isBoundary bool) {
 	ps.pens = append(ps.pens, &pen{ps, p, v1, v2, toolTri, clayTri, false, isBoundary, nil})
 }
 

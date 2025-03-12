@@ -7,17 +7,50 @@ import (
 	"strconv"
 )
 
-type Vec3 struct {
+type vec3 struct {
 	x float64
 	y float64
 	z float64
 }
 
-func newVec3(x, y, z float64) *Vec3 {
-	return &Vec3{x, y, z}
+func distanceBetweenLines(a1, a2, b1, b2 *vec3) float64 {
+	//from http://geomalgorithms.com/a07-_distance.html
+	u := a2.sub(a1)
+	v := b2.sub(b1)
+	w := a1.sub(b1)
+
+	a := u.dot(u)
+	b := u.dot(v)
+	c := v.dot(v)
+	d := u.dot(w)
+	e := v.dot(w)
+
+	D := a*c - b*b
+	sc := 0.0
+	tc := 0.0
+
+	if D < 0.00001 {
+		sc = 0.0
+		tc = (e / c)
+	} else {
+		sc = (b*e - c*d) / D
+		tc = (a*e - b*d) / D
+	}
+
+	return a1.add(u.multiply(sc)).sub(b1.add(v.multiply(tc))).length()
+
+	//return a1.add(u.multiply(sc))
+
+}
+func (p *vec3) reflectInPlane(pop *vec3, normal *vec3) *vec3 {
+	return p.sub(normal.multiply(2 * (p.dot(normal) - pop.dot(normal))))
 }
 
-func (a *Vec3) add(b *Vec3) *Vec3 {
+func newVec3(x, y, z float64) *vec3 {
+	return &vec3{x, y, z}
+}
+
+func (a *vec3) add(b *vec3) *vec3 {
 	return newVec3(a.x+b.x, a.y+b.y, a.z+b.z)
 }
 
@@ -25,19 +58,19 @@ func hypo3(a, b, c float64) float64 {
 	return math.Sqrt(float64(a*a + b*b + c*c))
 }
 
-func (a *Vec3) addIn(b *Vec3) {
+func (a *vec3) addIn(b *vec3) {
 	a.x += b.x
 	a.y += b.y
 	a.z += b.z
 }
 
-func (a *Vec3) subIn(b *Vec3) {
+func (a *vec3) subIn(b *vec3) {
 	a.x -= b.x
 	a.y -= b.y
 	a.z -= b.z
 }
 
-func (p *Vec3) projectOntoPlane(pop, normal *Vec3) *Vec3 {
+func (p *vec3) projectOntoPlane(pop, normal *vec3) *vec3 {
 	return p.sub(normal.multiply(p.dot(normal) - pop.dot(normal)))
 
 }
@@ -46,15 +79,15 @@ func (p *Vec3) projectOntoPlane(pop, normal *Vec3) *Vec3 {
 // 	return hypo3(a.X-b.X, a.Y-b.Y, a.Z-b.Z)
 // }
 
-func (p *Vec3) payload() Vec3Payload {
-	return Vec3Payload{X: p.x, Y: p.y, Z: p.z}
-}
+// func (p *vec3) payload() Vec3Payload {
+// 	return Vec3Payload{X: p.x, Y: p.y, Z: p.z}
+// }
 
-func (a *Vec3) lengthSq() float64 {
+func (a *vec3) lengthSq() float64 {
 	return a.x*a.x + a.y*a.y + a.z*a.z
 }
 
-func (p *Vec3) rotateAbout(axis *Vec3, angle float64) *Vec3 {
+func (p *vec3) rotateAbout(axis *vec3, angle float64) *vec3 {
 	al := axis.length()
 	if al < .999 || al > 1.001 {
 		panic("axis is not unit length")
@@ -92,48 +125,48 @@ func (p *Vec3) rotateAbout(axis *Vec3, angle float64) *Vec3 {
 // 	a.Z += b.Z
 // }
 
-func (a *Vec3) multiply(f float64) *Vec3 {
+func (a *vec3) multiply(f float64) *vec3 {
 	return newVec3(a.x*f, a.y*f, a.z*f)
 }
 
-func (a *Vec3) tween(b *Vec3, f float64) *Vec3 {
+func (a *vec3) tween(b *vec3, f float64) *vec3 {
 	return newVec3(a.x+(b.x-a.x)*f, a.y+(b.y-a.y)*f, a.z+(b.z-a.z)*f)
 }
 
-func (a *Vec3) sub(b *Vec3) *Vec3 {
+func (a *vec3) sub(b *vec3) *vec3 {
 	return newVec3(a.x-b.x, a.y-b.y, a.z-b.z)
 }
 
-func (a *Vec3) normalise() *Vec3 {
+func (a *vec3) normalise() *vec3 {
 	l := a.length()
 	if l == 0 {
 		panic("can't normalise 0 vector")
 		//return a
 	}
-	return &Vec3{x: a.x / l, y: a.y / l, z: a.z / l}
+	return &vec3{x: a.x / l, y: a.y / l, z: a.z / l}
 }
 
-func (p *Vec3) toByteBuffer(buff *bytes.Buffer, e binary.ByteOrder) {
-	binary.Write(buff, e, float32(p.x)) //NOTE you CANT write a Vec3 directly as it has float64 components
-	binary.Write(buff, e, float32(p.y))
-	binary.Write(buff, e, float32(p.z))
+func (p *vec3) toByteBuffer(buff *bytes.Buffer) {
+	binary.Write(buff, le, float32(p.x)) //NOTE you CANT write a Vec3 directly as it has float64 components
+	binary.Write(buff, le, float32(p.y))
+	binary.Write(buff, binary.LittleEndian, float32(p.z))
 }
 
-func (p *Vec3) fromByteBuffer(buff *bytes.Buffer, e binary.ByteOrder) {
+func (p *vec3) fromByteBuffer(buff *bytes.Buffer) {
 
 	floats := make([]float32, 3) //the components of a vector are float64's but we downscale to 32bits for transmission/storage
-	binary.Read(buff, e, &floats)
+	binary.Read(buff, le, &floats)
 	p.x = float64(floats[0])
 	p.y = float64(floats[1])
 	p.z = float64(floats[2])
 
 }
 
-func (a *Vec3) length() float64 {
+func (a *vec3) length() float64 {
 	return hypo3(a.x, a.y, a.z)
 }
 
-func (a *Vec3) equals(b *Vec3) bool {
+func (a *vec3) equals(b *vec3) bool {
 	if a.x == b.x && a.y == b.y && a.z == b.z {
 		return true
 	}
@@ -151,18 +184,18 @@ func (a *Vec3) equals(b *Vec3) bool {
 // 	return newVector(x, y)
 // }
 
-func (a *Vec3) dot(b *Vec3) float64 {
+func (a *vec3) dot(b *vec3) float64 {
 	return a.x*b.x + a.y*b.y + a.z*b.z
 }
 
-func (a *Vec3) cross(b *Vec3) *Vec3 {
+func (a *vec3) cross(b *vec3) *vec3 {
 	if (a.length() == 0) || (b.length() == 0) {
 		panic("can't cross 0 vector")
 	}
-	return &Vec3{a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}
+	return &vec3{a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}
 }
 
-func (p *Vec3) signedDistanceFromLineSegment(a, b, n *Vec3) float64 {
+func (p *vec3) signedDistanceFromLineSegment(a, b, n *vec3) float64 {
 
 	cp := p.closestPointOnLineSegment(a, b)
 
@@ -179,7 +212,7 @@ func (p *Vec3) signedDistanceFromLineSegment(a, b, n *Vec3) float64 {
 
 }
 
-func (p *Vec3) closestPointOnLineSegment(a, b *Vec3) *Vec3 {
+func (p *vec3) closestPointOnLineSegment(a, b *vec3) *vec3 {
 
 	ab := b.sub(a)
 	ap := p.sub(a)
@@ -195,7 +228,7 @@ func (p *Vec3) closestPointOnLineSegment(a, b *Vec3) *Vec3 {
 
 }
 
-func (p *Vec3) distanceFromLineSegment(a, b *Vec3) float64 {
+func (p *vec3) distanceFromLineSegment(a, b *vec3) float64 {
 	//TEST this
 	ab := b.sub(a)
 	abn := ab.normalise()
@@ -210,22 +243,22 @@ func (p *Vec3) distanceFromLineSegment(a, b *Vec3) float64 {
 	return p.distanceFromLine(a, b)
 }
 
-func (p Vec3) closestPointOnLine(a, b *Vec3) *Vec3 {
+func (p vec3) closestPointOnLine(a, b *vec3) *vec3 {
 	ab := b.sub(a)
 	abn := ab.normalise()
 	dp := p.sub(a).dot(abn)
 	return a.add(abn.multiply(dp))
 }
 
-func (p *Vec3) distanceFromLine(a, b *Vec3) float64 {
+func (p *vec3) distanceFromLine(a, b *vec3) float64 {
 	return p.closestPointOnLine(a, b).distanceFrom(p)
 }
 
-func (p *Vec3) distanceFrom(b *Vec3) float64 {
+func (p *vec3) distanceFrom(b *vec3) float64 {
 	return hypo3(p.x-b.x, p.y-b.y, p.z-b.z)
 }
 
-func (p *Vec3) liesBetween(a *Vec3, b *Vec3) bool {
+func (p *vec3) liesBetween(a *vec3, b *vec3) bool {
 
 	if a.equals(b) {
 		panic("a and b are the same point")
@@ -268,7 +301,7 @@ func (p *Vec3) liesBetween(a *Vec3, b *Vec3) bool {
 
 //		return bestDist
 //	}
-func (p *Vec3) distanceFromPlaneOf(t *Tri) float64 {
+func (p *vec3) distanceFromPlaneOf(t *Tri) float64 {
 
 	v := t.mesh.verts
 	a := v[t.vi[0]].p
@@ -279,20 +312,20 @@ func (p *Vec3) distanceFromPlaneOf(t *Tri) float64 {
 
 }
 
-func (p *Vec3) closestPointOnPlane(a, n *Vec3) *Vec3 {
+func (p *vec3) closestPointOnPlane(a, n *vec3) *vec3 {
 	//project the point onto the plane
 	pop := p.sub(a)
 	return p.sub(n.multiply(pop.dot(n)))
 }
 
-func (p *Vec3) closestPointOnTriPlane(a, b, c *Vec3) *Vec3 {
+func (p *vec3) closestPointOnTriPlane(a, b, c *vec3) *vec3 {
 
 	n := b.sub(a).cross(c.sub(a)).normalise() //todo - cache/gen the normals once
 
 	return p.sub(n.multiply(p.distanceFromTriPlane(a, b, c)))
 }
 
-func (p *Vec3) distanceFromTriPlane(a, b, c *Vec3) float64 {
+func (p *vec3) distanceFromTriPlane(a, b, c *vec3) float64 {
 
 	//get the normal of the triangle
 	n := b.sub(a).cross(c.sub(a)) //.normalise() //todo - cache/gen the normals once
@@ -307,12 +340,12 @@ func (p *Vec3) distanceFromTriPlane(a, b, c *Vec3) float64 {
 }
 
 // is the point inside the mesh
-func (p *Vec3) isInside(m *mesh) bool {
+func (p *vec3) isInside(m *mesh) bool {
 
 	//todo - add trivial bounds check
 
 	hits := 0
-	farFarAway := &Vec3{-1000000, 5000, 30}
+	farFarAway := &vec3{-1000000, 5000, 30}
 	for i := 0; i < len(m.fi); i += 3 {
 		t := m.triangleFrom(i)
 		pop := t.probePlane(p, farFarAway)
@@ -327,7 +360,7 @@ func (p *Vec3) isInside(m *mesh) bool {
 
 }
 
-func (pop *Vec3) isInsideTri(a, b, c *Vec3, includeOnEdge bool, includeOnVert bool) bool {
+func (pop *vec3) isInsideTri(a, b, c *vec3, includeOnEdge bool, includeOnVert bool) bool {
 	//get the normal of the triangle
 
 	if a.equals(pop) || b.equals(pop) || c.equals(pop) {
@@ -404,12 +437,12 @@ func (pop *Vec3) isInsideTri(a, b, c *Vec3, includeOnEdge bool, includeOnVert bo
 
 }
 
-func (p *Vec3) clone() *Vec3 {
+func (p *vec3) clone() *vec3 {
 
 	return newVec3(p.x, p.y, p.z)
 }
 
-func (b *Vec3) SignedAngleFrom(a *Vec3, axis *Vec3) float64 {
+func (b *vec3) SignedAngleFrom(a *vec3, axis *vec3) float64 {
 
 	dp := a.dot(b)
 	alXbl := (a.length() * b.length())
@@ -437,6 +470,6 @@ func (b *Vec3) SignedAngleFrom(a *Vec3, axis *Vec3) float64 {
 
 }
 
-func (v *Vec3) reflect(n *Vec3) *Vec3 {
+func (v *vec3) reflect(n *vec3) *vec3 {
 	return v.sub(n.multiply(2 * v.dot(n)))
 }

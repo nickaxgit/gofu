@@ -37,6 +37,12 @@ const (
 	msgPlayers       msgEnum = 18
 	msgCreateGame    msgEnum = 19
 	msgJoinGame      msgEnum = 20
+	msgBoundValues   msgEnum = 21
+	msgValueChange   msgEnum = 22
+	msgGrid          msgEnum = 23 //send the current grid position and axes to the client
+	msgSave          msgEnum = 24
+	msgLoad          msgEnum = 25
+	msgMode          msgEnum = 26
 )
 
 type mesh struct {
@@ -155,7 +161,7 @@ func (m *mesh) splitEdge(a, b uint16, dy float64) uint16 {
 	return vi
 }
 
-func (m *mesh) addVert(p *Vec3, reUseVert bool, u float64, v float64) uint16 {
+func (m *mesh) addVert(p *vec3, reUseVert bool, u float64, v float64) uint16 {
 
 	if reUseVert {
 		for i, v := range m.verts {
@@ -271,7 +277,7 @@ func (m *mesh) getNormals(vc uint32) []float32 {
 	for i, v := range m.verts {
 
 		if len(v.touches) > 0 {
-			v.n = &Vec3{0, 0, 0}
+			v.n = &vec3{0, 0, 0}
 			//usually 6 0- can be 5 - or even 3 at edges and 1 in conrners
 			for t := range v.touches { //for every face this vertex touches
 				if len(t.children) == 0 { //ony include bottom level traingles in the normal calculation
@@ -364,10 +370,12 @@ func (m *mesh) sendWater(state *state) {
 // 	binary.Write(b, e, float32(v.z))
 // }
 
-func (player *player) sendThings(things []*thing, e binary.ByteOrder) {
-
-	player.sendBytes(thingsToBytes(things, e))
-
+func (p *player) sendThings(things []*thing) {
+	if things[0] == nil {
+		logit("Things is nil", p.currentThing)
+		return
+	}
+	p.sendBytes(thingsToBytes(things))
 }
 
 // func (p *player) sendMassDetail(m *mass) {
@@ -380,218 +388,21 @@ func (player *player) sendThings(things []*thing, e binary.ByteOrder) {
 // 	p.sendBinary(buff.Bytes())
 // }
 
-func (p *player) sendGameId(gameId uint32, e binary.ByteOrder) {
-	buff := new(bytes.Buffer)
-	binary.Write(buff, e, byte(msgGameId)) //masses
-	binary.Write(buff, e, gameId)
-	p.sendBytes(buff.Bytes())
-
-}
-
-func (p *player) sendCamera(e binary.ByteOrder) {
-
-	p.sendBytes(p.camera.toBytes(e))
-
-}
-
-func (p *player) sendCursor(gridCursor *Vec3) {
-	buff := new(bytes.Buffer)
-	e := binary.LittleEndian
-	binary.Write(buff, e, byte(msgCursor)) //masses
-	gridCursor.toByteBuffer(buff, e)
-	p.sendBytes(buff.Bytes())
-}
-
-func (p *player) sendHighlit() {
-	buff := new(bytes.Buffer)
-	e := binary.LittleEndian
-	binary.Write(buff, e, byte(msgHighlit)) //masses
-
-	hm, ht, hs := int32(-1), int32(-1), int32(-1)
-	if p.highlit.mass != nil {
-		logit("hm", p.highlit.mass.index)
-		hm = p.highlit.mass.index
-	}
-	if p.highlit.thing != nil {
-		ht = p.highlit.thing.index
-	}
-	if p.highlit.spring != nil {
-		hs = p.highlit.spring.index
-	}
-	binary.Write(buff, e, hm)
-	binary.Write(buff, e, ht)
-	binary.Write(buff, e, hs) //spring index within the thing
-	p.sendBytes(buff.Bytes())
-
-}
-
-func (p *player) sendMessage(msg string, sev string) {
-
-	logit(msg)
-	buff := new(bytes.Buffer)
-	e := binary.LittleEndian
-	binary.Write(buff, e, byte(msgMessage))
-	binary.Write(buff, e, byte(len(msg)))
-	binary.Write(buff, e, []byte(msg))
-	binary.Write(buff, e, byte(len(sev)))
-	binary.Write(buff, e, []byte(sev))
-
-	p.sendBytes(buff.Bytes())
-
-}
-
-func binaryPlayers(players map[uint32]*player, e binary.ByteOrder) []byte {
-	buff := new(bytes.Buffer)
-
-	binary.Write(buff, e, byte(msgPlayers))
-	binary.Write(buff, e, uint32(len(players))) //number of players
-	for id, p := range players {
-		binary.Write(buff, e, id) //unique player ID (Uint32)
-		binary.Write(buff, e, byte(len(p.name)))
-		binary.Write(buff, e, []byte(p.name))  //curent player name (may change)
-		binary.Write(buff, e, p.vehicle.index) //thing index of their current vehicle
-		binary.Write(buff, e, p.camera.toBytes(e))
-	}
-
-	return buff.Bytes()
-}
-
-func thingsToBytes(things []*thing, e binary.ByteOrder) []byte {
+func thingsToBytes(things []*thing) []byte {
 
 	buff := new(bytes.Buffer)
 
-	binary.Write(buff, e, byte(msgThings))
-	binary.Write(buff, e, uint32(len(things))) //number of things
+	binary.Write(buff, le, byte(msgThings))
+	binary.Write(buff, le, uint32(len(things))) //number of things (in this messsage)
 	for _, t := range things {
-		binary.Write(buff, e, uint32(t.index))
-		binary.Write(buff, e, byte(len(t.meshName)))
-		binary.Write(buff, e, []byte(t.meshName))
-		//binary.Write(buff, e, make([]byte, len(t.meshname)%4+2)) //padding
-
-		t.offset.toByteBuffer(buff, e)
-		t.scale.toByteBuffer(buff, e)
-
-		binary.Write(buff, e, uint32(t.omi))
-		binary.Write(buff, e, uint32(t.fmi))
-		binary.Write(buff, e, uint32(t.rmi))
-
-		binary.Write(buff, e, uint32(len(t.springs)))
-		for _, spring := range t.springs {
-			binary.Write(buff, e, uint32(spring.m1.index))
-			binary.Write(buff, e, uint32(spring.m2.index))
-
-		}
+		t.toByteBuffer(buff)
 	}
 
 	return buff.Bytes()
 
 }
 
-func massesToBytes(masses []*mass, e binary.ByteOrder, withDetail bool, playerSelected map[*mass]bool) []byte {
-
-	buff := new(bytes.Buffer)
-
-	binary.Write(buff, e, byte(msgMasses)) //masses
-	binary.Write(buff, e, uint32(len(masses)))
-
-	if withDetail {
-		binary.Write(buff, e, byte(1))
-	} else {
-		binary.Write(buff, e, byte(0))
-	}
-
-	//send the masses
-	for _, m := range masses {
-		binary.Write(buff, e, uint32(m.index))
-		selected := byte(0)
-		present, isSelected := playerSelected[m]
-		if present && isSelected {
-			selected = byte(1)
-		}
-
-		m.writeBinary(buff, e, withDetail, selected) //only send the position
-	}
-
-	return buff.Bytes()
-
-}
-func (player *player) sendMasses(masses []*mass, withDetail bool, e binary.ByteOrder) {
-	player.sendBytes(massesToBytes(masses, e, withDetail, player.selectedMasses))
-	player.sendVectors()
-
-}
-
-func (player *player) sendMakeMesh(name string, numVerts uint32, numFaces uint32) {
-	buff := new(bytes.Buffer)
-	e := binary.LittleEndian
-	binary.Write(buff, e, byte(msgMesh))
-	binary.Write(buff, e, byte(len(name)))
-	binary.Write(buff, e, []byte(name))
-	binary.Write(buff, e, make([]byte, len(name)%4+2)) //padding
-	binary.Write(buff, e, numVerts)
-	binary.Write(buff, e, numFaces)
-
-	player.sendBytes(buff.Bytes())
-}
-
-func (player *player) sendVectors() {
-
-	//send the mass index, vector and color - show lift at the wingtips (althoug it is actually shared between the three verts)
-
-	buff := new(bytes.Buffer)
-	e := binary.LittleEndian
-	binary.Write(buff, e, byte(msgVectors))
-
-	white := uint32(0xffffff)
-
-	for _, m := range player.state.masses {
-		if m.axle != nil {
-			m.p.toByteBuffer(buff, e)
-			m.axle.p.toByteBuffer(buff, e)
-			binary.Write(buff, e, white) //16 (or whatever) standard colours
-		}
-		if m.wingRoot != nil {
-
-			m.p.toByteBuffer(buff, e)
-			m.wingRoot.p.toByteBuffer(buff, e)
-			binary.Write(buff, e, white)
-
-			centreOfLift := m.p.add(m.wingRoot.p).add(m.axle.p).multiply(1.0 / 3.0)
-			centreOfLift.toByteBuffer(buff, e)
-
-			liftVector := m.axle.p.sub(m.wingRoot.p).cross(m.axle.p.sub(m.p)).normalise()
-			wingAxis := m.axle.p.sub(m.p).normalise()
-			liftVector = liftVector.rotateAbout(wingAxis, m.aoa) //additional angle of attack (in radians)
-			centreOfLift.add(liftVector).toByteBuffer(buff, e)
-
-			binary.Write(buff, e, white)
-
-			//todo - acutal lift and drag vectors
-
-		}
-	}
-
-	player.sendBytes(buff.Bytes())
-}
-
-// used for sending section of the interleaved (often) floating point data that makes up vertex, normal, position and index buffers
-// in a format very close to that need by the GPU (or three.js buffers)
-func (player *player) sendData(name string, opCode msgEnum, elementOffset uint32, elementCount uint32, data interface{}) {
-	buff := new(bytes.Buffer)
-	e := binary.LittleEndian
-	binary.Write(buff, e, opCode)
-	binary.Write(buff, e, byte(len(name)))
-	binary.Write(buff, e, []byte(name))
-	binary.Write(buff, e, make([]byte, len(name)%4+2)) //padding
-
-	binary.Write(buff, e, elementOffset)
-	binary.Write(buff, e, elementCount)
-	binary.Write(buff, e, data)    //x,y,z float32 triples (or uint16 face indices)
-	player.sendBytes(buff.Bytes()) //&reply{Cmd: "mesh", Payload: meshPayload})
-
-}
-
-func (player *player) makeLand(pos *Vec3, splits int, maxHeight float64, dist float64) {
+func (player *player) makeLand(pos *vec3, splits int, maxHeight float64, dist float64) {
 
 	player.landMesh = NewMesh("land", 65000) //&state.land    //get a reference to state.land (saves a lot of typing)
 	land := player.landMesh
@@ -621,10 +432,10 @@ func (player *player) makeLand(pos *Vec3, splits int, maxHeight float64, dist fl
 
 }
 
-func (m *mesh) slowProbe(p0, p1 *Vec3) *Vec3 {
+func (m *mesh) slowProbe(p0, p1 *vec3) *vec3 {
 
 	sd := 100000000.0
-	var p *Vec3 = nil
+	var p *vec3 = nil
 	for i := 0; i < len(m.fi); i += 3 {
 		t := m.triangleFrom(i)
 		pop := t.probePlane(p0, p1)
@@ -781,9 +592,9 @@ func tests() {
 
 	testFloat("Normal and edge are orthogonal ", func() float64 { return tt.normal.dot(tt.edge0()) }, 0, "normal and edge are not orthogonal")
 
-	a := &Vec3{0, 2, 0}
-	b := &Vec3{1.1, 0, 0}
-	axis := &Vec3{0, 0, 1}
+	a := &vec3{0, 2, 0}
+	b := &vec3{1.1, 0, 0}
+	axis := &vec3{0, 0, 1}
 	testFloat("Positive angle", func() float64 { return b.SignedAngleFrom(a, axis) }, math.Pi/2, "angle wrong")
 	testFloat("Negative angle", func() float64 { return a.SignedAngleFrom(b, axis) }, -math.Pi/2, "angle wrong")
 
@@ -872,7 +683,7 @@ func tetra() *mesh {
 
 }
 
-func (m *mesh) rotateAbout(axis *Vec3, angle float64) {
+func (m *mesh) rotateAbout(axis *vec3, angle float64) {
 
 	for _, v := range m.verts {
 		v.p = v.p.rotateAbout(axis, angle)
@@ -892,7 +703,7 @@ func (m *mesh) clone() *mesh {
 	return newMesh
 }
 
-func (m *mesh) offset(offset *Vec3) {
+func (m *mesh) offset(offset *vec3) {
 	for _, v := range m.verts {
 		v.p = v.p.add(offset)
 	}

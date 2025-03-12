@@ -8,7 +8,7 @@ func NewLoop() *loop {
 	return &loop{vi: []uint16{}}
 }
 
-func (l *loop) debugMesh(model *mesh, ctn *Vec3, debugMesh *mesh) *mesh {
+func (l *loop) debugMesh(model *mesh, ctn *vec3, debugMesh *mesh) *mesh {
 
 	for li := range l.vi { //index
 
@@ -38,7 +38,7 @@ func (t *loop) merge(s *loop) {
 	//t.vi = append(t.vi, t.vi[last)
 }
 
-func (loop *loop) triangulate(dbm *mesh, m *mesh, ctn *Vec3) []uint16 {
+func (loop *loop) triangulate(dbm *mesh, m *mesh, ctn *vec3) []uint16 {
 	//triangulate this loop using the ear cutting algorithm
 	//return a list of faces (triples of vertex indices)
 	//the loop is assumed to be closed - vert indices may apear more than once as there may be bridges to inner holes
@@ -116,7 +116,7 @@ func (l *loop) isEarEmpty(bi int, m *mesh) bool {
 
 }
 
-func (l *loop) findAndRemoveEar(m *mesh, ctn *Vec3) (face []uint16) {
+func (l *loop) findAndRemoveEar(m *mesh, ctn *vec3) (face []uint16) {
 	//find an ear and remove it from the loop
 	//return the indices of the three verts that make up the ear
 	//the loop is mutated and a vertex is removed

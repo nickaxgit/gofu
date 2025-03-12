@@ -7,7 +7,7 @@ type face struct {
 func newFace(m []*mass) *face {
 	return &face{m: m}
 }
-func (f *face) normal() *Vec3 {
+func (f *face) normal() *vec3 {
 	a := f.m[0].p
 	b := f.m[1].p
 	c := f.m[2].p

@@ -7,14 +7,15 @@ type spring struct {
 	restLength  float64 `json:"-"` //length is not needed clientside
 	m1          *mass
 	m2          *mass
-	collideable bool `json:"-"` //collision are not handled client side (so the client doesn't need to know)
+	collideable byte
 }
 
-func NewSpring(m1 *mass, m2 *mass, collideable bool) *spring {
+func NewSpring(m1 *mass, m2 *mass, collideable byte) *spring {
 	//set rest length at constrcution
 	if m1 == m2 {
 		panic(`degenerate spring (both ends same mass) at construction `)
 	}
+
 	restLength := m1.p.distanceFrom(m2.p)
 	if restLength == 0 {
 		panic(`zero length spring at construction`)
@@ -28,7 +29,7 @@ func NewSpring(m1 *mass, m2 *mass, collideable bool) *spring {
 
 // }
 
-func (s *spring) closestPointTo(p *Vec3) *Vec3 {
+func (s *spring) closestPointTo(p *vec3) *vec3 {
 	return p.closestPointOnLine(s.m1.p, s.m2.p)
 
 }
@@ -57,11 +58,11 @@ func (s *spring) stretch(masses []*mass) {
 
 }
 
-func (s *spring) contains(p *Vec3) bool {
+func (s *spring) contains(p *vec3) bool {
 	return p.liesBetween(s.m1.p, s.m2.p)
 }
 
-func (s *spring) distanceFrom(p *Vec3) float64 {
+func (s *spring) distanceFrom(p *vec3) float64 {
 
 	if s.contains(p) {
 		return p.distanceFromLine(s.m1.p, s.m2.p)
@@ -77,7 +78,7 @@ func (s *spring) distanceFrom(p *Vec3) float64 {
 
 }
 
-func (s *spring) direction() *Vec3 {
+func (s *spring) direction() *vec3 {
 	v := s.m2.p.sub(s.m1.p)
 	return v.normalise()
 }
