@@ -11,8 +11,9 @@ type boundValue struct {
 	min          float32
 	max          float32
 	step         float32
-	mass         *mass
-	conversion   float32 //values will be
+	//	mass         *mass //which mass needs to be updated when this value changes
+	labelSet byte //0 or an index to a if this is an enumeration, this is the number of values
+	//conversion   float32 //values will be
 }
 
 func (bv *boundValue) toByteBuffer(buff *bytes.Buffer, e binary.ByteOrder) {
@@ -22,6 +23,7 @@ func (bv *boundValue) toByteBuffer(buff *bytes.Buffer, e binary.ByteOrder) {
 	binary.Write(buff, e, bv.min)
 	binary.Write(buff, e, bv.max)
 	binary.Write(buff, e, bv.step)
+	binary.Write(buff, e, bv.labelSet)
 
-	binary.Write(buff, e, float32(*bv.valuePointer)*bv.conversion) //send the actual value
+	binary.Write(buff, e, float32(*bv.valuePointer)) //send the actual value
 }

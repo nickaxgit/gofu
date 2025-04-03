@@ -9,7 +9,7 @@ import "math"
 type vert struct {
 	p       *vec3
 	n       *vec3
-	uv      Vector
+	uv      vec2
 	wl      float64       //water level
 	acc     float64       //accumulated water (during a pass)
 	touches map[*Tri]bool //the triangles that touch this vertex (whos face normals contribute to the vertex normal)
@@ -44,12 +44,12 @@ func (vt *vert) updateUV(yMin, yMax float64) {
 
 	}
 
-	vt.uv = Vector{math.Atan2(vt.n.x, vt.n.z) / float64(6.28), v} //v
+	vt.uv = vec2{math.Atan2(vt.n.x, vt.n.z) / float64(6.28), v} //v
 	//	vt.uv = Vector{1, 1}
 }
 
 func newVert(p *vec3, u, v float64) *vert {
-	return &vert{p: p, uv: Vector{u, v}, n: &vec3{0, 0, 0}, touches: make(map[*Tri]bool, 6)}
+	return &vert{p: p, uv: vec2{u, v}, n: &vec3{0, 0, 0}, touches: make(map[*Tri]bool, 6)}
 }
 
 func (t *Tri) addChild(a, b, c uint16) *Tri {
@@ -78,25 +78,26 @@ func (t *Tri) addChild(a, b, c uint16) *Tri {
 
 // }
 
-func (m *mesh) vertAtMidPointXZ(a, b uint16) uint16 {
-	p := m.verts[a].p.tween(m.verts[b].p, 0.5)
+// func (m *mesh) vertAtMidPointXZ(a, b uint16) uint16 {
+// 	p := m.verts[a].p.tween(m.verts[b].p, 0.5)
 
-	tiny := 0.0001
-	for i, v := range m.verts {
-		if v.p.x > p.x-tiny && v.p.x < p.x+tiny {
-			if v.p.z > p.z-tiny && v.p.z < p.z+tiny {
-				return uint16(i)
-			}
-		}
-	}
-	return 65535
+// 	tiny := 0.0001
+// 	for i, v := range m.verts {
+// 		if v.p.x > p.x-tiny && v.p.x < p.x+tiny {
+// 			if v.p.z > p.z-tiny && v.p.z < p.z+tiny {
+// 				return uint16(i)
+// 			}
+// 		}
+// 	}
+// 	return 65535
 
-}
+// }
 
 //for every bottom level triangle, look to see if there is a vertex at the midpoint of each edge (caused by a more divided neighbouring tri)
 //if so, split in two to the opposite vertex
-func (t *Tri) patch(m *mesh) {
+func (t *Tri) patch() {
 
+	m := t.mesh
 	if len(t.children) == 0 {
 
 		for i := 0; i < 3; i++ {
@@ -118,7 +119,7 @@ func (t *Tri) patch(m *mesh) {
 	}
 
 	for _, c := range t.children {
-		c.patch(m)
+		c.patch()
 	}
 
 }
@@ -163,7 +164,7 @@ func (t *Tri) removeFromTouches() {
 	}
 }
 
-func (t *Tri) split(m *mesh, pos *vec3, maxRdepth int, maxHeight float64) {
+func (t *Tri) split(pos *vec3, maxRdepth int, maxHeight float64) {
 
 	//      0
 	//		/\
@@ -173,6 +174,7 @@ func (t *Tri) split(m *mesh, pos *vec3, maxRdepth int, maxHeight float64) {
 	//  /___\/___\
 	// 2     4    1
 
+	m := t.mesh
 	v0 := t.vi[0]
 	v1 := t.vi[1]
 	v2 := t.vi[2]
@@ -195,9 +197,9 @@ func (t *Tri) split(m *mesh, pos *vec3, maxRdepth int, maxHeight float64) {
 				//rnGen = &rand.New(rand.NewPCG(seed+1, seed))
 				//rnGen = &rand.New(rand.NewPCG(m.verts[v0].p.x, m.verts[v0].p.y))
 
-				rn1 := math.Sin(math.Round(m.verts[v0].p.x))
-				rn2 := math.Sin(math.Round(m.verts[v1].p.z))
-				rn3 := math.Sin(math.Round(m.verts[v2].p.z))
+				rn1 := math.Sin(math.Round(m.verts[v0].p.x)) - 0.5
+				rn2 := math.Sin(math.Round(m.verts[v1].p.z)) - 0.5
+				rn3 := math.Sin(math.Round(m.verts[v2].p.z)) - 0.5
 
 				// v3 := m.splitEdge(v0, v1, (rnGen.Float64()-.5)*Yrange)
 				// v4 := m.splitEdge(v1, v2, (rnGen.Float64()-.5)*Yrange)
@@ -218,7 +220,7 @@ func (t *Tri) split(m *mesh, pos *vec3, maxRdepth int, maxHeight float64) {
 			}
 
 			for _, c := range t.children {
-				c.split(m, pos, maxRdepth, maxHeight)
+				c.split(pos, maxRdepth, maxHeight)
 			}
 
 		}
@@ -227,6 +229,16 @@ func (t *Tri) split(m *mesh, pos *vec3, maxRdepth int, maxHeight float64) {
 	}
 
 }
+
+// //plough a runway between p1 and p2 flattening all points with 10 metres
+// func (m *mesh) plough(p1 *vec3, p2 *vec3, vis ...uint16) {
+// 	for _, vi := range vis {
+// 		p := m.verts[vi].p
+// 		if p.distanceFromLineSegment(p1, p2) < 40 {
+// 			p.y = p.closestPointOnLineSegment(p1, p2).y
+// 		}
+// 	}
+// }
 
 func (t *Tri) centre() *vec3 {
 	v := t.mesh.verts

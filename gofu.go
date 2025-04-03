@@ -12,7 +12,9 @@ import (
 )
 
 var le = binary.LittleEndian
-
+var ntm = 0.00000005                                           //newtons to metres of movement per substep
+var testFlight = newVec3(0, -.1, -1).normalise().multiply(.33) //50 m/s
+var rho = 1.225                                                //kg / m3 //air density
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,

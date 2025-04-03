@@ -22,25 +22,42 @@ type mass struct {
 	isCoin      bool
 	collideable bool
 	op          *vec3
-	v           *vec3 //"velocity" - the change in position of this mass
-	enabled     bool
+	//	v           *vec3 //"velocity" - the change in position of this mass
+	enabled bool
 	//selected         bool //needs to be per player - see player.selectedMasses map
 	lastThingTouched *thing
-	axle             *mass   //if the mass is a wheel - the vector to this mass is the axle
-	wingRoot         *mass   //if the mass is a wing tip - this is the TE root (the axle is the LE root)
-	axi              int32   //index of the axle (used only temporarily while loading)
-	wri              int32   //index of the wing root (used only temporarily while loading)
-	aoaRads          float64 //(additional) angle of attack
-	wingArea         float64
-	dihedralDegrees  float64
-	lift             *vec3
+	axle             *mass //if the mass is a wheel - the vector to this mass is the axle
+	wingRoot         *mass //if the mass is a wing tip - this is the TE root (the axle is the LE root)
+	axi              int32 //index of the axle (used only temporarily while loading)
+	wri              int32 //index of the wing root (used only temporarily while loading)
+	//aoaRads          float64 //(additional) angle of attack
+	wingArea float64
+	//dihedralDegrees  float64
+	lift       *vec3
+	thrust     float64
+	aoaDegrees float64
+	drag       *vec3
+	flip       bool
+	//correction *vec3
+	contribs   float64
+	correction *vec3   //used to correct the position of the masses
+	section    float64 //airfoil section - actually just a byte but we bind a slider to it so it has to be a float64
+	//flightOutput     float64 //outputEnum - what am I ? aileron, elevator, rudder, flap, engine
+	//gain             float32 //multiplier/inverter for the (normalised) control input - e.g. convert to radians of aileron deflection
+	//isThrust         bool    //throttles create thrust - control surfaces have their AoA changed
 
-	//grounded         bool
+}
+
+func (m *mass) mass() float64 {
+	//this assumes a density of 10kg/liter
+
+	m3 := 4 / 3 * 3.14159 * m.r * m.r * m.r
+	return m3 * 1000 * 1000 //litres in a m^3
 }
 
 func newMass(p *vec3, r float64, fixed bool, isCoin bool, collideable bool, thing *thing, transFormOf *mass) *mass {
 
-	return &mass{p: p, r: r, fixed: fixed, isCoin: isCoin, collideable: collideable, thing: thing, enabled: true, op: p, v: newVec3(0, 0, 0), transformOf: transFormOf}
+	return &mass{p: p, r: r, fixed: fixed, isCoin: isCoin, collideable: collideable, thing: thing, enabled: true, op: p.clone(), transformOf: transFormOf, correction: newVec3(0, 0, 0)}
 }
 
 func (m *mass) overlaps(masses []*mass) *mass {
@@ -54,37 +71,65 @@ func (m *mass) overlaps(masses []*mass) *mass {
 
 }
 
-func (m *mass) fromByteBuffer(buff *bytes.Buffer, e binary.ByteOrder, withDetail byte, s *state) {
+func (m *mass) fromByteBuffer(buff *bytes.Buffer, withDetail byte, s *state) {
 
-	binary.Read(buff, e, &m.index)
+	binary.Read(buff, le, &m.index)
 	m.p.fromByteBuffer(buff)
+	m.op = m.p.clone() //todo serialise this to be able to save masses in motion
 
 	if withDetail != 0 {
 		r := float32(0)
-		binary.Read(buff, e, &r)
+		binary.Read(buff, le, &r)
 		m.r = float64(r)
 
-		binary.Read(buff, e, &m.fixed)
-		binary.Read(buff, e, &m.isCoin)
-		binary.Read(buff, e, &m.collideable)
+		binary.Read(buff, le, &m.fixed)
+		binary.Read(buff, le, &m.isCoin)
+		binary.Read(buff, le, &m.collideable)
 		selected := byte(0)
-		binary.Read(buff, e, &selected)
+		binary.Read(buff, le, &selected)
 
-		binary.Read(buff, e, &m.wri)
-		binary.Read(buff, e, &m.axi)
+		binary.Read(buff, le, &m.axi)
+		binary.Read(buff, le, &m.wri)
+
+		if m.axi > -1 {
+			m.axle = s.masses[m.axi]
+		} else {
+			m.axle = nil
+		}
+		if m.wri > -1 {
+			m.wingRoot = s.masses[m.wri]
+		} else {
+			m.wingRoot = nil
+		}
+
+		//remove
 		f32 := float32(0)
-		binary.Read(buff, e, &f32)
-		m.aoaRads = float64(f32)
-		binary.Read(buff, e, &f32)
+		//binary.Read(buff, le, &f32)
+		//m.aoaRads = float64(f32)
+
+		binary.Read(buff, le, &f32)
 		m.wingArea = float64(f32)
-		binary.Read(buff, e, &f32)
-		m.dihedralDegrees = float64(f32)
+
+		//remove
+		//binary.Read(buff, le, &f32)
+		//m.dihedralDegrees = float64(f32)
 
 		i32 := int32(0)
-		binary.Read(buff, e, &i32)
+		binary.Read(buff, le, &i32)
 		if i32 != -1 {
 			m.transformOf = s.masses[i32]
 		}
+
+		l := byte(0)
+		binary.Read(buff, le, &l)
+		m.flip = false
+		if l > 0 {
+			m.flip = true
+		}
+
+		sb := byte(0) //section byte
+		binary.Read(buff, le, &sb)
+		m.section = float64(sb)
 
 	}
 }
@@ -112,9 +157,9 @@ func (m *mass) toByteBuffer(buff *bytes.Buffer, withDetail bool, selected byte) 
 		//although the client doesnt need to know about axles, and wingroots - we do need to persist them
 		binary.Write(buff, le, ax) //note highlit mass is not done this way (becuase there must be only one)
 		binary.Write(buff, le, wr) //note highlit mass is not done this way (becuase there must be only one)
-		binary.Write(buff, le, float32(m.aoaRads))
+		//binary.Write(buff, le, float32(m.aoaRads))
 		binary.Write(buff, le, float32(m.wingArea))
-		binary.Write(buff, le, float32(m.dihedralDegrees))
+		//binary.Write(buff, le, float32(m.dihedralDegrees))
 
 		if m.transformOf != nil {
 			binary.Write(buff, le, m.transformOf.index)
@@ -122,7 +167,9 @@ func (m *mass) toByteBuffer(buff *bytes.Buffer, withDetail bool, selected byte) 
 			binary.Write(buff, le, int32(-1))
 		}
 
-		//todo - mass
+		binary.Write(buff, le, m.flip)
+		binary.Write(buff, le, byte(m.section))
+
 	}
 
 }

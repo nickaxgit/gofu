@@ -29,7 +29,7 @@ func distanceBetweenLines(a1, a2, b1, b2 *vec3) float64 {
 	sc := 0.0
 	tc := 0.0
 
-	if D < 0.00001 {
+	if D < 0.0000001 {
 		sc = 0.0
 		tc = (e / c)
 	} else {
@@ -125,6 +125,13 @@ func (p *vec3) rotateAbout(axis *vec3, angle float64) *vec3 {
 // 	a.Z += b.Z
 // }
 
+func (a *vec3) divide(f float64) *vec3 {
+	if f == 0 {
+		panic("divide by zero")
+	}
+	return newVec3(a.x/f, a.y/f, a.z/f)
+}
+
 func (a *vec3) multiply(f float64) *vec3 {
 	return newVec3(a.x*f, a.y*f, a.z*f)
 }
@@ -149,7 +156,7 @@ func (a *vec3) normalise() *vec3 {
 func (p *vec3) toByteBuffer(buff *bytes.Buffer) {
 	binary.Write(buff, le, float32(p.x)) //NOTE you CANT write a Vec3 directly as it has float64 components
 	binary.Write(buff, le, float32(p.y))
-	binary.Write(buff, binary.LittleEndian, float32(p.z))
+	binary.Write(buff, le, float32(p.z))
 }
 
 func (p *vec3) fromByteBuffer(buff *bytes.Buffer) {

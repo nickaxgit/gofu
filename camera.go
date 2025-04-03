@@ -10,16 +10,14 @@ type camera struct {
 	farPos    *vec3
 }
 
+func (c *camera) clone() *camera {
+	return &camera{position: c.position.clone(), direction: c.direction.clone(), up: c.up.clone(), farPos: c.farPos.clone()}
+
+}
+
 func (cam *camera) follow(t *thing) {
 
 	o := t.springs[0].m2.p
-
-	// if p.landTri != nil {
-	// 	y0pos := newVec3(o.x, 0, o.z)
-	// 	if y0pos.distanceFrom(p.lastLandPos) > 50 {
-	// 		p.makeLand(y0pos, 10, 2000, 10000) //makes and sends new land
-	// 	}
-	// }
 
 	fl := t.springs[1].m2.p
 	//xa:=  o.sub(m[t.springs[0].m1].P)

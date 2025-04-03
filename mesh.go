@@ -10,13 +10,13 @@ import (
 	"time"
 )
 
-// type edge struct {
-// 	v1  uint16
-// 	v2  uint16
-// 	mid uint16
-// 	t1  *Tri
-// 	t2  *Tri
-// }
+//	type edge struct {
+//		v1  uint16
+//		v2  uint16
+//		mid uint16
+//		t1  *Tri
+//		t2  *Tri
+//	}
 
 type msgEnum byte
 
@@ -42,19 +42,23 @@ const (
 	msgGrid          msgEnum = 23 //send the current grid position and axes to the client
 	msgSave          msgEnum = 24
 	msgLoad          msgEnum = 25
-	msgMode          msgEnum = 26
+	msgMode          msgEnum = 26 //send a message of the current (edior) mode - renders on client sceen
+	msgLabels        msgEnum = 27 //collection of player/telemetry labels
+	msgLabelSet      msgEnum = 28 //set of labels
+	msgClear         msgEnum = 29 //clear all spheres/lines
+	msgCentreOfMass  msgEnum = 30 //centre of mass
+
 )
 
 type mesh struct {
-	name       string
-	verts      []*vert  //{}
-	fi         []uint16 //{} //face indices
-	faceCount  uint16
-	yMax       float64
-	yMin       float64
-	midpoints  map[uint32]uint16 //comound key of the two endpoints of an edge, map contains the index of its midpoint vertex
-	reuseVerts []uint16
-	reuseFaces []uint16
+	name      string
+	verts     []*vert  //{}
+	fi        []uint16 //{} //face indices
+	faceCount uint16
+	yMax      float64
+	yMin      float64
+	midpoints map[uint32]uint16 //compound key of the two endpoints of an edge, map contains the index of its midpoint vertex
+	//reuseVerts []uint16
 
 	//faceNormals []*Vec3
 }
@@ -137,7 +141,7 @@ func (m *mesh) splitEdge(a, b uint16, dy float64) uint16 {
 	// key := uint32(a) + uint32(65536)*uint32(b)
 	// existingMid, present := m.midpoints[key]
 
-	vi := m.midpoint(a, b) //will look for an existing midpoints a->b or b->a
+	vi := m.midpoint(a, b) //will look (in a map) for an existing midpoints a->b or b->a
 	if vi != 65535 {
 		if vi == 0 {
 			logit("zero midpoint")
@@ -145,14 +149,14 @@ func (m *mesh) splitEdge(a, b uint16, dy float64) uint16 {
 		return vi
 	}
 
-	if len(m.reuseVerts) > 0 {
-		vi = m.reuseVerts[0]
-		logit("reusing vert", vi)
-		m.verts[vi].p = p
-		m.reuseVerts = m.reuseVerts[1:]
-	} else {
-		vi = m.addVert(p, false, 0, 0) //OrReuseVertAtXZ(p)
-	}
+	// if len(m.reuseVerts) > 0 {
+	// 	vi = m.reuseVerts[0]
+	// 	logit("reusing vert", vi)
+	// 	m.verts[vi].p = p
+	// 	m.reuseVerts = m.reuseVerts[1:]
+	// } else {
+	vi = m.addVert(p, false, 0, 0) //OrReuseVertAtXZ(p)
+	//}
 
 	//add it to the index of midpoints
 	key := uint32(a) + uint32(65536)*uint32(b)
@@ -402,11 +406,11 @@ func thingsToBytes(things []*thing) []byte {
 
 }
 
-func (player *player) makeLand(pos *vec3, splits int, maxHeight float64, dist float64) {
+func (player *player) makeLand(y0pos *vec3, splits int, maxHeight float64, size float64, runwayStart *vec3, runwayEnd *vec3) *vec3 {
 
 	player.landMesh = NewMesh("land", 65000) //&state.land    //get a reference to state.land (saves a lot of typing)
 	land := player.landMesh
-	player.lastLandPos = pos
+	player.lastLandPos = y0pos
 
 	land.verts = []*vert{} //clear the verts
 
@@ -416,19 +420,48 @@ func (player *player) makeLand(pos *vec3, splits int, maxHeight float64, dist fl
 	rnGen = rand.New(rand.NewPCG(seed+1, seed))
 
 	//(rnGen.Float64()-.5)*maxHeight
-	land.addVert(newVec3(0, 0, dist), false, 0, 0)
-	land.addVert(newVec3(dist, 0, -dist), false, 0, 0)
-	land.addVert(newVec3(-dist, 0, -dist), false, 0, 0)
+	land.addVert(newVec3(0, 0, size), false, 0, 0)
+	land.addVert(newVec3(size, 0, -size), false, 0, 0)
+	land.addVert(newVec3(-size, 0, -size), false, 0, 0)
 
 	t := newTri(land, []uint16{0, 1, 2}, 0)
 	player.landTri = t
 
 	ts := time.Now()
-	t.split(land, pos, splits, maxHeight) //split the triangle into 4 recursively
-	t.patch(land)
+
+	t.split(y0pos, splits, maxHeight) //split the triangle into 4 recursively
+	t.patch()
+
+	if runwayStart != nil {
+		//runwayStart, _ := t.probeLand(pos)
+		//runwayEnd := runwayStart.add(newVec3(0, 0, -600))
+		t.plough(runwayStart, runwayEnd) //recurse down through and plough a runway
+	}
+
 	logit("splitting took", time.Since(ts).Milliseconds())
 
 	player.sendLand("land", true)
+
+	pos, _ := t.probeLand(y0pos)
+
+	return pos
+
+}
+
+func (t *Tri) plough(runwayStart *vec3, runwayEnd *vec3) {
+
+	m := t.mesh
+	for _, vi := range t.vi {
+		p := m.verts[vi].p
+		if p.distanceFromLineSegment(runwayStart, runwayEnd) < 40 {
+			cp := p.closestPointOnLineSegment(runwayStart, runwayEnd)
+			p.y = cp.y
+		}
+	}
+
+	for _, ct := range t.children {
+		ct.plough(runwayStart, runwayEnd)
+	}
 
 }
 

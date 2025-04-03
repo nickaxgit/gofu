@@ -34,10 +34,13 @@ type ModeEnum string
 const (
 	editing = "Editing"
 	//playing      = "Running"
-	adding     = "Adding"
-	stretching = "Stretching"
-	startMove  = "Select the start point of the move"
-	moving     = "Moving - Select the destination"
+	adding         = "Adding"
+	stretching     = "Stretching"
+	startMove      = "Select the start point of the move"
+	moving         = "Moving - Select the destination"
+	grabbingMesh   = "Grabbing Mesh - select a source point"
+	offsettingMesh = "Offsetting Mesh - select a target point"
+	props          = "Settings Properties"
 )
 
 var games map[string]*state //the data of games in progress - by id
@@ -106,44 +109,54 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 	s := float64(10000) //+/- 10km land = 200 km^2
 
 	y0pos := state.RandomStartPos(s)
-	player := state.AddPlayer(playerId, playerName, y0pos, ws)
-	player.makeLand(y0pos, 10, 2000, s) //makes and sends land
-	player.makeDozer(y0pos)
+	p := state.AddPlayer(playerId, playerName, y0pos, ws)
+	p.makeLand(y0pos, 10, 2000, s, nil, nil) //initial make to determin runway height
+
+	state.runwayStart, _ = p.landTri.probeLand(y0pos)
+	state.runwayEnd = state.runwayStart.add(newVec3(0, 0, -600))
+
+	origin := p.makeLand(y0pos, 10, 2000, s, state.runwayStart, state.runwayEnd) //makes and sends land
+
+	//p.makeDozer(y0pos)
+
+	p.grid.origin = origin
+	p.grid.send(p)
+
+	aircraft := load("wip21")
+	t := state.mergeThing(aircraft.things[0])
+	aircraft = nil
+	p.vehicle = t
+
+	cg, weight := t.centreOfMass()
+	logit("aircraft weighs", weight)
+	t.translate(origin.sub(cg).add(newVec3(0, 10, 0)))
 
 	//state.scatterCoins(2000, 2000)
 
-	player.camera.follow(player.vehicle)
-	player.sendCamera()
+	p.camera.follow(p.vehicle)
 
-	player.sendMasses(state.masses, true)
-	player.sendThings([]*thing{player.vehicle}) //sends mesh name and springs
-	player.sendGameId()                         //game id starts it running
+	p.updateActuators()
+
+	p.sendCamera()
+
+	p.sendMasses(state.masses, true)
+	p.sendThings([]*thing{p.vehicle}) //sends mesh name and springs
+	p.sendGameId()                    //game id starts it running
 
 	//player.send(&reply{Cmd: "state", Payload: state.payload()})
 
 	state.makeHoles(10, 5000, 5000)
-
-	//state.landMesh.sendToAll("land", state)
-
-	//t := tetra()
-	//t.offset(pos)
-
-	//t.sendToAll("tetra", state)
-
-	// campos := pos.add(newVec3(0, 5, -30))
-	// state.send(player, &reply{Cmd: "campos", Payload: campos.payload()})
-	// state.send(player, &reply{Cmd: "camlookat", Payload: pos.payload()})
 
 	//state.makeWater() //water is flowed and sent every cycle
 	//state.sendWater()
 
 	logit("Game created", state.filename)
 
-	state.qSound("dozer", player.vehicle.centreOfMass(state.masses), 0.1, "revs-"+playerName, true)
+	state.qSound("dozer", cg, 0.1, "revs-"+playerName, true)
 
 	//state.save("game" + fmt.Sprint(state.gameId) + ".bson")
 
-	return player
+	return p
 }
 
 func joinGame(gameId string, playerId uint32, playerName string, ws *websocket.Conn) *player {
@@ -169,7 +182,8 @@ func joinGame(gameId string, playerId uint32, playerName string, ws *websocket.C
 	p.sendMasses(state.masses, true)  //send all the masses
 	p.sendThings([]*thing{p.vehicle}) //sends mesh name and springs
 	p.sendGameId()                    //game id starts it running
-	state.qSound("dozer", p.vehicle.centreOfMass(state.masses), 0.1, "revs-"+playerName, true)
+	cg, _ := p.vehicle.centreOfMass()
+	state.qSound("dozer", cg, 0.1, "revs-"+playerName, true)
 
 	return p
 }
@@ -257,17 +271,27 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 
 	} else if msg.Cmd == "mu" {
 
-		if p.buttons == 2 && p.movedSinceMouseDown == false && p.highlit.mass != nil {
+		if p.buttons == 2 && p.movedSinceMouseDown == false {
 
-			degreesToRadians := float32(180.0) / float32(math.Pi)
-			p.boundValues = make(map[string]boundValue, 0)
-			p.bindValue("radius", p.highlit.mass, &p.highlit.mass.r, 0.01, 10.00, .1, 1)
-			p.bindValue("aoa", p.highlit.mass, &p.highlit.mass.aoaRads, -20, +20, 1, degreesToRadians)
-			p.bindValue("wingArea", p.highlit.mass, &p.highlit.mass.wingArea, 0.1, 500.00, 1, 1)
-			p.bindValue("dihedral", p.highlit.mass, &p.highlit.mass.dihedralDegrees, -10, 10, 1, degreesToRadians)
+			if p.highlit.mass != nil {
 
-			p.sendBoundValues() //will pop up a context menu clientside
+				//degreesToRadians := float32(180.0) / float32(math.Pi)
+				p.boundValues = make(map[string]boundValue, 0)
+				p.bindValue("radius", &p.highlit.mass.r, 0.01, 1.00, .01, 0)
+				p.bindValue("Section", &p.highlit.mass.section, 0, 1, 1, 2)
+				//p.bindValue("aoa", p.highlit.mass, &p.highlit.mass.aoaRads, -20, +20, 1, 0)
+				p.bindValue("wingArea", &p.highlit.mass.wingArea, 0.1, 500.00, 1, 0)
+				//p.bindValue("dihedral", p.highlit.mass, &p.highlit.mass.dihedralDegrees, -10, 10, 1, 0)
+				//p.bindValue("controlSurface", p.highlit.mass, &p.highlit.mass.flightOutput, 0, 10, 1, 1) //use labelt set 1 (outoput flight controls)
 
+				p.sendBoundValues() //will pop up a context menu clientside
+				p.setMode(props)
+			} else if p.highlit.spring != nil {
+				p.boundValues = make(map[string]boundValue, 0)
+				p.bindValue("actuator", &p.highlit.spring.flightOutput, 0, 10, 1, 1) //use labelt set 1 (outoput flight controls)
+				p.sendBoundValues()                                                  //will pop up a context menu clientside
+				p.setMode(props)
+			}
 		}
 
 		p.buttons = byte(msg.Payload[0])
@@ -278,12 +302,11 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 
 		p.movedSinceMouseDown = false
 
-		p.grab = &Vector{p.cursor.X, p.cursor.Y} //clone
+		p.grab = &vec2{p.cursor.X, p.cursor.Y} //clone
 
 		p.downGridPos = p.gridPos.clone()
-		p.downCamPos = p.camera.position.clone()
-		p.downCamDirection = p.camera.direction.clone()
-		p.downCamUp = p.camera.up.clone()
+
+		p.downCam = p.camera.clone()
 
 		if p.buttons == 1 {
 
@@ -324,10 +347,17 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 
 			} else if p.mode == moving {
 				p.setMode(editing)
+			} else if p.mode == grabbingMesh {
+				p.meshGrab = p.spacePos.clone()
+				p.setMode(offsettingMesh)
+			} else if p.mode == offsettingMesh {
+				delta := p.spacePos.sub(p.meshGrab)
+				//delta.x *= -1 //UGLY - but the scenes x axis is inverted
+				p.currentThing.offset.addIn(delta)
+				p.sendThings([]*thing{p.currentThing})
+				p.setMode(editing)
 
-			}
-
-			if p.mode == adding {
+			} else if p.mode == adding {
 				//we will make the spring between the highlit mass and a new mass
 				//if there is no highlit mass, then we add one
 				//on mouseup - we will collapse the new mass into any we are on top op
@@ -397,20 +427,44 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 
 		if k == "ArrowLeft" {
 			dx = -step
-			p.aileron--
+			if p.state.running {
+				p.controls[ciStickX] -= 0.05
+			}
+
 		} else if k == "ArrowRight" {
 			dx = +step
-			p.aileron++
+			if p.state.running {
+				p.controls[ciStickX] += 0.05
+			}
+
 		} else if k == "ArrowUp" {
-			p.elevator++
-			logit("elevator", p.elevator)
+			if p.state.running {
+				p.controls[ciStickY] += 0.05
+			}
+
 			dy = +step
 		} else if k == "ArrowDown" {
-			p.elevator--
-			logit("elevator", p.elevator)
+			if p.state.running {
+				p.controls[ciStickY] -= 0.05
+			}
+
 			dy = -step //see the end of the if block for where the transform is send if dx or dy are set
 		} else if kl == "t" {
+			if p.currentThing == nil {
+				p.currentThing = p.state.things[0]
+			}
 			p.setMode(adding)
+		} else if kl == "y" {
+			p.snapMasses()
+			p.state.tidy()
+			p.sendClear()
+			logit("tidy")
+			p.sendMasses(p.state.masses, true)
+			p.sendThings(p.state.things)
+		} else if kl == "-" {
+			p.controls[ciThrottle] -= 0.05
+		} else if kl == "+" {
+			p.controls[ciThrottle] += 0.05
 
 		} else if kl == "e" {
 			p.setMode(editing)
@@ -428,14 +482,30 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 			p.zOff = 0
 			p.processMouseMove()
 			p.sendCamera()
+			p.controls[ciThrottle] = 0
+
 		} else if kl == "o" {
-			p.currentThing.om = p.highlit.mass
-			p.sendThings([]*thing{p.currentThing})
+
+			if p.checkHighlitMass() {
+				p.currentThing.om = p.highlit.mass
+				p.sendThings([]*thing{p.currentThing})
+			}
+
 		} else if kl == "f" {
-			p.currentThing.fm = p.highlit.mass
-			p.sendThings([]*thing{p.currentThing})
+			if p.checkHighlitMass() {
+				p.currentThing.fm = p.highlit.mass
+				p.sendThings([]*thing{p.currentThing})
+			}
 		} else if kl == "r" {
-			p.currentThing.rm = p.highlit.mass
+			if p.keys["Control"] {
+				//rotate thing 90 degrees more
+				p.currentThing.rotation.addIn(p.currentThing.rotation.normalise().multiply(math.Pi / 2))
+			} else {
+				//right mass  (x axis mass) of thing mesh
+				if p.checkHighlitMass() {
+					p.currentThing.rm = p.highlit.mass
+				}
+			}
 			p.sendThings([]*thing{p.currentThing})
 
 		} else if kl == "g" { //align the grid
@@ -445,8 +515,13 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 			p.grid.Yaxis = s[1].p.sub(p.grid.origin).normalise()
 			p.grid.send(p)
 		} else if kl == "m" && p.keys["Shift"] {
+			if p.currentThing == nil {
+				p.currentThing = p.state.things[0]
+			}
 			p.currentThing.visibility = 1 - p.currentThing.visibility
 			p.sendThings([]*thing{p.currentThing})
+		} else if kl == "m" && p.keys["Alt"] {
+			p.setMode(grabbingMesh)
 
 		} else if kl == "m" && p.keys["Control"] {
 			//mirror the selected masses (in the grid)
@@ -455,17 +530,23 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 
 			sm := maps.Keys(p.selectedMasses)
 			transformed := make(map[*mass]*mass)
-			for m := range sm {
-				transformed[m] = p.state.addMass(newMass(m.p, m.r, m.fixed, m.isCoin, m.collideable, m.thing, m)) //add 'shadow' mass
-			}
-			p.regenTransformed() //position all transformed masses
 
-			for k, v := range transformed {
-				v.wingRoot = transformed[k.wingRoot]
-				v.axle = transformed[k.axle]
-				v.aoaRads = k.aoaRads + math.Pi
-				v.dihedralDegrees = -k.dihedralDegrees
-				v.wingArea = k.wingArea
+			for m := range sm {
+				tp := m.p.reflectInPlane(p.grid.origin, p.grid.normal())
+				transformed[m] = p.state.massAt(tp, 0.01) //some masses (those on the plane) will map to themselves
+				if transformed[m] == nil {
+					transformed[m] = p.state.addMass(newMass(tp, m.r, m.fixed, m.isCoin, m.collideable, m.thing, m)) //add 'shadow' mass
+				}
+			}
+			p.regenTransformed() //(re)mirror all transformed masses (in the grid plane)
+
+			for k, m := range transformed {
+				m.wingRoot = transformed[k.wingRoot]
+				m.axle = transformed[k.axle]
+				//v.aoaRads = k.aoaRads + math.Pi
+				//v.dihedralDegrees = -k.dihedralDegrees
+				m.wingArea = k.wingArea
+				m.flip = !k.flip
 			}
 
 			//wire up the springs - once. We will need to remove transformed masses which map onto their own point of origin
@@ -475,17 +556,12 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 				//todo - if only one end is selected (and transformed) we should still create a spring
 				tm1 := transformed[s.m1]
 				tm2 := transformed[s.m2]
-				if tm1 != nil || tm2 != nil {
-					if tm1 == nil {
-						tm1 = s.m1 //needs to be the mass at the transformed positions
-					}
-					if tm2 == nil {
-						tm2 = s.m2
-					}
+				if tm1 != nil && tm2 != nil {
+
 					if tm1 == tm2 {
 						logit("spring to self")
 					}
-					p.currentThing.AddSpring(tm1, tm2, s.collideable)
+					p.currentThing.AddSpring(tm1, tm2, s.collideable, fcNONE)
 				}
 			}
 			p.sendThings([]*thing{p.currentThing})
@@ -506,13 +582,25 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 				s := slices.Collect(maps.Keys(p.selectedMasses))
 				p.sendMasses(s, false)
 				p.setMode(editing)
+			} else if p.mode == props {
+				p.boundValues = make(map[string]boundValue, 0)
+				p.sendBoundValues() //sending empty set of bound values clears the popup clientside
+				p.setMode(editing)
 
 			} else {
+
 				p.snapMasses()
 				p.sendThings(p.state.things)
-				p.state.running = !p.state.running
+				//p.vehicle = p.currentThing
+
 				p.sendVectors()
+				p.bindMixers(p.vehicle)
+				//p.vehicle.setVelocity(testFlight)
+
+				//p.state.setVelocity(newVec3(0, 0, 1/float64(30*5)*50)) //100mph
+				//p.labelLiftingMasses()
 				logit("running", p.state.running)
+				p.state.running = !p.state.running
 			}
 
 		} else if kl == "m" {
@@ -532,7 +620,15 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 
 			if p.highlit.mass != nil && len(p.selectedMasses) == 1 && p.highlit.mass != selectedMass {
 				if k == "z" {
-					selectedMass.wingRoot = p.highlit.mass
+					m := selectedMass
+					wr := p.highlit.mass
+					m.wingRoot = wr
+					span := m.p.sub(m.axle.p).length()
+					chord := m.axle.p.sub(m.wingRoot.p).length()
+					m.wingArea = span * chord
+					p.vehicle.setVelocity(testFlight)
+					p.state.flyMasses() //*pretend* we are flying at 20ms
+					p.sendVectors()
 					p.sendMessage("Wing root defined", "info")
 				} else if k == "x" {
 					selectedMass.axle = p.highlit.mass
@@ -543,13 +639,28 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 			} else {
 				p.sendMessage("Select one mass, and higlight another when setting axes", "error")
 			}
-		} else if kl == "f" {
-			p.highlit.mass.aoaRads += math.Pi
-			if p.highlit.mass.aoaRads > math.Pi*2 {
-				p.highlit.mass.aoaRads -= math.Pi * 2
+		} else if kl == "l" {
+
+			p.snapMasses()
+			if p.highlit.mass != nil {
+				p.highlit.mass.flip = !p.highlit.mass.flip
+				p.vehicle.setVelocity(testFlight)
+				p.state.flyMasses() //*pretend* we are flying at 20ms
+				p.sendVectors()     //does a fake flyMasses()
+				p.sendLabels()
 			}
-			logit("aoa", p.highlit.mass.aoaRads)
-			p.sendVectors() //[]*mass{player.highlit.mass}, true, endian)
+		} else if kl == "i" {
+			for _, m := range p.state.masses {
+				if m.wingRoot != nil {
+					p.state.addLabel(NewLabel("AOA", m, m, 1, 30, &m.aoaDegrees))
+				}
+			}
+			for _, m := range p.mixers {
+				if m.spring != nil {
+					p.state.addLabel(NewLabel(actLabels[int(m.actuator)], m.spring.m1, m.spring.m2, 4, 30, &m.spring.flightOutput))
+				}
+			}
+			p.sendLabels()
 
 		} else if kl == "p" {
 			m := p.highlit.mass

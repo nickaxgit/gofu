@@ -4,87 +4,87 @@ import (
 	"math"
 )
 
-type Vector struct {
+type vec2 struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
 }
 
-func newVector(x, y float64) *Vector {
-	return &Vector{x, y}
+func newVector(x, y float64) *vec2 {
+	return &vec2{x, y}
 }
 
-func (a *Vector) add(b *Vector) *Vector {
+func (a *vec2) add(b *vec2) *vec2 {
 	return newVector(a.X+b.X, a.Y+b.Y)
 }
 
 func hypo(adjacent, opposite float64) float64 {
 	return math.Sqrt(float64(adjacent*adjacent + opposite*opposite))
 }
-func (a Vector) distanceFrom(b *Vector) float64 {
+func (a vec2) distanceFrom(b *vec2) float64 {
 	return hypo(a.X-b.X, a.Y-b.Y)
 }
 
-func (a *Vector) lengthSq() float64 {
+func (a *vec2) lengthSq() float64 {
 	return a.X*a.X + a.Y*a.Y
 }
 
-func (a *Vector) subIn(b Vector) {
+func (a *vec2) subIn(b vec2) {
 	a.X -= b.X
 	a.Y -= b.Y
 }
 
-func (a *Vector) addIn(b Vector) {
+func (a *vec2) addIn(b vec2) {
 	a.X += b.X
 	a.Y += b.Y
 }
 
-func (a *Vector) multiply(f float64) *Vector {
+func (a *vec2) multiply(f float64) *vec2 {
 	return newVector(a.X*f, a.Y*f)
 }
 
-func (a *Vector) subtract(b *Vector) *Vector {
+func (a *vec2) subtract(b *vec2) *vec2 {
 	return newVector(a.X-b.X, a.Y-b.Y)
 }
 
-func (a *Vector) normalise() *Vector {
+func (a *vec2) normalise() *vec2 {
 	l := a.length()
-	return &Vector{X: a.X / l, Y: a.Y / l}
+	return &vec2{X: a.X / l, Y: a.Y / l}
 }
 
-func (a *Vector) length() float64 {
+func (a *vec2) length() float64 {
 	return hypo(a.X, a.Y)
 }
 
-func (a *Vector) Equals(b *Vector) bool {
+func (a *vec2) Equals(b *vec2) bool {
 	return a.X == b.X && a.Y == b.Y
 }
 
-func (p Vector) rotate(angle float64) *Vector {
+func (p vec2) rotate(angle float64) *vec2 {
 	x := p.X*math.Cos(angle) - p.Y*math.Sin(angle)
 	y := p.X*math.Sin(angle) + p.Y*math.Cos(angle)
 	return newVector(x, y)
 }
 
-func (a *Vector) dot(b *Vector) float64 {
+func (a *vec2) dot(b *vec2) float64 {
 	return a.X*b.X + a.Y*b.Y
 }
 
-func (a Vector) cross(b Vector) float64 {
+func (a vec2) cross(b vec2) float64 {
 	return (a.X * b.Y) - (a.Y * b.X)
 }
 
-func (p Vector) closestPointOnLine(a, b *Vector) *Vector {
+func (p vec2) closestPointOnLine(a, b *vec2) *vec2 {
 	ab := b.subtract(a)
 	abn := ab.normalise()
 	dp := p.subtract(a).dot(abn)
 	return a.add(abn.multiply(dp))
 }
 
-func (p *Vector) distanceFromLine(a, b *Vector) float64 {
+func (p *vec2) distanceFromLine(a, b *vec2) float64 {
 	return p.closestPointOnLine(a, b).distanceFrom(p)
 }
 
-func (p *Vector) liesBetween(a *Vector, b *Vector) bool {
+func (p *vec2) liesBetween(a *vec2, b *vec2) bool {
 
 	v1 := p.subtract(a) //vector from a to p
 	v2 := p.subtract(b) //vector from a to p

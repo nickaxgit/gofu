@@ -106,21 +106,46 @@ type state struct { //the DATA of a game in progress - it can be entirely replac
 	filename string
 	Sqn      int
 	//host      string
-	players   map[uint32]*player
-	masses    []*mass
-	things    []*thing
-	deathList []*player
-	Tracks    map[string]*track
-	Layers    map[string]*Layer
-	liftCurve []float64 //alternating x,y values
-	dragCurve []float64 //alternating x,y values
-	running   bool
+	players     map[uint32]*player
+	masses      []*mass
+	labels      []*label
+	things      []*thing
+	deathList   []*player
+	Tracks      map[string]*track
+	Layers      map[string]*Layer
+	liftCurves  [][]float64 //alternating x,y values
+	dragCurves  [][]float64 //alternating x,y values
+	running     bool
+	runwayStart *vec3
+	runwayEnd   *vec3
+	stretchDir  bool
+}
+
+func (s *state) addLabel(l *label) *label {
+	s.labels = append(s.labels, l)
+	l.index = uint16(len(s.labels) - 1)
+	return l
 }
 
 func (s *state) addMass(m *mass) *mass {
 	s.masses = append(s.masses, m)
 	m.index = int32(len(s.masses) - 1)
 	return m
+}
+
+func (st *state) mergeThing(t *thing) *thing {
+
+	st.addThing(t)
+
+	for m := range t.uniqueMasses {
+		st.addMass(m)
+	}
+	// for st:= range t.springs {
+	// 	st.addSpring(s)
+	// }
+
+	return t
+
 }
 
 // func (p Vec3) distanceFrom(t *Tri, v []vert) float64 {
@@ -201,7 +226,7 @@ func (s *state) closestSpringToRay(start *vec3, end *vec3) (*thing, *spring) {
 		for _, s := range t.springs {
 
 			d := distanceBetweenLines(start, end, s.m1.p, s.m2.p)
-			if d < closestDistance {
+			if d <= closestDistance {
 				closestDistance = d
 				closestSpring = s
 				closestThing = t
@@ -251,19 +276,36 @@ func (state *state) step() {
 	mm = mm[:moved*4] //truncate
 
 	if moved > 0 {
+
 		state.Sqn++
 		state.send(nil, &reply{Cmd: "mps", Payload: mm}) //send all moved masses to everyone
 	}
 
+	//state.sendBinary(nil,)
 	// if player.waterMade {
 	// 	state.landMesh.rain(0.3)
 	// 	state.landMesh.flowWater()
 	// 	state.landMesh.sendWater(state)
 	// }
 
+	//updateLabels(state)
+
 	for _, p := range state.players {
-		p.camera.follow(p.vehicle)
-		p.sendCamera()
+		if p.socket != nil {
+			//p.camera.follow(p.vehicle)
+			p.sendCamera()
+			p.sendLabels()
+
+			o := p.vehicle.springs[0].m2.p
+
+			if p.landTri != nil {
+				y0pos := newVec3(o.x, 0, o.z)
+				if y0pos.distanceFrom(p.lastLandPos) > 100 {
+					p.makeLand(y0pos, 10, 2000, 10000, state.runwayStart, state.runwayEnd) //makes and sends new land
+				}
+			}
+
+		}
 	}
 
 	//count money and send to player
@@ -344,7 +386,7 @@ func (s *state) massesFromByteBuffer(buff *bytes.Buffer) {
 
 		m := newMass(newVec3(0, 0, 0), 0, false, false, false, nil, nil)
 
-		m.fromByteBuffer(buff, le, withDetail, s)
+		m.fromByteBuffer(buff, withDetail, s)
 		if m.index != int32(i) {
 			panic("mass index mismatch")
 		}
@@ -375,6 +417,14 @@ func load(filename string) *state {
 	state.referenceMasses() //uses mass.axi and mass.wri to restore the m.wingroot and m.axle mass references
 	state.thingsFromByteBuffer(buff)
 	state.playersFromByteBuffer(buff)
+
+	//fix up wing areas on loading
+	for _, m := range state.masses {
+		if m.axle != nil && m.wingRoot != nil && m.wingArea == 0 {
+			//panic("no wing area")
+			m.wingArea = m.p.sub(m.axle.p).length() * m.axle.p.sub(m.wingRoot.p).length()
+		}
+	}
 
 	logit("Loaded state from " + filename)
 
@@ -419,7 +469,7 @@ func (s *state) thingsFromByteBuffer(buff *bytes.Buffer) {
 	for i := 0; i < int(nt); i++ {
 		idx := int32(-1)
 		binary.Read(buff, le, &idx)
-		t := s.addThing("")
+		t := s.addThing(newThing(""))
 		if idx != t.index {
 			panic("thing index mismatch")
 		}
@@ -427,8 +477,8 @@ func (s *state) thingsFromByteBuffer(buff *bytes.Buffer) {
 	}
 }
 
-func (s *state) addThing(meshName string) *thing {
-	t := NewThing(meshName)
+func (s *state) addThing(t *thing) *thing {
+
 	s.things = append(s.things, t)
 	t.index = int32(len(s.things) - 1)
 	t.state = s
@@ -436,13 +486,15 @@ func (s *state) addThing(meshName string) *thing {
 	return t //len(s.Things) - 1 // return the index of the new thing
 }
 
-func (t *thing) AddSpring(m1 *mass, m2 *mass, collideable byte) *spring {
-	s := NewSpring(m1, m2, collideable)
+func (t *thing) AddSpring(m1 *mass, m2 *mass, collideable byte, fo actuatorEnum) *spring {
+	s := NewSpring(m1, m2, collideable, fo)
 	t.springs = append(t.springs, s)
-	t.masses[m1] = true
-	t.masses[m2] = true
 
 	s.index = int32(len(t.springs) - 1)
+
+	t.uniqueMasses[m1] = true
+	t.uniqueMasses[m2] = true
+
 	return s
 }
 
@@ -463,7 +515,13 @@ func (state *state) AddPlayer(playerId uint32, name string, position *vec3, ws *
 
 func (state *state) moveCameras() {
 	for _, p := range state.players {
-		p.moveCamera()
+		//p.mtx.Lock()
+		if !p.state.running {
+			p.moveCamera()
+		}
+
+		//p.mtx.Unlock()
+
 	}
 
 }
@@ -482,7 +540,7 @@ func (p *player) makeDozer(y0pos *vec3) {
 
 	pos.y += 5 //lift it 5metres
 
-	dozer := state.addThing("plane") // position,0,radius,"",0,false,"dozers",1)
+	dozer := state.addThing(newThing("plane")) // position,0,radius,"",0,false,"dozers",1)
 	p.currentThing = dozer
 
 	//note masses do not belong to things .. this allows two things to be joined by a spring
@@ -502,26 +560,26 @@ func (p *player) makeDozer(y0pos *vec3) {
 	fr.axle = fl
 
 	collideable := byte(1)
-	dozer.AddSpring(rr, rl, collideable) // bottom
-	dozer.AddSpring(rl, fl, collideable) // left
-	dozer.AddSpring(fl, fr, collideable) // top
-	dozer.AddSpring(fr, rr, collideable) // right
+	dozer.AddSpring(rr, rl, collideable, fcNONE) // bottom
+	dozer.AddSpring(rl, fl, collideable, fcNONE) // left
+	dozer.AddSpring(fl, fr, collideable, fcNONE) // top
+	dozer.AddSpring(fr, rr, collideable, fcNONE) // right
 
-	dozer.AddSpring(rr, fl, 0) // cross members (not collideable)
-	dozer.AddSpring(rl, fr, 0)
+	dozer.AddSpring(rr, fl, 0, fcNONE) // cross members (not collideable)
+	dozer.AddSpring(rl, fr, 0, fcNONE)
 
 	bh := newVec3(0, 1, 0)                                                                 //blade height
 	bl := state.addMass(newMass(fl.p.add(bh), massRadius, false, false, true, dozer, nil)) //blade left top
 	br := state.addMass(newMass(fr.p.add(bh), massRadius, false, false, true, dozer, nil)) //blade left top
 
-	dozer.AddSpring(bl, rr, collideable) //blade diagonal suppport
-	dozer.AddSpring(br, rl, collideable) //blade diagonal suppport
-	dozer.AddSpring(fl, bl, collideable) //blade left side
-	dozer.AddSpring(fr, br, collideable) //blade right side
-	dozer.AddSpring(rr, br, collideable) //blade right side support
-	dozer.AddSpring(rl, bl, collideable) //blade left side support
+	dozer.AddSpring(bl, rr, collideable, fcNONE) //blade diagonal suppport
+	dozer.AddSpring(br, rl, collideable, fcNONE) //blade diagonal suppport
+	dozer.AddSpring(fl, bl, collideable, fcNONE) //blade left side
+	dozer.AddSpring(fr, br, collideable, fcNONE) //blade right side
+	dozer.AddSpring(rr, br, collideable, fcNONE) //blade right side support
+	dozer.AddSpring(rl, bl, collideable, fcNONE) //blade left side support
 
-	dozer.AddSpring(bl, br, collideable) //blade top edge
+	dozer.AddSpring(bl, br, collideable, fcNONE) //blade top edge
 
 	dozer.addFace(fl, fr, br, bl)
 
@@ -556,6 +614,16 @@ func (state *state) closestSpring(wp *vec3) (*spring, *thing) {
 	}
 	return closestSpring, closestThing
 
+}
+
+func (s *state) massAt(p *vec3, tol float64) *mass {
+
+	for _, m := range s.masses {
+		if m.p.distanceFrom(p) <= tol {
+			return m
+		}
+	}
+	return nil
 }
 
 func (state *state) closestMass(wp *vec3) *mass {
@@ -645,6 +713,7 @@ func (state *state) resolvePenetrations() bool {
 							if m.axle != nil {
 								axle := m.axle.p.sub(m.p).normalise()
 								vr = vr.sub(axle.multiply(vr.dot(axle))) //kill (only the) sideways velocity of the wheel
+								vr = vr.multiply(0.95)                   //some wheel friciton
 							} else { //not a wheel
 								vr = vr.multiply(.8) //kill 80% of the velocity
 							}
@@ -741,108 +810,113 @@ func (state *state) tumbleCoins() {
 	// }
 }
 
-func (state *state) flyMasses(p *player) {
+// pass vms as 0 to use actual mass velocities
+func (state *state) flyMasses() {
 
 	//	gravity := 9.81 * (1 / 30.0 * 1 / 30.0) //DONT half this
-
-	ntm := 0.00000005 //newtons to metres of movement per substep
 
 	for _, m := range state.masses {
 		if m.wingRoot != nil {
 			if m.axle == nil {
-				panic("no wing axis")
+				logit("no wing axis")
+				return
 			}
-			if m.wingArea == 0 {
-				panic("no wing area")
+
+			//wingAxis := (m.p.sub(m.axle.p)).normalise()
+			wingAxis := (m.p.sub(m.wingRoot.p)).normalise() //TE
+			if m.flip {
+				wingAxis = wingAxis.multiply(-1)
 			}
-			wingAxis := m.p.sub(m.axle.p).normalise()
-			rootAxis := m.axle.p.sub(m.wingRoot.p).normalise()
-			v := m.p.sub(m.op)
-			vms := v.length() * 30.0 * 5.0
+
+			rootChord := (m.axle.p.sub(m.wingRoot.p)).normalise()
+
+			vms := m.p.sub(m.op).length() * 30.0 * 5.0 //cyles per second * steps per cycle
 
 			if vms > 0.1 {
-				logit(vms, "m/s")
-				v2 := v.lengthSq()
-				direction := v.normalise()
+				direction := (m.p.sub(m.op)).normalise()
+				//logit(vms, "m/s")
+				v2 := vms * vms
 
-				//the lift direction is always orthogonal to the direction of travel (regardless of the Aoa)
-				liftDir := wingAxis.cross(direction).normalise().rotateAbout(rootAxis, m.dihedralDegrees)
-				wingUp := rootAxis.cross(wingAxis).normalise()
-				aoaDegrees := (math.Asin(direction.dot(wingUp)) + m.aoaRads) / math.Pi * 180
-				cl := lerp(aoaDegrees, state.liftCurve)
-				cd := lerp(aoaDegrees, state.dragCurve)
-				liftNewtons := v2 * cl * m.wingArea
+				if vms > 100 {
+					logit("Overspeed", vms)
+				}
+
+				//the lift direction is always orthogonal to the direction of travel (regardless of the AoA)
+				liftDir := (direction.cross(wingAxis)).normalise() //.rotateAbout(rootAxis, m.dihedralDegrees)
+				wingUp := (rootChord.cross(wingAxis)).normalise()  //orthogonal to the chord of the wing (le-te)
+
+				aoa := -math.Asin(direction.dot(wingUp)) // + math.Pi/2 //+ m.aoaRads
+				// if aoa < -math.Pi {
+				// 	aoa += math.Pi * 2
+				// } else if aoa > math.Pi {
+				// 	aoa -= math.Pi * 2
+				// }
+
+				m.aoaDegrees = aoa / (math.Pi * 2) * 360
+				if m.aoaDegrees < -20 || m.aoaDegrees > 20 {
+					//	logit("aoa", m.aoaDegrees)
+				}
+				cl := lerp(m.aoaDegrees, state.liftCurves[int(m.section)])
+				cd := lerp(m.aoaDegrees, state.dragCurves[int(m.section)])
+				liftNewtons := v2 * cl * rho * .5 * m.wingArea //cycles per second * steps per cycle
+				if liftNewtons > 100000 {
+					logit("excess lift", liftNewtons)
+				}
 				lift := liftDir.multiply(liftNewtons)
 
 				dragNewtons := v2 * cd * m.wingArea
 				drag := direction.multiply(-dragNewtons)
 
-				m.lift = lift.multiply(ntm * 100.0) //visualise at 10x movement
-				//todo - spread across the three masess
-				if p.thrust > 0 {
-					logit("thrust", p.thrust)
+				m.lift = lift //.multiply(0.001) //visualise at 1mm per newton
+				m.drag = drag
+
+				if state.running {
+					// if m.thrust != 0 {
+					// 	m.p.addIn(rootAxis.multiply(m.thrust * ntm))
+					// }
+
+					f := float64(2 * 3 * 1500) // half (acceleration to distance travelled) 1/3rd of the lift distribution  150 steps per second
+					d := lift.divide(m.wingRoot.mass() * f)
+
+					m.wingRoot.p.addIn(d) // ntm * .33))
+					d = lift.divide(m.axle.mass() * f)
+					m.axle.p.addIn(d)
+					d = lift.divide(m.mass() * f)
+					m.p.addIn(d)
+
+					m.p.addIn(drag.divide(m.mass() * f)) //multiply(ntm * 1))
 				}
-				m.p.addIn(rootAxis.multiply(p.thrust * ntm))
-				m.p.addIn(lift.multiply(ntm))
-				m.p.addIn(drag.multiply(ntm))
+
 			}
+
+			//todo - spread across the three masess
 
 		}
 	}
 
 }
 func (state *state) stretchSprings() {
+
 	for _, t := range state.things {
 		for _, s := range t.springs {
-			s.stretch(state.masses)
+			s.stretch()
 		}
 	}
+
+	// for _, m := range state.masses {
+	// 	if m.correction != nil {
+	// 		m.p.addIn(m.correction.multiply(1 / float64(m.contribs)))
+	// 		m.correction.x = 0
+	// 		m.correction.y = 0
+	// 		m.correction.z = 0
+	// 		m.contribs = 0
+	// 	}
+
+	// }
 }
 
 func (state *state) anyPlayers() bool {
 	return len(state.players) > 0
-}
-
-func (s *state) scatterCoins(w float64, h float64) {
-
-	countValues := []int{100, 1, 20, 2, 10, 5, 5, 10}
-	for i := 0; i < len(countValues); i += 2 {
-		v := countValues[i+1]
-		for j := 0; j < countValues[i]; j++ {
-			p := vec3{x: rand.Float64() * w, y: -400, z: rand.Float64() * h}
-			s.addMass(newMass(&p, float64(v), false, true, true, nil, nil)) //coins don't have a thingNum
-		}
-	}
-}
-
-func (state *state) checkDeaths() {
-
-	for _, p := range state.players {
-
-		if !p.dead {
-			p.lives--
-
-			if p.lives > 0 {
-				//dozer.Scale.Y = 140 / float64(100)
-				//dozer.Scale.X = 1
-				//dozer.Rotation = 0
-				p.dying = false
-				state.resetDozer(p)
-				state.send(nil, &reply{Cmd: "banner", Payload: p.name + " has " + strconv.Itoa(p.lives) + " lives left"})
-				//	p.dozer.send(nil) //send the dozer to all
-			} else {
-				p.dead = true
-				p.dying = false
-				state.send(nil, &reply{Cmd: "banner", Payload: p.name + " is dead"})
-				p.send(&reply{Cmd: "dead", Payload: ""})
-				state.deathList = append(state.deathList, p) //TODO - respawn/ spectate etc
-			}
-
-			//r := reply{Cmd: "skin", Payload: skinPayload{Ti: p.dozer.index, Scale: dozer.Scale, Rotation: dozer.Rotation}}
-			//state.send(nil, &r)
-
-		}
-	}
 }
 
 func (state *state) deleteMass(m *mass) {
@@ -937,34 +1011,37 @@ func (state *state) moveAll(substeps int) {
 	//distance an object falls in 1/30th of a second
 	//0.5 * G * T^2
 	//0.5 * 9.81 * 1/30^2 = 0.0054
-	//gravity := 0.25 * 9.81 * (1 / 30.0) //* (1 / 30.0))
 
-	//gravity := (9.81 * (1 / 30.0 * 1 / 30.0)) / float64(substeps) //DONT half this
-	gravity := 9.81 * math.Pow(1/(30*float64(substeps)), 2)
+	gravity := 1 * 9.81 * math.Pow(1/(30*float64(substeps)), 2)
 
 	if state.anyPlayers() && len(state.masses) > 3 {
 
 		for substep := 0; substep < substeps; substep++ {
 
-			for _, m := range state.masses {
-				m.op = m.p.clone()
-			}
-
 			//move by inertia and friction
 			for _, m := range state.masses {
-				m.v.addIn(newVec3(0, -gravity, 0))
 
-				m.p.addIn(m.v.multiply(.999)) //inertia and friction
+				v := m.p.sub(m.op)
+				m.op = m.p.clone()
+				m.p.addIn(v.multiply(.999)) //inertia and friction
+				m.p.y -= gravity
 
 			}
 
-			state.flyMasses(state.players[0])
+			//socket will b closed - in gofu.go gameTraffic()
 
 			for _, p := range state.players {
+				if p.socket != nil {
+					p.sendVectors() //new
+				}
+
 				if p.vehicle != nil { //controller players don't have dozers
-					p.Move(state) //state.movePlayer(p) //based on a players keyboard/touch inputs move their track masses
+					p.updateActuators()
+					//	p.Move(state) //state.movePlayer(p) //based on a players keyboard/touch inputs move their track masses
 				}
 			}
+
+			state.flyMasses() //player is used for thrust values
 
 			state.stretchSprings()
 			state.stretchSprings()
@@ -972,36 +1049,19 @@ func (state *state) moveAll(substeps int) {
 
 			state.resolvePenetrations()
 
-			// do{
-			// }while (this.resolvePenetrations()) //loop unit all mass-thing pepetrations are resolved
-
-			//state.checkHoles()
-			//state.checkDeaths()
-
 			//masses are pushed out of things (and things away from masses)
 			state.resolveMassOverlaps()
 
-			//state.tumbleCoins() //may change angle
-
-			// //calculate velocity based on moevent
-			for _, m := range state.masses {
-				m.v = m.p.sub(m.op)
-
-				// if m.v.lengthSq() < 0.01 {
-				// 	m.v = newVec3(0, 0, 0)
-				// }
-			}
-
 		}
 	}
 
-	for _, p := range state.players {
-		if p.vehicle != nil {
-			if p.moved(state) {
-				state.RecordTrack(p)
-			}
-		}
-	}
+	// for _, p := range state.players {
+	// 	if p.vehicle != nil {
+	// 		if p.moved(state) {
+	// 			state.RecordTrack(p)
+	// 		}
+	// 	}
+	// }
 
 }
 
@@ -1049,16 +1109,16 @@ func (track *track) record(masses []*mass) {
 	}
 }
 
-func (player *player) moved(state *state) bool {
+// func (player *player) moved(state *state) bool {
 
-	for _, m := range player.getMasses(state) {
-		if m.v.lengthSq() > 0.01 {
-			return true
-		}
-	}
+// 	for _, m := range player.getMasses(state) {
+// 		if m.v.lengthSq() > 0.01 {
+// 			return true
+// 		}
+// 	}
 
-	return false
-}
+// 	return false
+// }
 
 func (state *state) resolveMassOverlaps() {
 
@@ -1077,32 +1137,36 @@ func (state *state) resolveMassOverlaps() {
 			if overlap > 0 {
 				//let v = ap.subtract(bp).normalise().multiply(0.5)
 				delta := b.p.sub(a.p)
-				delta = delta.normalise()
-				delta = delta.multiply(overlap)
+				if delta.lengthSq() == 0 {
+					logit("zero length delta")
+				} else {
+					delta = delta.normalise()
+					delta = delta.multiply(overlap)
 
-				afix := .5 //b.mass/(a.mass+b.mass)
-				if b.fixed {
-					afix = 1
-				} //if b is fixed then a is pushed out of b
-				if !a.fixed {
-					a.p.subIn(delta.multiply(afix))
-				}
-				if !b.fixed {
-					b.p.addIn(delta.multiply((1 - afix)))
-				}
-
-				//transfer the last touch from the coin moving fastest
-				if a.isCoin && b.isCoin {
-					if a.v.lengthSq() > b.v.lengthSq() {
-						b.lastThingTouched = a.lastThingTouched
-					} else {
-						a.lastThingTouched = b.lastThingTouched
+					afix := .5 //b.mass/(a.mass+b.mass)
+					if b.fixed {
+						afix = 1
+					} //if b is fixed then a is pushed out of b
+					if !a.fixed {
+						a.p.subIn(delta.multiply(afix))
 					}
-				} else if a.isCoin { //or off the object touched if one of the masses is not a coin
-					a.lastThingTouched = b.thing
-				} else if b.isCoin {
-					b.lastThingTouched = a.thing
+					if !b.fixed {
+						b.p.addIn(delta.multiply((1 - afix)))
+					}
 
+					//transfer the last touch from the coin moving fastest
+					// if a.isCoin && b.isCoin {
+					// 	if a.v.lengthSq() > b.v.lengthSq() {
+					// 		b.lastThingTouched = a.lastThingTouched
+					// 	} else {
+					// 		a.lastThingTouched = b.lastThingTouched
+					// 	}
+					// } else if a.isCoin { //or off the object touched if one of the masses is not a coin
+					// 	a.lastThingTouched = b.thing
+					// } else if b.isCoin {
+					// 	b.lastThingTouched = a.thing
+
+					// }
 				}
 			}
 		}
@@ -1118,7 +1182,7 @@ func (state *state) setupTiledLayer(layerName string, pic string, tileSize float
 	down := w / tileSize
 	for i := float64(0); i < down+4; i++ {
 		for j := float64(0); j < h/tileSize+4; j++ {
-			p := Prop{Position: Vector{x, y}, Angle: 0, Radius: tileSize / 2, Pic: pic}
+			p := Prop{Position: vec2{x, y}, Angle: 0, Radius: tileSize / 2, Pic: pic}
 			layer.Props = append(layer.Props, p)
 			x += tileSize
 		}
@@ -1148,28 +1212,48 @@ func NewState(filename string) *state {
 	gameId := filename //uint32(rand.Float32() * 1000000)
 
 	//looseley basedon  https://aerospaceweb.org/question/airfoils/q0150b.shtml (for high alpha values)
-	liftCurve := []float64{
-		-90, 0,
-		-45, -1.5,
-		-5, 0,
-		10, 1.5,
-		15, 1.75,
-		20, 1.5,
-		50, 1.7,
-		90, 0,
+	liftCurves := [][]float64{
+		{ //cambered lift
+			-90, 0,
+			-45, -1.5,
+			-5, 0,
+			10, 1.5,
+			15, 1.75,
+			20, 1.5,
+			50, 1.7,
+			90, 0,
+		},
+		{
+			-90, 0,
+			-45, -1.5,
+			0, 0,
+			45, 1.5,
+			90, 0,
+		},
 	}
 
-	dragCurve := []float64{
-		-90, 1,
-		-45, 0.5,
-		-20, 0.1,
-		-0, 0.01,
-		20, 0.1,
-		45, 0.5,
-		90, 1,
+	dragCurves := [][]float64{
+		{ //cambered drag
+			-90, 1,
+			-45, 0.5,
+			-20, 0.1,
+			-0, 0.01,
+			20, 0.1,
+			45, 0.5,
+			90, 1,
+		},
+		{ //symetrical drag
+			-90, 1,
+			-45, 0.5,
+			-5, .1,
+			0, .01,
+			5, .1,
+			45, 0.5,
+			90, 1,
+		},
 	}
 
-	return &state{filename: gameId, players: map[uint32]*player{}, masses: []*mass{}, things: []*thing{}, deathList: []*player{}, Layers: map[string]*Layer{}, Tracks: map[string]*track{}, liftCurve: liftCurve, dragCurve: dragCurve}
+	return &state{filename: gameId, players: map[uint32]*player{}, labels: []*label{}, masses: []*mass{}, things: []*thing{}, deathList: []*player{}, Layers: map[string]*Layer{}, Tracks: map[string]*track{}, liftCurves: liftCurves, dragCurves: dragCurves}
 }
 
 func lerp(x float64, data []float64) float64 {
@@ -1204,10 +1288,14 @@ func (state *state) send(player *player, msg *reply) {
 
 	if player == nil { //send to all
 		for _, p := range state.players { //for every outbound que (player)
-			p.send(msg)
+			if p.socket != nil {
+				p.send(msg)
+			}
 		}
 	} else {
-		player.send(msg)
+		if player.socket != nil {
+			player.send(msg)
+		}
 	}
 
 }

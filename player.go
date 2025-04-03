@@ -61,11 +61,6 @@ type player struct {
 
 	lastLandPos *vec3 //where were we when we last generated land
 
-	aileron  float64
-	elevator float64
-	throttle float64
-	rudder   float64
-
 	grid *grid
 
 	camera *camera
@@ -81,24 +76,100 @@ type player struct {
 	moveStart      *vec3           //for dragging
 	//higlitMass     *mass
 
-	downGridPos      *vec3 //where were we when they pressed the mouse button down
-	downCamPos       *vec3
-	downCamDirection *vec3
-	downCamUp        *vec3
+	downCam     *camera
+	downGridPos *vec3 //where were we when they pressed the mouse button down
+	//downCamPos  *vec3
 
-	cursor *Vector //current mouse pos in normalised screen coords (-1/+1)
-	grab   *Vector //where we moused down in normalised screen coords (-1/+1)
+	cursor   *vec2 //current mouse pos in normalised screen coords (-1/+1)
+	grab     *vec2 //where we moused down in normalised screen coords (-1/+1)
+	meshGrab *vec3 //a 'source' point on the mesh - we will translate to some target point
 
 	//camFarPos *Vec3 //mouse on the far plane
 	// downCamFarPos *Vec3 //recorded on mousedown
 
 	//mouseDown     bool
-	buttons byte
-	keys    map[string]bool
-
+	buttons     byte
+	keys        map[string]bool
 	boundValues map[string]boundValue //these form a popup dialog box (mass properties)
 
+	controls map[controlInput]float64
+
+	//each mixer (of the player) adds a contribution to to one mass (e.g. an aileron)
+	mixers []*mix
+
 	movedSinceMouseDown bool
+}
+
+func (s *state) tidy() {
+	//remove masses not attached to a spring
+	for {
+		allGood := true
+		for i, m := range s.masses {
+			if s.massFree(m) {
+				s.deleteMass(m)
+				logit("tidy - deleted mass", i, "of", len(s.masses))
+				allGood = false
+				break
+			} else {
+				logit("tidy - kept mass", i, "of", len(s.masses))
+			}
+		}
+		if allGood {
+			break
+		}
+	}
+}
+
+func (p *player) bindMixers(vehicle *thing) {
+
+	for _, mx := range p.mixers {
+		mx.spring = vehicle.findActuator(mx.actuator)
+	}
+
+}
+
+func (t *thing) findActuator(fc actuatorEnum) *spring {
+	for _, s := range t.springs {
+		if s.flightOutput > 0 {
+			if actuatorEnum(s.flightOutput) == fc {
+				return s
+			}
+		}
+
+	}
+
+	logit(t.meshName, " has no control surface for", actLabels[int(fc)])
+	return nil
+}
+
+func (p *player) updateActuators() {
+
+	for _, mix := range p.mixers {
+		if mix.spring != nil {
+			mix.spring.expansion = 0
+			mix.spring.thrust = 0
+		} else {
+			//logit("unbound control surface", id)
+		}
+	}
+
+	for _, mix := range p.mixers {
+		if mix.spring == nil {
+			//logit("unbound control surface", id)
+		} else {
+			if mix.isThrottle { //don't think this is needed the mixers could target a float64 by pointer
+				mix.spring.m1.thrust += p.controls[mix.in] //* mix.conversion
+				svn := mix.spring.m2.p.sub(mix.spring.m1.p).normalise()
+				mix.spring.m1.p.addIn(svn.multiply(mix.output(p) * ntm * 4))
+				mix.spring.m2.p.addIn(svn.multiply(mix.output(p) * ntm * 4))
+
+			} else {
+				//o := mix.output(p)
+				//logit(actLabels[int(mix.actuator)], o)
+				mix.spring.expansion += mix.output(p)
+			}
+		}
+	}
 }
 
 func (p *player) processMouseMove() {
@@ -115,10 +186,10 @@ func (p *player) processMouseMove() {
 
 				logit("delta", delta.X, delta.Y)
 
-				camRight := p.downCamDirection.cross(p.downCamUp).normalise()
+				camRight := p.downCam.direction.cross(p.downCam.up).normalise()
 
-				p.camera.up = p.downCamUp.rotateAbout(camRight, delta.Y).normalise()
-				pitched := p.downCamDirection.rotateAbout(camRight, delta.Y)
+				p.camera.up = p.downCam.up.rotateAbout(camRight, delta.Y).normalise()
+				pitched := p.downCam.direction.rotateAbout(camRight, delta.Y)
 				yawed := pitched.rotateAbout(p.camera.up, -delta.X)
 				//player.camUp = player.camUp.rotateAbout(player.downCamUp, delta.X).normalise()
 				p.camera.direction = yawed
@@ -158,65 +229,129 @@ func (p *player) processMouseMove() {
 		}
 
 		if p.buttons == 1 && p.mode == editing {
-			delta := p.gridPos.sub(p.downGridPos).multiply(.9)
-			p.camera.position = p.downCamPos.sub(delta)
-			p.sendCamera()
+			//dragging/panning the camera
+			if p.downGridPos != nil {
+				delta := p.gridPos.sub(p.downGridPos).multiply(.9)
+				p.camera.position = p.downCam.position.sub(delta)
+				p.sendCamera()
+			}
 		}
 
 		p.sendCursor()
 	}
 }
 
-func (p *player) bindValue(key string, mass *mass, value *float64, min float32, max float32, step float32, conversion float32) {
-	p.boundValues[key] = boundValue{id: key, mass: mass, valuePointer: value, min: min, max: max, step: step, conversion: conversion}
+func (p *player) bindValue(key string, value *float64, min float32, max float32, step float32, labelSet byte) {
+	p.boundValues[key] = boundValue{id: key, valuePointer: value, min: min, max: max, step: step, labelSet: labelSet}
+}
+
+func (p *player) sendLabelSets() { //For options on the sliders
+
+	p.sendLabelSet(1, actLabels)     //acutators
+	p.sendLabelSet(2, sectionLabels) //airfoil sections
+
+}
+
+func (p *player) sendLabelSet(idx byte, ls []string) {
+	buff := new(bytes.Buffer)
+
+	writeByte(buff, byte(msgLabelSet))
+	writeByte(buff, idx)           //index
+	writeByte(buff, byte(len(ls))) //count (of labels)
+	for _, v := range ls {
+		writeString(buff, v)
+	}
+	p.sendBytes(buff.Bytes())
+
+}
+
+func (p *player) sendCentreOfMass(t *thing) {
+	buff := new(bytes.Buffer)
+	writeByte(buff, byte(msgCentreOfMass))
+	binary.Write(buff, le, int32(t.index))
+	cg, m := t.centreOfMass()
+	cg.toByteBuffer(buff)
+	binary.Write(buff, le, float32(m))
+	p.sendBytes(buff.Bytes())
 }
 
 func (p *player) sendGameId() { //gameId uint32, e binary.ByteOrder) {
 	buff := new(bytes.Buffer)
 	writeByte(buff, byte(msgGameId))
 	writeString(buff, p.state.filename)
+
 	p.sendBytes(buff.Bytes())
 
+	p.sendLabelSets()
+
 }
 
-func (p *player) moveHighlit() {
-	moveDelta := p.gridPos.sub(p.moveStart)
+// func (p *player) moveHighlit() {
+// 	moveDelta := p.gridPos.sub(p.moveStart)
 
-	//add any movement normal to the grid to the delta
-	gridNormal := p.grid.Xaxis.cross(p.grid.Yaxis).normalise()
-	camDGN := gridNormal.multiply(p.camera.position.sub(p.downCamPos).dot(gridNormal))
-	moveDelta.addIn(camDGN)
+// 	//add any movement normal to the grid to the delta
+// 	gridNormal := p.grid.Xaxis.cross(p.grid.Yaxis).normalise()
+// 	camDGN := gridNormal.multiply(p.camera.position.sub(p.downCam.position).dot(gridNormal))
+// 	moveDelta.addIn(camDGN)
 
-	m := p.highlit.mass
+// 	m := p.highlit.mass
 
-	sp, ok := p.massStartPos[m]
-	if ok {
-		m.p = sp.add(moveDelta)
-		p.sendMasses([]*mass{m}, false) //just send the new positions
-	} else {
-		logit("no startpos present for mass ", m.index)
-	}
-}
+// 	sp, ok := p.massStartPos[m]
+// 	if ok {
+// 		m.p = sp.add(moveDelta)
+// 		p.sendMasses([]*mass{m}, false) //just send the new positions
+// 	} else {
+// 		logit("no startpos present for mass ", m.index)
+// 	}
+// }
 
 // consolidates masses at the same point and rewires springs (masses on mirrors for example)
 func (p *player) snapMasses() {
-	for _, m := range p.state.masses {
-		if m.transformOf != nil {
-			if m.transformOf.p.distanceFrom(m.p) < 0.01 {
+	for _, tm := range p.state.masses {
+		if tm.transformOf != nil {
+			if tm.transformOf.p.distanceFrom(tm.p) < 0.01 { // am i on the mirror plane
 				//rewire the springs
 				for t := range p.state.things {
 					for _, s := range p.state.things[t].springs {
-						if s.m1 == m {
-							s.m1 = m.transformOf
+						if s.m1 == tm {
+							s.m1 = tm.transformOf
 						}
-						if s.m2 == m {
-							s.m2 = m.transformOf
+						if s.m2 == tm {
+							s.m2 = tm.transformOf
 
 						}
 					}
 				}
+
+				//substitute the original for any reference to this (reflected) mass
+				//only if they are at the same point
+				for _, im := range p.state.masses {
+					if im.wingRoot == tm {
+						im.wingRoot = tm.transformOf
+					}
+					if im.axle == tm {
+						im.axle = tm.transformOf
+					}
+
+				}
+
 			}
 		}
+	}
+
+	for t := range p.state.things {
+		for _, s := range p.state.things[t].springs {
+			s.restLength = s.m1.p.distanceFrom(s.m2.p)
+		}
+	}
+
+	for _, m := range p.state.masses {
+		for _, j := range p.state.masses {
+			if m != j && m.p.distanceFrom(j.p) < 0.01 {
+				logit("coincident masses", m.index, j.index)
+			}
+		}
+
 	}
 
 }
@@ -227,7 +362,7 @@ func (p *player) moveSelected() {
 
 	//add any movement normal to the grid to the delta
 	gridNormal := p.grid.Xaxis.cross(p.grid.Yaxis).normalise()
-	camDGN := gridNormal.multiply(p.camera.position.sub(p.downCamPos).dot(gridNormal))
+	camDGN := gridNormal.multiply(p.camera.position.sub(p.downCam.position).dot(gridNormal))
 	moveDelta.addIn(camDGN)
 
 	for m := range p.selectedMasses {
@@ -261,20 +396,20 @@ func (p *player) regenTransformed() {
 
 }
 
-func (p *player) moveSpringCursor() {
-	moveDelta := p.gridPos.sub(p.moveStart)
+// func (p *player) moveSpringCursor() {
+// 	moveDelta := p.gridPos.sub(p.moveStart)
 
-	//add any movement normal to the grid to the delta
-	gridNormal := p.grid.Xaxis.cross(p.grid.Yaxis).normalise()
-	camDGN := gridNormal.multiply(p.camera.position.sub(p.downCamPos).dot(gridNormal))
-	moveDelta.addIn(camDGN)
+// 	//add any movement normal to the grid to the delta
+// 	gridNormal := p.grid.Xaxis.cross(p.grid.Yaxis).normalise()
+// 	camDGN := gridNormal.multiply(p.camera.position.sub(p.downCam.position).dot(gridNormal))
+// 	moveDelta.addIn(camDGN)
 
-	m := p.springCursor
-	m.p = p.massStartPos[m].add(moveDelta)
+// 	m := p.springCursor
+// 	m.p = p.massStartPos[m].add(moveDelta)
 
-	p.sendMasses([]*mass{m}, false) //just send the new positions
+// 	p.sendMasses([]*mass{m}, false) //just send the new positions
 
-}
+// }
 
 func (p *player) makeNextSpring() {
 	if p.highlit.mass == nil {
@@ -286,7 +421,7 @@ func (p *player) makeNextSpring() {
 
 	p.springCursor = m2
 
-	p.highlit.spring = p.currentThing.AddSpring(m1, m2, 1)
+	p.highlit.spring = p.currentThing.AddSpring(m1, m2, 1, fcNONE)
 	logit("made spring", m1.index, m2.index)
 
 	//p.recordMassPositions() //we need to (re) do this as we have added masses
@@ -320,68 +455,129 @@ func (p *player) sendCamera() {
 
 }
 
+// optimise - to send only changed labels - maybe send two mass indices (instead of a point)
+func (p *player) sendLabels() {
+
+	if len(p.state.labels) == 0 {
+		return
+	}
+
+	buff := new(bytes.Buffer)
+
+	binary.Write(buff, le, msgLabels)
+	binary.Write(buff, le, uint16(len(p.state.labels)))
+	for _, l := range p.state.labels {
+		l.toByteBuffer(buff)
+	}
+	p.sendBytes(buff.Bytes())
+}
+
 func (player *player) sendMasses(masses []*mass, withDetail bool) {
 	player.sendBytes(massesToBytes(masses, withDetail, player.selectedMasses))
 	player.sendVectors()
 
 }
 
+func (player *player) sendClear() {
+	player.sendBytes([]byte{byte(msgClear)})
+}
+
 func (player *player) sendMakeMesh(name string, numVerts uint32, numFaces uint32) {
 	buff := new(bytes.Buffer)
-	e := binary.LittleEndian
-	binary.Write(buff, e, byte(msgMesh))
-	binary.Write(buff, e, byte(len(name)))
-	binary.Write(buff, e, []byte(name))
-	binary.Write(buff, e, make([]byte, len(name)%4+2)) //padding
-	binary.Write(buff, e, numVerts)
-	binary.Write(buff, e, numFaces)
+
+	binary.Write(buff, le, byte(msgMesh))
+	binary.Write(buff, le, byte(len(name)))
+	binary.Write(buff, le, []byte(name))
+	binary.Write(buff, le, make([]byte, len(name)%4+2)) //padding
+	binary.Write(buff, le, numVerts)
+	binary.Write(buff, le, numFaces)
 
 	player.sendBytes(buff.Bytes())
 }
 
-func (player *player) sendVectors() {
+func (p *player) sendVectors() {
 
 	//send the mass index, vector and color - show lift at the wingtips (althoug it is actually shared between the three verts)
 
 	buff := new(bytes.Buffer)
-	e := binary.LittleEndian
-	binary.Write(buff, e, byte(msgVectors))
 
-	white := uint32(0xffffff)
-	yellow := uint32(0xffff00)
+	binary.Write(buff, le, byte(msgVectors))
 
-	for _, m := range player.state.masses {
+	// white := uint32(0xffffff00)
+	// yellow := uint32(0xffff0000) //lift vector
+	// orange := uint32(0xff800000) //axle/leading edge
+	// blue := uint32(0x8080ff00)   //wing root/trailing eddge
+
+	//black := uint8(0)
+	orange := uint8(6)
+	blue := uint8(1)
+	//yellow := uint8(14)
+	red := uint8(4)
+
+	// new THREE.Color("black"), //0
+	// new THREE.Color("blue"), //1
+	// new THREE.Color("green"), //2
+	// new THREE.Color("cyan"), //3
+	// new THREE.Color("red"),  //4
+	magenta := uint8(5)
+	// new THREE.Color("orange"),  //6
+	// new THREE.Color("gray"), //7
+	// new THREE.Color("darkgray"), // 8
+	// new THREE.Color("lightblue"), // 9
+	// new THREE.Color("lightgreen"), // 10
+	// new THREE.Color("lightcyan"), // 11
+	// new THREE.Color("lightcoral"), // 12
+	// new THREE.Color("lightpink"), // 13
+	// new THREE.Color("yellow"), // 14
+	// new THREE.Color("white") // 15
+
+	//NEED PAUSED
+
+	numVecs := 0
+	for _, m := range p.state.masses {
+		numVecs++
+		if m.axle != nil {
+			numVecs++
+		}
+		if m.lift != nil {
+			numVecs++
+			if m.axle != nil {
+				numVecs++
+			}
+		}
+	}
+
+	binary.Write(buff, le, uint16(numVecs)) //number of vectors
+
+	for _, m := range p.state.masses {
+
+		//velocity vector
+		m.p.toByteBuffer(buff)
+		was := m.p.sub((m.p.sub(m.op)).multiply(10))
+		was.toByteBuffer(buff)
+		binary.Write(buff, le, magenta)
+
 		if m.axle != nil {
 			m.p.toByteBuffer(buff)
 			m.axle.p.toByteBuffer(buff)
-			binary.Write(buff, e, white) //16 (or whatever) standard colours
+			binary.Write(buff, le, orange) //Axle/leading edge
 		}
-		if m.wingRoot != nil {
+		if m.lift != nil {
 
 			m.p.toByteBuffer(buff)
 			m.wingRoot.p.toByteBuffer(buff)
-			binary.Write(buff, e, white)
+			binary.Write(buff, le, blue) //trailing edge
 
 			if m.axle != nil {
 				centreOfLift := m.p.add(m.wingRoot.p).add(m.axle.p).multiply(1.0 / 3.0)
-				centreOfLift.toByteBuffer(buff) //end1
 
-				upVector := m.axle.p.sub(m.wingRoot.p).cross(m.axle.p.sub(m.p)).normalise()
-				wingAxis := m.p.sub(m.axle.p).normalise()
-				rootAxis := m.axle.p.sub(m.wingRoot.p).normalise()
-				upVector = upVector.rotateAbout(wingAxis, m.aoaRads)         //additional angle of attack (in radians)
-				upVector = upVector.rotateAbout(rootAxis, m.dihedralDegrees) //dihedral (in radians)
-				centreOfLift.add(upVector).toByteBuffer(buff)                //end2
-
-				binary.Write(buff, e, white)
-
-				if player.state.running == true {
-					if m.lift != nil {
-						centreOfLift.toByteBuffer(buff)
-						centreOfLift.add(m.lift).toByteBuffer(buff)
-						binary.Write(buff, e, yellow)
-					}
+				if m.axle.p == m.wingRoot.p {
+					logit("axle and wingroot are the same")
 				}
+
+				centreOfLift.toByteBuffer(buff)                              //end1
+				centreOfLift.add(m.lift.multiply(0.0001)).toByteBuffer(buff) //end 2
+				binary.Write(buff, le, red)
 
 			}
 
@@ -390,7 +586,9 @@ func (player *player) sendVectors() {
 		}
 	}
 
-	player.sendBytes(buff.Bytes())
+	p.sendBytes(buff.Bytes())
+	//logit(len(buff.Bytes()), "bytes sent for vectors")
+	//logit("sent vectors", len(buff.Bytes()), "bytes")
 }
 
 // used for sending section of the interleaved (often) floating point data that makes up vertex, normal, position and index buffers
@@ -431,8 +629,8 @@ func (p *player) sendCursor() {
 
 func (p *player) sendHighlit() {
 	buff := new(bytes.Buffer)
-	e := binary.LittleEndian
-	binary.Write(buff, e, byte(msgHighlit)) //masses
+
+	binary.Write(buff, le, byte(msgHighlit)) //masses
 
 	hm, ht, hs := int32(-1), int32(-1), int32(-1)
 	if p.highlit.mass != nil {
@@ -447,9 +645,9 @@ func (p *player) sendHighlit() {
 		hs = p.highlit.spring.index
 		logit("hs", p.highlit.spring.index)
 	}
-	binary.Write(buff, e, hm)
-	binary.Write(buff, e, ht)
-	binary.Write(buff, e, hs) //spring index within the thing
+	binary.Write(buff, le, hm)
+	binary.Write(buff, le, ht)
+	binary.Write(buff, le, hs) //spring index within the thing
 	p.sendBytes(buff.Bytes())
 
 }
@@ -476,7 +674,6 @@ func playersToBytes(players map[uint32]*player) []byte {
 	binary.Write(buff, le, uint32(len(players))) //number of players
 	for _, p := range players {
 		p.toByteBuffer(buff, le)
-
 	}
 
 	return buff.Bytes()
@@ -564,6 +761,12 @@ func NewPlayer(id uint32, name string, state *state, socket *websocket.Conn) *pl
 		keys:           make(map[string]bool), //which keys are pressed
 		selectedMasses: make(map[*mass]bool),  //which masses are selected, values are the order in which they were selected
 		boundValues:    make(map[string]boundValue),
+		mixers:         standardMixers,
+		controls:       make(map[controlInput]float64),
+	}
+
+	for i, _ := range inLabels {
+		p.controls[controlInput(i)] = 0
 	}
 
 	direction := newVec3(0, -1, .1).normalise()
@@ -614,11 +817,27 @@ func (p *player) setMode(m ModeEnum) {
 
 	buff := new(bytes.Buffer)
 	binary.Write(buff, le, byte(msgMode)) //masses
-	binary.Write(buff, le, byte(len(string(m))))
-	binary.Write(buff, le, []byte(string(m)))
+	writeString(buff, string(m))
+
 	p.sendBytes(buff.Bytes())
 }
+
+func (p *player) checkHighlitMass() bool {
+	if p.highlit.mass == nil {
+		p.sendMessage("Highlight a mass and press the key", "error")
+		return false
+	}
+	return true
+
+}
+
 func (p *player) sendBytes(msg []byte) {
+
+	if p.socket == nil {
+		logit(p.name + "player socket is disconnected")
+		return
+	}
+
 	p.mtx.Lock()         //<<---MUTEX
 	defer p.mtx.Unlock() //deferred unlock
 	messageType := websocket.BinaryMessage
@@ -627,18 +846,24 @@ func (p *player) sendBytes(msg []byte) {
 	p.socket.WriteMessage(messageType, msg) //write the message (and return any error)
 }
 
-func (p *player) send(msg *reply) {
-	p.mtx.Lock()         //<<---MUTEX
-	defer p.mtx.Unlock() //deferred unlock
-	messageType := websocket.TextMessage
+func (p *player) send(msg *reply) { //this is fo JSON message s- Dperecated
 
-	bytes, err := json.Marshal(msg)
-	if err != nil {
-		logit(err.Error())
-		return
+	if p.socket != nil {
+		p.mtx.Lock()         //<<---MUTEX
+		defer p.mtx.Unlock() //deferred unlock
+		messageType := websocket.TextMessage
+
+		bytes, err := json.Marshal(msg)
+		if err != nil {
+			logit(err.Error())
+			return
+		}
+
+		p.socket.WriteMessage(messageType, bytes) //write the message (and return any error)
+	} else {
+		logit("player socket is disco'd")
 	}
 
-	p.socket.WriteMessage(messageType, bytes) //write the message (and return any error)
 }
 
 func (p *player) processBinaryMsg(mb []byte) {
@@ -669,10 +894,17 @@ func (p *player) processBinaryMsg(mb []byte) {
 		value := float32(0)
 		binary.Read(buff, le, &value)
 		bv := p.boundValues[id]
-		*bv.valuePointer = float64(value) / float64(bv.conversion) //set the value at the pointer (converting (for example from degress to radians) in necessary)
+		*bv.valuePointer = float64(value) //set the value at the pointer
 
-		p.sendVectors()                                     //send the new vectors
-		p.sendMasses([]*mass{p.boundValues[id].mass}, true) //send the potentially) modified mass
+		p.sendVectors() //send the new vectors
+		//if p.highlit.mass != nil {
+		p.sendMasses(p.state.masses, true) //send the potentially) modified mass
+		if p.currentThing == nil {
+			p.currentThing = p.state.things[0]
+		}
+		p.sendCentreOfMass(p.currentThing)
+		//}
+
 	} else if cm == msgLoad || cm == msgSave {
 
 		idl := uint16(0)
@@ -686,6 +918,7 @@ func (p *player) processBinaryMsg(mb []byte) {
 			sock := p.socket //we'll push this onto me when i'm loaded
 
 			p.state = load((filename))
+
 			games[filename] = p.state
 
 			p.camera = p.state.players[p.id].camera
@@ -702,6 +935,11 @@ func (p *player) processBinaryMsg(mb []byte) {
 			p.sendMasses(p.state.masses, true)
 			p.sendThings(p.state.things) //[]*thing{p.vehicle}) //sends mesh name and springs
 			p.sendGameId()               //game id starts it running
+			p.vehicle = p.state.things[0]
+			p.vehicle.setVelocity(testFlight)
+			p.state.flyMasses()
+			p.sendVectors()
+			p.sendCentreOfMass(p.currentThing)
 
 			p.sendMessage("Loaded", "info")
 			logit("Game loaded", p.state.filename)

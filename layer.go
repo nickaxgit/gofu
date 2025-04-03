@@ -1,7 +1,7 @@
 package main
 
 type Prop struct {
-	Position Vector  `json:"position"`
+	Position vec2    `json:"position"`
 	Angle    float64 `json:"angle"`
 	Radius   float64 `json:"radius"`
 	Pic      string  `json:"pic"`
