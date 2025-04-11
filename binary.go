@@ -21,3 +21,9 @@ func readString(buff *bytes.Buffer) string {
 	binary.Read(buff, le, &s)
 	return string(s)
 }
+
+func readUInt32(buff *bytes.Buffer) uint32 {
+	var i uint32
+	binary.Read(buff, le, &i)
+	return i
+}

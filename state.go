@@ -106,19 +106,20 @@ type state struct { //the DATA of a game in progress - it can be entirely replac
 	filename string
 	Sqn      int
 	//host      string
-	players     map[uint32]*player
-	masses      []*mass
-	labels      []*label
-	things      []*thing
-	deathList   []*player
-	Tracks      map[string]*track
-	Layers      map[string]*Layer
-	liftCurves  [][]float64 //alternating x,y values
-	dragCurves  [][]float64 //alternating x,y values
-	running     bool
-	runwayStart *vec3
-	runwayEnd   *vec3
-	stretchDir  bool
+	players       map[uint32]*player
+	masses        []*mass
+	labels        []*label
+	things        []*thing
+	deathList     []*player
+	Tracks        map[string]*track
+	Layers        map[string]*Layer
+	liftCurves    [][]float64        //alternating x,y values
+	dragCurves    [][]float64        //alternating x,y values
+	controlTokens map[uint32]*player //every login adds a random token to here to allow control by another player/device
+	running       bool
+	runwayStart   *vec3
+	runwayEnd     *vec3
+	stretchDir    bool
 }
 
 func (s *state) addLabel(l *label) *label {

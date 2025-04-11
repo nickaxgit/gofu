@@ -43,7 +43,9 @@ const (
 	props          = "Settings Properties"
 )
 
-var games map[string]*state //the data of games in progress - by id
+var players = map[uint32]*player{}   //all players in all games game - by id
+var controlTokens map[uint32]*player //every login adds a random token to here to allow control by another player/device
+var games map[string]*state          //the data of games in progress - by id
 var accountsByGuid map[string]*account
 
 func stepWorlds() {
@@ -182,6 +184,7 @@ func joinGame(gameId string, playerId uint32, playerName string, ws *websocket.C
 	p.sendMasses(state.masses, true)  //send all the masses
 	p.sendThings([]*thing{p.vehicle}) //sends mesh name and springs
 	p.sendGameId()                    //game id starts it running
+	p.sendControlPin()
 	cg, _ := p.vehicle.centreOfMass()
 	state.qSound("dozer", cg, 0.1, "revs-"+playerName, true)
 
@@ -195,18 +198,27 @@ func processCreateOrJoin(mb []byte, ws *websocket.Conn) *player {
 	cmd := [1]byte{}
 	binary.Read(buff, le, &cmd)
 
-	playerId := uint32(0)
-
-	gameId := readString(buff)
-
-	binary.Read(buff, le, &playerId)
-
-	playerName := readString(buff)
-
 	if cmd[0] == byte(msgCreateGame) {
+		playerId := uint32(0)
+		gameId := readString(buff)
+		logit("gameId", gameId)          //TODO this isnt used (is 0) tidy
+		binary.Read(buff, le, &playerId) //gets the player id
+		playerName := readString(buff)
+
 		return createGame(playerId, string(playerName), ws) //returns a player
 	} else if cmd[0] == byte(msgJoinGame) {
+
+		playerId := uint32(0)
+		gameId := readString(buff)
+		binary.Read(buff, le, &playerId) //gets the player id
+		playerName := readString(buff)
+
 		return joinGame(gameId, playerId, string(playerName), ws) //returns a player
+	} else if cmd[0] == byte(msgJoinAsController) {
+		token := readUInt32(buff)
+
+		return controlTokens[token] //return the player to which this token maps
+
 	} else {
 		panic("first message was not create or join")
 	}

@@ -21,32 +21,35 @@ import (
 type msgEnum byte
 
 const (
-	msgGameId        msgEnum = 1
-	msgMesh          msgEnum = 4
-	msgMeshPositions msgEnum = 5
-	msgMeshNormals   msgEnum = 6
-	msgMeshUVs       msgEnum = 7
-	msgMeshFaces     msgEnum = 8
-	msgThings        msgEnum = 11
-	msgMasses        msgEnum = 12
-	msgHighlit       msgEnum = 13
-	msgCamera        msgEnum = 14
-	msgCursor        msgEnum = 15
-	msgMessage       msgEnum = 16
-	msgVectors       msgEnum = 17
-	msgPlayers       msgEnum = 18
-	msgCreateGame    msgEnum = 19
-	msgJoinGame      msgEnum = 20
-	msgBoundValues   msgEnum = 21
-	msgValueChange   msgEnum = 22
-	msgGrid          msgEnum = 23 //send the current grid position and axes to the client
-	msgSave          msgEnum = 24
-	msgLoad          msgEnum = 25
-	msgMode          msgEnum = 26 //send a message of the current (edior) mode - renders on client sceen
-	msgLabels        msgEnum = 27 //collection of player/telemetry labels
-	msgLabelSet      msgEnum = 28 //set of labels
-	msgClear         msgEnum = 29 //clear all spheres/lines
-	msgCentreOfMass  msgEnum = 30 //centre of mass
+	msgGameId           msgEnum = 1
+	msgMesh             msgEnum = 4
+	msgMeshPositions    msgEnum = 5
+	msgMeshNormals      msgEnum = 6
+	msgMeshUVs          msgEnum = 7
+	msgMeshFaces        msgEnum = 8
+	msgThings           msgEnum = 11
+	msgMasses           msgEnum = 12
+	msgHighlit          msgEnum = 13
+	msgCamera           msgEnum = 14
+	msgCursor           msgEnum = 15
+	msgMessage          msgEnum = 16
+	msgVectors          msgEnum = 17
+	msgPlayers          msgEnum = 18
+	msgCreateGame       msgEnum = 19
+	msgJoinGame         msgEnum = 20
+	msgBoundValues      msgEnum = 21
+	msgValueChange      msgEnum = 22
+	msgGrid             msgEnum = 23 //send the current grid position and axes to the client
+	msgSave             msgEnum = 24
+	msgLoad             msgEnum = 25
+	msgMode             msgEnum = 26 //send a message of the current (edior) mode - renders on client sceen
+	msgLabels           msgEnum = 27 //collection of player/telemetry labels
+	msgLabelSet         msgEnum = 28 //set of labels
+	msgClear            msgEnum = 29 //clear all spheres/lines
+	msgCentreOfMass     msgEnum = 30 //centre of mass
+	msgControlToken     msgEnum = 31 //control token (4 digit Pin) for display on the client (as a QR code)
+	msgJoinAsController msgEnum = 32 //join as a controller (not a player)
+	msgControlPositions msgEnum = 33 //receive the control positions (tracked blobs)
 
 )
 

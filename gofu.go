@@ -161,8 +161,7 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 
 	//when a player creates or joins a game - their websocket is hooked up to the player
 	var player *player
-	for {
-		// read in a messages forever on this socket (from this player)
+	for { // read in a messages forever on this socket (from this player)
 
 		messageType, msgBytes, err := ws.ReadMessage()
 

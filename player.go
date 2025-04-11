@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"maps"
 	"math"
+	"math/rand"
 	"slices"
 	"sync"
 
@@ -53,7 +54,7 @@ type player struct {
 	//waitChannel chan bool
 	mtx *sync.Mutex // a mutex is required to 'lock' access to each users connection (for writing)
 	// many calls (to wsEndpoint) can be running in paralell - and more than one of them may attempt to write to a single users socket at the same time (not allowed!)
-	socket *websocket.Conn // a pointer to the socket
+	//socket *websocket.Conn // a pointer to the socket - no players shoundnt have a socket, sockets should have a player (more than one socket can feed a player)
 
 	landTri   *Tri
 	landMesh  *mesh
@@ -273,6 +274,20 @@ func (p *player) sendCentreOfMass(t *thing) {
 	cg.toByteBuffer(buff)
 	binary.Write(buff, le, float32(m))
 	p.sendBytes(buff.Bytes())
+}
+
+func (p *player) sendControlPin() {
+	token := randomInt32()
+	p.state.controlTokens[token] = p
+	buff := new(bytes.Buffer)
+	writeByte(buff, byte(msgControlToken))
+	binary.Write(buff, le, token)
+	p.sendBytes(buff.Bytes())
+
+}
+
+func randomInt32() uint32 {
+	return uint32(math.Round(1000 + rand.Float64()*8999))
 }
 
 func (p *player) sendGameId() { //gameId uint32, e binary.ByteOrder) {
@@ -658,10 +673,9 @@ func (p *player) sendMessage(msg string, sev string) {
 	buff := new(bytes.Buffer)
 	e := binary.LittleEndian
 	binary.Write(buff, e, byte(msgMessage))
-	binary.Write(buff, e, byte(len(msg)))
-	binary.Write(buff, e, []byte(msg))
-	binary.Write(buff, e, byte(len(sev)))
-	binary.Write(buff, e, []byte(sev))
+	writeString(buff, msg)
+	//binary.Write(buff, e, byte(len(sev)))
+	//binary.Write(buff, e, []byte(sev))
 
 	p.sendBytes(buff.Bytes())
 
