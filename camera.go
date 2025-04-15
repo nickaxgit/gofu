@@ -30,9 +30,11 @@ func (cam *camera) follow(t *thing) {
 
 	//cp = leaf.probePlane(newVec3(cp.x, -10000, cp.z), newVec3(cp.x, 10000, cp.z))
 	cam.position.y = o.y + 10
-
 	//cp.y = 2000
-	cam.direction = o.sub(cam.position).normalise()
+
+	if !o.equals(cam.position) {
+		cam.direction = o.sub(cam.position).normalise()
+	}
 
 }
 

@@ -43,9 +43,9 @@ const (
 	props          = "Settings Properties"
 )
 
-var players = map[uint32]*player{}   //all players in all games game - by id
-var controlTokens map[uint32]*player //every login adds a random token to here to allow control by another player/device
-var games map[string]*state          //the data of games in progress - by id
+var players = map[uint32]*player{}                                 //all players in all games game - by id
+var controlTokens map[uint32]*player = make(map[uint32]*player, 0) //every login adds a random token to here to allow control by another player/device
+var games map[string]*state                                        //the data of games in progress - by id
 var accountsByGuid map[string]*account
 
 func stepWorlds() {
@@ -115,7 +115,7 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 	p.makeLand(y0pos, 10, 2000, s, nil, nil) //initial make to determin runway height
 
 	state.runwayStart, _ = p.landTri.probeLand(y0pos)
-	state.runwayEnd = state.runwayStart.add(newVec3(0, 0, -600))
+	state.runwayEnd = state.runwayStart.add(newVec3(0, 0, -1200))
 
 	origin := p.makeLand(y0pos, 10, 2000, s, state.runwayStart, state.runwayEnd) //makes and sends land
 
@@ -124,12 +124,16 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 	p.grid.origin = origin
 	p.grid.send(p)
 
-	aircraft := load("wip21")
+	aircraft := load("wip22")
 	t := state.mergeThing(aircraft.things[0])
 	aircraft = nil
 	p.vehicle = t
 
 	cg, weight := t.centreOfMass()
+
+	//t.engineSound[0] = state.qSound("engineLoop", cg, 0.2, true)
+	//t.engineSound[1] = state.qSound("engineLoop", cg, 0.2, true)
+
 	logit("aircraft weighs", weight)
 	t.translate(origin.sub(cg).add(newVec3(0, 10, 0)))
 
@@ -137,13 +141,14 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 
 	p.camera.follow(p.vehicle)
 
-	p.updateActuators()
+	//p.updateActuators()
 
 	p.sendCamera()
 
 	p.sendMasses(state.masses, true)
 	p.sendThings([]*thing{p.vehicle}) //sends mesh name and springs
 	p.sendGameId()                    //game id starts it running
+	p.sendControlPin()
 
 	//player.send(&reply{Cmd: "state", Payload: state.payload()})
 
@@ -153,8 +158,6 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 	//state.sendWater()
 
 	logit("Game created", state.filename)
-
-	state.qSound("dozer", cg, 0.1, "revs-"+playerName, true)
 
 	//state.save("game" + fmt.Sprint(state.gameId) + ".bson")
 
@@ -185,13 +188,17 @@ func joinGame(gameId string, playerId uint32, playerName string, ws *websocket.C
 	p.sendThings([]*thing{p.vehicle}) //sends mesh name and springs
 	p.sendGameId()                    //game id starts it running
 	p.sendControlPin()
-	cg, _ := p.vehicle.centreOfMass()
-	state.qSound("dozer", cg, 0.1, "revs-"+playerName, true)
+
+	//cg, _ := p.vehicle.centreOfMass()
+
+	//state.qSound("dozer", cg, 0.1,  true)
+	//t.engineSound[0] = state.qSound("engineLoop", cg, 0.2, true)
+	//t.engineSound[1] = state.qSound("engineLoop", cg, 0.2, true)
 
 	return p
 }
 
-func processCreateOrJoin(mb []byte, ws *websocket.Conn) *player {
+func processCreateJoinOrControl(mb []byte, ws *websocket.Conn) *player {
 
 	buff := bytes.NewBuffer(mb)
 
@@ -216,8 +223,13 @@ func processCreateOrJoin(mb []byte, ws *websocket.Conn) *player {
 		return joinGame(gameId, playerId, string(playerName), ws) //returns a player
 	} else if cmd[0] == byte(msgJoinAsController) {
 		token := readUInt32(buff)
-
-		return controlTokens[token] //return the player to which this token maps
+		playerToControl := controlTokens[token]
+		if playerToControl != nil {
+			playerToControl.controllerSocket = ws
+			return playerToControl //return the player to which this token maps
+		}
+		logit("No pin for token", token)
+		return nil
 
 	} else {
 		panic("first message was not create or join")
@@ -300,8 +312,8 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 				p.setMode(props)
 			} else if p.highlit.spring != nil {
 				p.boundValues = make(map[string]boundValue, 0)
-				p.bindValue("actuator", &p.highlit.spring.flightOutput, 0, 10, 1, 1) //use labelt set 1 (outoput flight controls)
-				p.sendBoundValues()                                                  //will pop up a context menu clientside
+				p.bindValue("actuator", &p.highlit.spring.flightOutput, 0, float32(len(actLabels)), 1, 1) //use label set 1 (actuator labels)
+				p.sendBoundValues()                                                                       //will pop up a context menu clientside
 				p.setMode(props)
 			}
 		}
@@ -495,6 +507,13 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 			p.processMouseMove()
 			p.sendCamera()
 			p.controls[ciThrottle] = 0
+		} else if k == "1" {
+			//start port engine
+			p.vehicle.engines[0].start()
+
+		} else if k == "2" {
+			//start starboard engine
+			p.vehicle.engines[1].start()
 
 		} else if kl == "o" {
 
@@ -521,11 +540,11 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 			p.sendThings([]*thing{p.currentThing})
 
 		} else if kl == "g" { //align the grid
-			p.grid.origin = p.highlit.mass.p.clone()
-			s := slices.Collect(maps.Keys(p.selectedMasses))
-			p.grid.Xaxis = s[0].p.sub(p.grid.origin).normalise()
-			p.grid.Yaxis = s[1].p.sub(p.grid.origin).normalise()
-			p.grid.send(p)
+			if p.keys["Control"] {
+				p.state.zeroG = !p.state.zeroG
+			} else {
+
+			}
 		} else if kl == "m" && p.keys["Shift"] {
 			if p.currentThing == nil {
 				p.currentThing = p.state.things[0]

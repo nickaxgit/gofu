@@ -50,6 +50,8 @@ const (
 	msgControlToken     msgEnum = 31 //control token (4 digit Pin) for display on the client (as a QR code)
 	msgJoinAsController msgEnum = 32 //join as a controller (not a player)
 	msgControlPositions msgEnum = 33 //receive the control positions (tracked blobs)
+	msgSound            msgEnum = 34 //sound message (play a sound)
+	msgDetune           msgEnum = 35 //detune (pitch) sound (user for rpm/revs/throttle/ engine sound)
 
 )
 
@@ -456,7 +458,7 @@ func (t *Tri) plough(runwayStart *vec3, runwayEnd *vec3) {
 	m := t.mesh
 	for _, vi := range t.vi {
 		p := m.verts[vi].p
-		if p.distanceFromLineSegment(runwayStart, runwayEnd) < 40 {
+		if p.distanceFromLineSegment(runwayStart, runwayEnd) < 45 {
 			cp := p.closestPointOnLineSegment(runwayStart, runwayEnd)
 			p.y = cp.y
 		}

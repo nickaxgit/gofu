@@ -42,6 +42,7 @@ type mass struct {
 	contribs   float64
 	correction *vec3   //used to correct the position of the masses
 	section    float64 //airfoil section - actually just a byte but we bind a slider to it so it has to be a float64
+	brake      float64 //brake force (0-1) - 1= full brake used for wheels
 	//flightOutput     float64 //outputEnum - what am I ? aileron, elevator, rudder, flap, engine
 	//gain             float32 //multiplier/inverter for the (normalised) control input - e.g. convert to radians of aileron deflection
 	//isThrust         bool    //throttles create thrust - control surfaces have their AoA changed

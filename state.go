@@ -106,20 +106,22 @@ type state struct { //the DATA of a game in progress - it can be entirely replac
 	filename string
 	Sqn      int
 	//host      string
-	players       map[uint32]*player
-	masses        []*mass
-	labels        []*label
-	things        []*thing
-	deathList     []*player
-	Tracks        map[string]*track
-	Layers        map[string]*Layer
-	liftCurves    [][]float64        //alternating x,y values
-	dragCurves    [][]float64        //alternating x,y values
-	controlTokens map[uint32]*player //every login adds a random token to here to allow control by another player/device
-	running       bool
-	runwayStart   *vec3
-	runwayEnd     *vec3
-	stretchDir    bool
+	players    map[uint32]*player
+	masses     []*mass
+	labels     []*label
+	things     []*thing
+	deathList  []*player
+	Tracks     map[string]*track
+	Layers     map[string]*Layer
+	liftCurves [][]float64 //alternating x,y values
+	dragCurves [][]float64 //alternating x,y values
+	//controlTokens map[uint32]*player //every login adds a random token to here to allow control by another player/device
+	running     bool
+	runwayStart *vec3
+	runwayEnd   *vec3
+	stretchDir  bool
+	zeroG       bool
+	sounds      uint16 //next sound handle
 }
 
 func (s *state) addLabel(l *label) *label {
@@ -293,7 +295,7 @@ func (state *state) step() {
 
 	for _, p := range state.players {
 		if p.socket != nil {
-			//p.camera.follow(p.vehicle)
+			p.camera.follow(p.vehicle)
 			p.sendCamera()
 			p.sendLabels()
 
@@ -713,8 +715,9 @@ func (state *state) resolvePenetrations() bool {
 
 							if m.axle != nil {
 								axle := m.axle.p.sub(m.p).normalise()
-								vr = vr.sub(axle.multiply(vr.dot(axle))) //kill (only the) sideways velocity of the wheel
-								vr = vr.multiply(0.95)                   //some wheel friciton
+								vr = vr.sub(axle.multiply(vr.dot(axle) * .95)) //kill (95% of the) sideways velocity of the wheel
+								vr = vr.multiply(0.95)                         //some wheel friciton
+								vr = vr.multiply(1 - m.brake)                  //some wheel friciton
 							} else { //not a wheel
 								vr = vr.multiply(.8) //kill 80% of the velocity
 							}
@@ -811,6 +814,51 @@ func (state *state) tumbleCoins() {
 	// }
 }
 
+// use the fuel burn (and KW) to accelerate the prop disc/engineRPM (frm whence thrust is derived)
+func (state *state) runEngines() {
+	for _, p := range state.players {
+		if p.vehicle != nil {
+			for engineIndex, e := range p.vehicle.engines {
+				if e.rpm > 0 { //is the engine started/running
+					av := e.rpm / 60 * 2 * math.Pi //radians per second
+					torque := e.kw * 1000 / av     //watts to torque (Nm)
+					av += torque / (e.moi * 100)   //divide by the time slice (100 cycles per second)
+
+					//generate thrust
+					v := av * e.propRadius * 0.6 //generate thrust at 60% of the prop radius (0.6 is a guess)
+					aoa := e.pitch               //todo - account for forward speed (and the reducing angle of attack)) - although i imagine aircraft systems handle this to keep pitch optimal
+					cl := lerp(aoa, state.liftCurves[0])
+					lift := v * v * cl * rho * .5 * e.propTotalBladeArea
+					e.thrustNewtons = lift
+
+					if e.thrustNewtons > 50000 { //more than 5000kg of thrust
+						logit("excess thrust", e.thrustNewtons)
+
+					}
+
+					cd := lerp(aoa, state.dragCurves[0])
+					drag := v * v * cd * e.propTotalBladeArea
+
+					dragTorque := drag * e.propRadius * .6 //torque is the drag on the prop (Nm)
+					av -= dragTorque / (e.moi * 100)       //divide by the time slice (100 cycles per second)
+					e.rpm = av * 60 / (2 * math.Pi)        //radians/second to rpm
+
+					if e.rpm > e.lastRpmSent+10 || e.rpm < e.lastRpmSent-10 {
+						e.sendRpm(engineIndex + 1)
+
+					}
+
+					svn := e.spring.m1.p.sub(e.spring.m2.p).normalise()
+
+					mv := svn.multiply(e.thrustNewtons / (500000 * 150))
+					e.spring.m1.p.addIn(mv)
+					e.spring.m2.p.addIn(mv)
+				}
+			}
+		}
+	}
+}
+
 // pass vms as 0 to use actual mass velocities
 func (state *state) flyMasses() {
 
@@ -855,7 +903,7 @@ func (state *state) flyMasses() {
 
 				m.aoaDegrees = aoa / (math.Pi * 2) * 360
 				if m.aoaDegrees < -20 || m.aoaDegrees > 20 {
-					//	logit("aoa", m.aoaDegrees)
+					logit("aoa", m.aoaDegrees)
 				}
 				cl := lerp(m.aoaDegrees, state.liftCurves[int(m.section)])
 				cd := lerp(m.aoaDegrees, state.dragCurves[int(m.section)])
@@ -876,7 +924,7 @@ func (state *state) flyMasses() {
 					// 	m.p.addIn(rootAxis.multiply(m.thrust * ntm))
 					// }
 
-					f := float64(2 * 3 * 1500) // half (acceleration to distance travelled) 1/3rd of the lift distribution  150 steps per second
+					f := float64(2 * 3 * 4500) // half (acceleration to distance travelled) 1/3rd of the lift distribution  150 steps per second
 					d := lift.divide(m.wingRoot.mass() * f)
 
 					m.wingRoot.p.addIn(d) // ntm * .33))
@@ -906,7 +954,7 @@ func (state *state) stretchSprings() {
 
 	// for _, m := range state.masses {
 	// 	if m.correction != nil {
-	// 		m.p.addIn(m.correction.multiply(1 / float64(m.contribs)))
+	// 		m.p.addIn(m.correction) //.multiply(1 / float64(m.contribs)))
 	// 		m.correction.x = 0
 	// 		m.correction.y = 0
 	// 		m.correction.z = 0
@@ -1014,6 +1062,9 @@ func (state *state) moveAll(substeps int) {
 	//0.5 * 9.81 * 1/30^2 = 0.0054
 
 	gravity := 1 * 9.81 * math.Pow(1/(30*float64(substeps)), 2)
+	if state.zeroG {
+		gravity = 0
+	}
 
 	if state.anyPlayers() && len(state.masses) > 3 {
 
@@ -1036,17 +1087,23 @@ func (state *state) moveAll(substeps int) {
 					p.sendVectors() //new
 				}
 
-				if p.vehicle != nil { //controller players don't have dozers
-					p.updateActuators()
-					//	p.Move(state) //state.movePlayer(p) //based on a players keyboard/touch inputs move their track masses
-				}
+				//if p.vehicle != nil { //controller players don't have dozers
+				//p.updateActuators() - now done on arrival of controlInputs
+				//	p.Move(state) //state.movePlayer(p) //based on a players keyboard/touch inputs move their track masses
+				//}
 			}
 
-			state.flyMasses() //player is used for thrust values
+			state.runEngines() //places thrust on some springs
+			state.flyMasses()  //player is used for thrust values
 
 			state.stretchSprings()
 			state.stretchSprings()
 			state.stretchSprings()
+
+			// if state.stretchDir {
+			// 	state.stretchSprings()
+			// }
+			// state.stretchDir = !state.stretchDir
 
 			state.resolvePenetrations()
 
@@ -1278,13 +1335,38 @@ func lerp(x float64, data []float64) float64 {
 
 }
 
-func (state *state) qSound(sound string, position *vec3, volume float32, label string, loop bool) {
+func (state *state) deTune(handle uint16, cents int16) {
 
-	payload := soundPayload{Sound: sound, Position: *position, Volume: volume, Label: label, Loop: loop}
-	state.send(nil, &reply{Cmd: "sound", Payload: payload})
+	buff := new(bytes.Buffer)
+	writeByte(buff, byte(msgDetune))
+	binary.Write(buff, le, &handle)
+	binary.Write(buff, le, &cents)
+
+	state.sendBinary(buff.Bytes())
 
 }
 
+func (state *state) qSound(sound string, position *vec3, volume float32, loop bool, playAfter uint16) uint16 {
+
+	state.sounds++
+	handle := state.sounds
+
+	buff := new(bytes.Buffer)
+	writeByte(buff, byte(msgSound))
+	writeString(buff, sound)
+	writeVec3(buff, position)       //position
+	writeFloat32(buff, volume)      //volume
+	binary.Write(buff, le, &handle) //handle
+	writeBool(buff, loop)
+	binary.Write(buff, le, &playAfter) //handle
+
+	state.sendBinary(buff.Bytes())
+
+	return handle
+
+}
+
+// TODO - this should be obsolete - use sendBinary instead
 func (state *state) send(player *player, msg *reply) {
 
 	if player == nil { //send to all
@@ -1301,14 +1383,10 @@ func (state *state) send(player *player, msg *reply) {
 
 }
 
-func (state *state) sendBinary(player *player, msg []byte) {
+func (state *state) sendBinary(msg []byte) {
 
-	if player == nil { //send to all
-		for _, p := range state.players { //for every outbound que (player)
-			p.sendBytes(msg)
-		}
-	} else {
-		player.sendBytes(msg)
+	for _, p := range state.players { //for every outbound que (player)
+		p.sendBytes(msg)
 	}
 
 }

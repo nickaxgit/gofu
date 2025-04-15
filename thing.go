@@ -23,11 +23,43 @@ type thing struct {
 	//masses     map[*mass]bool //all the masses in the thing (once) (used for applying lift)
 	visibility   byte
 	uniqueMasses map[*mass]bool
+	engines      []*engine //multiple engines
+
 }
 
 func newThing(meshName string) *thing {
-	return &thing{meshName: meshName, scale: newVec3(1, 1, 1), offset: newVec3(0, 0, 0), springs: []*spring{}, faces: []*face{}, visibility: 1, rotation: newVec3(0, math.Pi*2, 0), uniqueMasses: make(map[*mass]bool)}
+
+	t := &thing{meshName: meshName, scale: newVec3(1, 1, 1), offset: newVec3(0, 0, 0), springs: []*spring{}, faces: []*face{}, visibility: 1, rotation: newVec3(0, math.Pi*2, 0), uniqueMasses: make(map[*mass]bool)}
+
+	//moment of inertie of a disc is 1/2 m * r^2
+	bladeMass := 30.0
+	blades := 4.0
+	propChord := 0.4                                          //0.4m chord of the propellor (m) - used for thrust calculation
+	propRadius := 2.0                                         //2m radius propellor (4m diameter)
+	moi := 0.5 * bladeMass * propRadius * propRadius * blades //moment of inertia of the propellor (kg*m^2) - used for engine sound -- see runEngines
+	numEngines := 2
+	engines := make([]*engine, numEngines)
+
+	for i := 0; i < numEngines; i++ {
+		engines[i] = &engine{
+			name:               "No 1 (port)",
+			vehicle:            t,
+			rpm:                0,
+			kwMax:              1775,
+			kw:                 0,
+			propRadius:         propRadius,
+			propTotalBladeArea: propChord * propRadius * blades,
+			pitch:              10.0,
+			moi:                moi,
+		}
+	}
+	engines[1].name = "No 2 (starboard)" //don't "correct" this - engine are internally numbered from 0
+	t.engines = engines
+	return t
+
 }
+
+// start an engine and send startup sound to all players
 
 // func (s *state) setVelocity(v *vec3) {
 // 	for _, m := range s.masses {

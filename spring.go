@@ -10,8 +10,8 @@ type spring struct {
 	collideable  byte
 	flightOutput float64
 	expansion    float64
-	thrust       float64
-	lastError    float64 //used for Derivative calculation
+	//thrust       float64
+	lastError float64 //used for Derivative calculation
 
 }
 
@@ -25,7 +25,7 @@ func NewSpring(m1 *mass, m2 *mass, collideable byte, fo actuatorEnum) *spring {
 	if restLength == 0 {
 		panic(`zero length spring at construction`)
 	}
-	return &spring{-1, restLength, m1, m2, collideable, float64(fo), 0, 0, 0}
+	return &spring{-1, restLength, m1, m2, collideable, float64(fo), 0, 0}
 }
 
 // func (s *Spring) crosses(m []*Mass, p1 *Vector, p2 *Vector) bool {
@@ -62,8 +62,8 @@ func (s *spring) stretch() {
 	if s.lastError != 0 {
 		d = err - s.lastError
 	}
-	s.lastError = err                             //derivative of the error
-	move := springVector.multiply(err*.8 + d*0.0) //0.1) //stiffness
+	s.lastError = err                              //derivative of the error
+	move := springVector.multiply(err*1.0 + d*0.0) //0.1) //stiffness
 
 	m1 := s.m1.mass()
 	m2 := s.m2.mass()
@@ -74,14 +74,14 @@ func (s *spring) stretch() {
 	if !s.m1.fixed {
 
 		s.m1.p.subIn(f1)
-		//s.m1.op.subIn(f1.multiply(0.1))
-		//s.m1.correction.subIn(move.multiply(f1)) //damping
+		s.m1.op.subIn(f1.multiply(0.1))
+		//s.m1.correction.subIn(f1) //damping
 		//s.m1.contribs++
 	} //unless they're pinned
 	if !s.m2.fixed {
 		s.m2.p.addIn(f2)
-		//s.m2.op.addIn(f2.multiply(.1))
-		//s.m2.correction.addIn(move.multiply(f2))
+		s.m2.op.addIn(f2.multiply(.1))
+		//s.m2.correction.addIn(f2)
 		//s.m2.contribs++
 	}
 

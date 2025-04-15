@@ -12,7 +12,7 @@ import (
 )
 
 var le = binary.LittleEndian
-var ntm = 0.00000005                                           //newtons to metres of movement per substep
+var ntm = 0.000000001                                          //newtons to metres of movement per substep
 var testFlight = newVec3(0, -.1, -1).normalise().multiply(.33) //50 m/s
 var rho = 1.225                                                //kg / m3 //air density
 var upgrader = websocket.Upgrader{
@@ -142,7 +142,7 @@ func main() {
 	//go http.ListenAndServeTLS(port, "dozer_world.crt", "./dozer.key", customHeaders(fs))
 
 	logit("Starting ticker")
-	stepWorlds()
+	stepWorlds() //step the worlds every 33ms
 
 }
 
@@ -179,21 +179,35 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 					logit(err.Error())
 				}
 
-				processMsg(structuredMessage, player, ws) //player is set by creategame/joingame
+				processMsg(structuredMessage, player, ws)
 			}
 
 		} else if messageType == websocket.BinaryMessage {
 			//msgbytes is a slice of bytes
 			if player == nil {
-				player = processCreateOrJoin(msgBytes, ws)
+				player = processCreateJoinOrControl(msgBytes, ws) //ws is loaded into the player.socket or player.controllerSocket
+				if player == nil {
+					break
+				} // bad pin - abort
 			} else {
+
+				player.inMtx.Lock()
 				player.processBinaryMsg(msgBytes)
+				player.inMtx.Unlock()
+
 			}
 
 		}
+
 	}
-	player.socket.Close()
-	player.socket = nil
+	ws.Close()
+	if ws == player.socket {
+		player.socket = nil
+	}
+	if ws == player.controllerSocket {
+		player.controllerSocket = nil
+	}
+
 	logit("socket error/ended for", player.name)
 }
 

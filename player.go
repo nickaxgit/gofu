@@ -52,9 +52,11 @@ type player struct {
 	lives  int
 	//qh          *qHolder //pointer to the queue of messages for this player
 	//waitChannel chan bool
-	mtx *sync.Mutex // a mutex is required to 'lock' access to each users connection (for writing)
+	mtx   *sync.Mutex // a mutex is required to 'lock' access to each users connection (for writing)
+	inMtx *sync.Mutex //inbound mutex, ensure only one command is processed at a time
 	// many calls (to wsEndpoint) can be running in paralell - and more than one of them may attempt to write to a single users socket at the same time (not allowed!)
-	//socket *websocket.Conn // a pointer to the socket - no players shoundnt have a socket, sockets should have a player (more than one socket can feed a player)
+	socket           *websocket.Conn // a pointer to the socket - no players shoundnt have a socket, sockets should have a player (more than one socket can feed a player)
+	controllerSocket *websocket.Conn //each player can only have one controller - but more than one player can drive/fly the same vehicle(e.g. pilot/co-pilot)
 
 	landTri   *Tri
 	landMesh  *mesh
@@ -99,6 +101,7 @@ type player struct {
 	mixers []*mix
 
 	movedSinceMouseDown bool
+	//engineSounds        []uint16 //sound ids for the engine sounds (multi-engined aircraft)
 }
 
 func (s *state) tidy() {
@@ -125,6 +128,9 @@ func (p *player) bindMixers(vehicle *thing) {
 
 	for _, mx := range p.mixers {
 		mx.spring = vehicle.findActuator(mx.actuator)
+		if mx.engineNum > 0 {
+			vehicle.engines[mx.engineNum-1].spring = mx.spring
+		}
 	}
 
 }
@@ -139,7 +145,7 @@ func (t *thing) findActuator(fc actuatorEnum) *spring {
 
 	}
 
-	logit(t.meshName, " has no control surface for", actLabels[int(fc)])
+	logit(t.meshName, " has no actuator for", actLabels[int(fc)])
 	return nil
 }
 
@@ -148,7 +154,7 @@ func (p *player) updateActuators() {
 	for _, mix := range p.mixers {
 		if mix.spring != nil {
 			mix.spring.expansion = 0
-			mix.spring.thrust = 0
+			//mix.spring.thrust = 0
 		} else {
 			//logit("unbound control surface", id)
 		}
@@ -158,16 +164,31 @@ func (p *player) updateActuators() {
 		if mix.spring == nil {
 			//logit("unbound control surface", id)
 		} else {
-			if mix.isThrottle { //don't think this is needed the mixers could target a float64 by pointer
-				mix.spring.m1.thrust += p.controls[mix.in] //* mix.conversion
-				svn := mix.spring.m2.p.sub(mix.spring.m1.p).normalise()
-				mix.spring.m1.p.addIn(svn.multiply(mix.output(p) * ntm * 4))
-				mix.spring.m2.p.addIn(svn.multiply(mix.output(p) * ntm * 4))
+			if mix.engineNum > 0 { //don't think this is needed the mixers could target a float64 by pointer
+
+				e := p.vehicle.engines[mix.engineNum-1]
+				e.kw = e.kwMax * mix.output(p) //this is KW
+
+				//thrust is genrated and applied to the engines spring in runEngines()
+
+				//svn := mix.spring.m1.p.sub(mix.spring.m2.p).normalise()
+				//mix.spring.m1.p.addIn(svn.multiply(e.thrustNewtons * ntm))
+				//mix.spring.m2.p.addIn(svn.multiply(e.thrustNewtons * ntm))
+				//mix.spring.thrust = e.thrustNewtons * ntm //newtons
 
 			} else {
 				//o := mix.output(p)
 				//logit(actLabels[int(mix.actuator)], o)
-				mix.spring.expansion += mix.output(p)
+				if mix.isBrake {
+					if mix.spring.m1.axle != nil { //it's a wheel
+						mix.spring.m1.brake = mix.output(p)
+					}
+					if mix.spring.m2.axle != nil { //it's a wheel
+						mix.spring.m1.brake = mix.output(p)
+					}
+				} else {
+					mix.spring.expansion += mix.output(p)
+				}
 			}
 		}
 	}
@@ -277,8 +298,8 @@ func (p *player) sendCentreOfMass(t *thing) {
 }
 
 func (p *player) sendControlPin() {
-	token := randomInt32()
-	p.state.controlTokens[token] = p
+	token := randomPin()
+	controlTokens[token] = p
 	buff := new(bytes.Buffer)
 	writeByte(buff, byte(msgControlToken))
 	binary.Write(buff, le, token)
@@ -286,7 +307,7 @@ func (p *player) sendControlPin() {
 
 }
 
-func randomInt32() uint32 {
+func randomPin() uint32 { //TODO - Check for existing token
 	return uint32(math.Round(1000 + rand.Float64()*8999))
 }
 
@@ -789,6 +810,8 @@ func NewPlayer(id uint32, name string, state *state, socket *websocket.Conn) *pl
 	//p.qh = &qHolder{mutex: &sync.Mutex{}, q: make(map[int][]*reply, 0)} //initialise their outbound queue
 	//p.waitChannel = make(chan bool)
 	p.mtx = &sync.Mutex{}
+	p.inMtx = &sync.Mutex{}
+
 	state.Tracks[p.name] = &track{Pointer: 0, Points: make([]float64, 800)}
 
 	return &p
@@ -962,13 +985,43 @@ func (p *player) processBinaryMsg(mb []byte) {
 			p.state.save(filename, p.selectedMasses)
 			p.sendMessage("Saved OK", "info")
 		}
+	} else if cm == msgControlPositions {
+
+		blobs := byte(0)
+		binary.Read(buff, le, &blobs)
+		var id, x, y = byte(0), byte(0), byte(0)
+		for i := 0; i < int(blobs); i++ {
+			binary.Read(buff, le, &id)
+			binary.Read(buff, le, &x)
+			binary.Read(buff, le, &y)
+			if id == 1 {
+				p.controls[ciStickX] = float64(x)/128 - 1 //normalise to +/- 1
+				p.controls[ciStickY] = float64(y)/128 - 1
+				logit("right stick", p.controls[ciStickX], p.controls[ciStickY])
+			}
+
+			if id == 2 {
+				p.controls[ciRudder] = float64(x)/128 - 1
+				p.controls[ciThrottle] = float64(y)/128 - 1
+				logit("left stick", p.controls[ciRudder], p.controls[ciThrottle])
+			}
+
+			if id == 3 {
+				p.controls[ciWheelBrakeLeft] = float64(y)/128 - 1
+			}
+
+			if id == 3 {
+				p.controls[ciWheelBrakeRight] = float64(y)/128 - 1
+			}
+
+			p.updateActuators()
+		}
 
 	} else {
 		panic("other Inbound binary messages not implemented" + string(cmd[0]))
 	}
 
 }
-
 func (p *player) Move(state *state) {
 
 	if !p.dying && !p.dead { //you loose all traction when dying
