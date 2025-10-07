@@ -119,6 +119,7 @@ type state struct { //the DATA of a game in progress - it can be entirely replac
 	running     bool
 	runwayStart *vec3
 	runwayEnd   *vec3
+	runwayWidth float64
 	stretchDir  bool
 	zeroG       bool
 	sounds      uint16 //next sound handle
@@ -155,16 +156,19 @@ func (st *state) mergeThing(t *thing) *thing {
 // 	return t.distanceFrom(v, p)
 // }
 
-// flow water between v1 and v2 acording to the absolute wayter level and y-coord of the land
+// flow water between v1 and v2 acording to the absolute water level and y-coord of the land
 func flow(a *vert, b *vert) {
 
-	diff := a.wl - b.wl //uses the absolute water level
+	//if diff < 0 {
+	//rate := float64(1) //free flow - water is above ground at both ends
 
-	rate := float64(1) //free flow - water is above ground at both ends
-
-	if a.wl < a.p.y && b.wl < b.p.y {
-		rate = 0
-	} //ground percolation
+	//surfaceWater := a.p.wl - m.p.y
+	// if a.wl < a.p.y {
+	// 	rate -= .3
+	// } //ground percolation
+	// if b.wl < b.p.y {
+	// 	rate -= .3
+	// }
 
 	// if b.wl < b.p.Y {
 	// 	rate *= .1
@@ -172,35 +176,156 @@ func flow(a *vert, b *vert) {
 
 	//use an accumulator per vertex for the in/out flow
 
-	a.acc -= diff / 10 * rate //todo - rate (velocity), depending on the difference in water level ground percolation
-	b.acc += diff / 10 * rate
+	//amount := diff  * rate
 
-}
+	if a.wl > a.p.y || b.wl > b.p.y {
+		diff := a.wl - b.wl //uses the absolute water level
+		if diff < 0 {
+			diff = -diff
+		}
 
-func (player *player) sendLand(name string, init bool) {
+		if a.wl >= b.wl {
+			//a is high
+			a.acc -= diff //* .8
+			//b.acc += diff * .2
+		} else {
+			b.acc -= diff //* 0.8
+			//a.acc += diff * 0.2
+		}
 
-	//va's are vert indices into the mesh - we need to send the actual verts (positions, normals, UVs)
-	//calc normals and uvs on new face verts
-
-	vc := uint32(len(player.landMesh.verts))
-	fis := make([]uint16, vc*6) //the will actually many less faces than verts - but we need 3 uints per face
-
-	p := uint32(0)
-	player.landTri.getFacesInto(fis, &p)
-	fis = fis[:p]
-	fc := uint32(len(fis) / 3)
-
-	if init {
-		player.sendMakeMesh(name, uint32(vc), uint32(fc))
+		a.incount++
+		b.incount++
 	}
 
-	player.sendData(name, 5, 0, vc, player.landMesh.getPositions(vc)) //need to send normals and UVs too
-	player.sendData(name, 6, 0, vc, player.landMesh.getNormals(vc))
-	player.sendData(name, 7, 0, vc, player.landMesh.getUVs(vc))
+}
 
-	player.sendData(name, 8, 0, fc, fis)
+type simpleMesh struct {
+	id           uint16
+	pad          byte      //arays ,must be aligned
+	p            []float32 //positions
+	n            []float32 //normals
+	uv           []float32 //TC's
+	fi           []uint16  //faces (3 indeices per triangle)
+	materialName string
+	vwp          uint16
+	fwp          uint16
+}
+
+func newSimpleMesh(id uint16, p []float32, n []float32, uv []float32, fi []uint16, materialName string) *simpleMesh {
+	return &simpleMesh{id: id, pad: 0, p: p, n: n, uv: uv, fi: fi, materialName: materialName}
+}
+
+func (m *simpleMesh) offset(offset *vec3) *simpleMesh {
+	for i := 0; i < len(m.p); i += 3 {
+		m.p[i] += float32(offset.x)
+		m.p[i+1] += float32(offset.y)
+		m.p[i+2] += float32(offset.z)
+	}
+	return m
+}
+
+func makeSimpleMesh(id uint16, numfaces int32, numVerts int32, materialName string) *simpleMesh {
+
+	p := make([]float32, 0, numVerts*3) //inital length of zero - because we're using appends
+	n := make([]float32, 0, numVerts*3)
+	uv := make([]float32, 0, numVerts*2)
+	fi := make([]uint16, 0, numfaces*3)
+
+	return newSimpleMesh(id, p, n, uv, fi, materialName)
+}
+
+func (sm *simpleMesh) addVert(p *vec3, n *vec3, uv *vec2) uint16 {
+
+	sm.p = append(sm.p, float32(p.x), float32(p.y), float32(p.z))
+	sm.n = append(sm.n, float32(n.x), float32(n.y), float32(n.z))
+	sm.uv = append(sm.uv, float32(uv.x), float32(uv.y))
+
+	return uint16(len(sm.p)/3) - 1
 
 }
+
+func (sm *simpleMesh) addFace(v1, v2, v3 uint16) {
+
+	sm.fi = append(sm.fi, v1, v2, v3)
+
+}
+
+// func (m *landMesh) sendWater(p *player) {
+
+// 	buff := new(bytes.Buffer)
+
+// 	binary.Write(buff, le, msgWater)
+// 	binary.Write(buff, le, uint32(len(m.verts)))
+// 	binary.Write(buff, le, m.getDepths())
+// 	p.sendBytes(buff.Bytes())
+
+// }
+
+func sendTrees(p *player, meshId uint16, positions []float32) {
+
+	instanceCount := uint16((len(positions) - 1) / 3)
+	buff := new(bytes.Buffer)
+
+	binary.Write(buff, le, msgPositionInstances) //0
+	binary.Write(buff, le, meshId)               //1
+	binary.Write(buff, le, uint16(0))            //uint32 //3
+	binary.Write(buff, le, instanceCount)        // to instance (not element) //5
+	binary.Write(buff, le, byte(0))              //padding byte (to aligin 32bit vertex data) //7
+
+	// for i := range positions {
+	// 	positions[i] = rand.Float32() * 100
+	// }
+
+	binary.Write(buff, le, positions) //x,y,z float32 triples //8
+
+	p.sendBytes(buff.Bytes())
+
+}
+
+func (sm *simpleMesh) sendTo(p *player, instances uint16) {
+
+	buff := new(bytes.Buffer)
+
+	binary.Write(buff, le, msgMesh)
+	binary.Write(buff, le, sm.id)                //uint32
+	binary.Write(buff, le, uint32(len(sm.p)/3))  //num verts
+	binary.Write(buff, le, uint32(len(sm.fi)/3)) //num faces
+	binary.Write(buff, le, sm.pad)               //padding byte (to aligin 32bit vertex data)
+
+	binary.Write(buff, le, sm.p) //x,y,z float32 triples
+	binary.Write(buff, le, sm.n)
+	binary.Write(buff, le, sm.uv) //UV float32 pairs
+	binary.Write(buff, le, sm.fi) // or uint16 face indices
+	writeString(buff, sm.materialName)
+
+	binary.Write(buff, le, instances) //num instances
+	p.sendBytes(buff.Bytes())
+
+}
+
+// func (player *player) sendLand(name string, init bool) {
+
+// 	//vi's are vert indices into the mesh - we need to send the actual verts (positions, normals, UVs)
+// 	//calc normals and uvs on new face verts
+
+// 	vc := uint32(len(player.landMesh.verts))
+// 	fis := make([]uint16, vc*6) //the will actually many less faces than verts - but we need 3 uints per face
+
+// 	p := uint32(0)
+// 	player.landTri.getFacesInto(fis, &p)
+// 	fis = fis[:p]
+// 	fc := uint32(len(fis) / 3)
+
+// 	if init {
+// 		player.sendMakeMesh(name, uint32(vc), uint32(fc))
+// 	}
+
+// 	player.sendData(name, 5, 0, vc, player.landMesh.getPositions(vc)) //need to send normals and UVs too
+// 	player.sendData(name, 6, 0, vc, player.landMesh.getNormals(vc))
+// 	player.sendData(name, 7, 0, vc, player.landMesh.getUVs(vc))
+// 	player.sendData(name, 8, 0, fc, fis)
+
+// }
 
 // func (s *state) mirrorMass(m *mass, g *grid) *mass {
 
@@ -259,71 +384,94 @@ func (s *state) closestMassToRay(start *vec3, end *vec3, exclude *mass) *mass {
 	return closestMass
 }
 
-func (state *state) step() {
+func (state *state) step(subSteps int) { //this is called every 33ms from stepWorlds()  (on a timer)
 
-	state.moveAll(5) //<- this is a physics step - move, count coins and deaths, falls etc
+	if state.running {
+		state.moveAll(subSteps) //<- this is a physics step - move, count coins and deaths, falls etc
 
-	mm := make([]int, 4*len(state.masses))
-
-	moved := int(0)
-	for i, m := range state.masses {
-		if !m.p.equals(m.op) {
-			mm[moved*4] = i
-			mm[moved*4+1] = int(m.p.x * 100)
-			mm[moved*4+2] = int(m.p.y * 100)
-			mm[moved*4+3] = int(m.p.z * 100)
-			moved++
+		//ugly doing this twice TODO
+		moved := int(0)
+		for _, m := range state.masses {
+			if !m.p.equals(m.op) {
+				moved++
+			}
 		}
+
+		if moved > 0 {
+			buff := new(bytes.Buffer)
+			binary.Write(buff, le, byte(msgMovement))
+			binary.Write(buff, le, uint16(moved))
+			for i, m := range state.masses {
+				if !m.p.equals(m.op) {
+					idx := uint16(i)
+					binary.Write(buff, le, &idx)
+					m.p.toByteBuffer(buff)
+				}
+			}
+			state.sendBinary(buff.Bytes())
+		}
+
+		//updateLabels(state)
 	}
-
-	mm = mm[:moved*4] //truncate
-
-	if moved > 0 {
-
-		state.Sqn++
-		state.send(nil, &reply{Cmd: "mps", Payload: mm}) //send all moved masses to everyone
-	}
-
-	//state.sendBinary(nil,)
-	// if player.waterMade {
-	// 	state.landMesh.rain(0.3)
-	// 	state.landMesh.flowWater()
-	// 	state.landMesh.sendWater(state)
-	// }
-
-	//updateLabels(state)
 
 	for _, p := range state.players {
 		if p.socket != nil {
-			p.camera.follow(p.vehicle)
+			if state.running && p.follow {
+				p.camera.follow(p.vehicle)
+			}
 			p.sendCamera()
 			p.sendLabels()
 
-			o := p.vehicle.springs[0].m2.p
+			dist := p.camera.position.distanceFrom(p.lastLandPos)
+			dir := p.camera.direction.dot(p.lastCamDir)
+			if dist > 100 || dir < .95 {
+				p.makeLand(p.camera.position, p.camera.position.add(p.camera.direction), 12, 500, 10000.0, true) //makes and sends new land
 
-			if p.landTri != nil {
-				y0pos := newVec3(o.x, 0, o.z)
-				if y0pos.distanceFrom(p.lastLandPos) > 100 {
-					p.makeLand(y0pos, 10, 2000, 10000, state.runwayStart, state.runwayEnd) //makes and sends new land
-				}
+			}
+
+			//remake land when we have moved
+			if p.vehicle != nil {
+				//o := p.vehicle.springs[0].m2.p
+				// if p.landTri != nil {
+				// 	penetrations := make([]*vec3, 200)
+				// 	hits := 0
+				// 	p.landTri.probe(p.camera.position, p.camera.position.add(p.camera.direction.multiply(100000)), penetrations, &hits) //find the land under the camera
+
+				// 	if hits > 0 {
+				// 		sd := 10000.0
+				// 		focus := newVec3(0, 0, 0)
+				// 		for i := 0; i < hits; i++ {
+				// 			d := penetrations[i].distanceFrom(p.camera.position)
+				// 			if d < sd {
+				// 				focus = penetrations[i]
+				// 			}
+				// 		}
+
+				// 		if focus.distanceFrom(p.lastLandPos) > 100 {
+				// 			//go p.makeLand(y0pos, 10, 2000, 10000) //makes and sends new land
+				// 			//lm := p.landMesh
+				// 			//p.makeLand(p.camera.position, p.camera.position.add(p.camera.direction), lm.splits, lm.height, lm.size)
+				// 		}
+				// 	}
+				// }
 			}
 
 		}
 	}
 
-	//count money and send to player
-	for _, p := range state.players {
+	// //count money and send to player
+	// for _, p := range state.players {
 
-		if p.stepCoinsValue > 0 { //did we win any coins this step
-			p.coins += p.stepCoinsValue * p.stepCoinCount
-			if p.stepCoinCount > 1 {
-				p.send(&reply{Cmd: "banner", Payload: "X" + strconv.Itoa(p.stepCoinCount)})
-			}
-			p.send(&reply{Cmd: "coins", Payload: p.coins})
-		}
-		p.stepCoinsValue = 0 //reset for next step
-		p.stepCoinCount = 0
-	}
+	// 	if p.stepCoinsValue > 0 { //did we win any coins this step
+	// 		p.coins += p.stepCoinsValue * p.stepCoinCount
+	// 		if p.stepCoinCount > 1 {
+	// 			p.send(&reply{Cmd: "banner", Payload: "X" + strconv.Itoa(p.stepCoinCount)})
+	// 		}
+	// 		p.send(&reply{Cmd: "coins", Payload: p.coins})
+	// 	}
+	// 	p.stepCoinsValue = 0 //reset for next step
+	// 	p.stepCoinCount = 0
+	// }
 
 }
 
@@ -489,8 +637,8 @@ func (s *state) addThing(t *thing) *thing {
 	return t //len(s.Things) - 1 // return the index of the new thing
 }
 
-func (t *thing) AddSpring(m1 *mass, m2 *mass, collideable byte, fo actuatorEnum) *spring {
-	s := NewSpring(m1, m2, collideable, fo)
+func (t *thing) AddSpring(m1 *mass, m2 *mass, collideable byte, actuatorTag ActuatorEnum) *spring {
+	s := NewSpring(m1, m2, collideable, actuatorTag)
 	t.springs = append(t.springs, s)
 
 	s.index = int32(len(t.springs) - 1)
@@ -519,9 +667,9 @@ func (state *state) AddPlayer(playerId uint32, name string, position *vec3, ws *
 func (state *state) moveCameras() {
 	for _, p := range state.players {
 		//p.mtx.Lock()
-		if !p.state.running {
-			p.moveCamera()
-		}
+		//if !p.state.running {
+		p.moveCamera()
+		//}
 
 		//p.mtx.Unlock()
 
@@ -715,11 +863,29 @@ func (state *state) resolvePenetrations() bool {
 
 							if m.axle != nil {
 								axle := m.axle.p.sub(m.p).normalise()
-								vr = vr.sub(axle.multiply(vr.dot(axle) * .95)) //kill (95% of the) sideways velocity of the wheel
+								vr = vr.sub(axle.multiply(vr.dot(axle) * .85)) //.95)) //kill (95% of the) sideways velocity of the wheel
 								vr = vr.multiply(0.95)                         //some wheel friciton
-								vr = vr.multiply(1 - m.brake)                  //some wheel friciton
+
+								m.fixed = false
+								if m.brake > .01 {
+									maxBrakeForce := 0.03                 //metres per cycle
+									brakeForce := m.brake * maxBrakeForce //brake force in metres per cycle
+									vrl := vr.length()
+									if vrl > brakeForce {
+										vr.subIn(vr.normalise().multiply(brakeForce)) //some wheel friciton
+									} else {
+										//vr = newVec3(0, 0, 0) //vr.multiply(-0.001) //dead stop
+										//m.fixed = true
+										//we have enough brake force - the brakes are holding
+										m.p.x = m.op.x
+										m.p.z = m.op.z
+
+										continue
+									}
+								}
+
 							} else { //not a wheel
-								vr = vr.multiply(.8) //kill 80% of the velocity
+								//vr = vr.multiply(.8) //kill 80% of the velocity
 							}
 
 							m.op = m.p.sub(vr)
@@ -831,7 +997,7 @@ func (state *state) runEngines() {
 					lift := v * v * cl * rho * .5 * e.propTotalBladeArea
 					e.thrustNewtons = lift
 
-					if e.thrustNewtons > 50000 { //more than 5000kg of thrust
+					if e.thrustNewtons > 10000 { //more than 5000kg of thrust
 						logit("excess thrust", e.thrustNewtons)
 
 					}
@@ -850,6 +1016,9 @@ func (state *state) runEngines() {
 
 					svn := e.spring.m1.p.sub(e.spring.m2.p).normalise()
 
+					//acceleration = force / mass
+
+					//mv1 := svn.multiply(e.thrustNewtons / e.spring.m1.mass * 150)
 					mv := svn.multiply(e.thrustNewtons / (500000 * 150))
 					e.spring.m1.p.addIn(mv)
 					e.spring.m2.p.addIn(mv)
@@ -885,9 +1054,15 @@ func (state *state) flyMasses() {
 				direction := (m.p.sub(m.op)).normalise()
 				//logit(vms, "m/s")
 				v2 := vms * vms
+				m.vms = vms
 
 				if vms > 100 {
 					logit("Overspeed", vms)
+				}
+
+				dd := direction.dot(wingAxis)
+				if dd == 1.0 || dd == -1.0 {
+					continue //parallel to the wing axis - no lift (for example the fin moving up)
 				}
 
 				//the lift direction is always orthogonal to the direction of travel (regardless of the AoA)
@@ -902,6 +1077,11 @@ func (state *state) flyMasses() {
 				// }
 
 				m.aoaDegrees = aoa / (math.Pi * 2) * 360
+
+				if m.wingArea > 50 {
+					m.aoaDegrees -= 2
+				} //reduce incidence of the main wing
+
 				if m.aoaDegrees < -20 || m.aoaDegrees > 20 {
 					logit("aoa", m.aoaDegrees)
 				}
@@ -924,7 +1104,7 @@ func (state *state) flyMasses() {
 					// 	m.p.addIn(rootAxis.multiply(m.thrust * ntm))
 					// }
 
-					f := float64(2 * 3 * 4500) // half (acceleration to distance travelled) 1/3rd of the lift distribution  150 steps per second
+					f := float64(2 * 3 * 15000) // half (acceleration to distance travelled) 1/3rd of the lift distribution  150 steps per second
 					d := lift.divide(m.wingRoot.mass() * f)
 
 					m.wingRoot.p.addIn(d) // ntm * .33))
@@ -1075,7 +1255,7 @@ func (state *state) moveAll(substeps int) {
 
 				v := m.p.sub(m.op)
 				m.op = m.p.clone()
-				m.p.addIn(v.multiply(.999)) //inertia and friction
+				m.p.addIn(v.multiply(.999)) //inertia and friction (and damping)
 				m.p.y -= gravity
 
 			}
@@ -1085,6 +1265,7 @@ func (state *state) moveAll(substeps int) {
 			for _, p := range state.players {
 				if p.socket != nil {
 					p.sendVectors() //new
+					p.sendTelemetry()
 				}
 
 				//if p.vehicle != nil { //controller players don't have dozers
@@ -1100,12 +1281,12 @@ func (state *state) moveAll(substeps int) {
 			state.stretchSprings()
 			state.stretchSprings()
 
+			state.resolvePenetrations()
+
 			// if state.stretchDir {
 			// 	state.stretchSprings()
 			// }
 			// state.stretchDir = !state.stretchDir
-
-			state.resolvePenetrations()
 
 			//masses are pushed out of things (and things away from masses)
 			state.resolveMassOverlaps()

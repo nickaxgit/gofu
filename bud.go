@@ -2,7 +2,7 @@ package main
 
 //buds are a template for adding segments to the tree - they are the DNA .. not the wood
 type bud struct {
-	position  vec3    //in segment space
+	//position  vec3    //in segment space
 	twist     float64 //radians
 	direction *vec3
 	grows     *segmentType //what this bud is likely to sprout as it ages
@@ -14,7 +14,7 @@ type segmentType struct {
 	buds []*bud
 }
 
-type segment struct {
+type segment struct { //of a plant/tree
 	p     *vec3
 	xAxis *vec3 //direction of (accumulated) twist
 	yAxis *vec3 //direction of growth
@@ -25,7 +25,7 @@ type segment struct {
 	children []*segment
 }
 
-func growTree() *mesh {
+func growTree() *simpleMesh {
 
 	// segmentTypes:=make(map[string]*segmentType, 0)
 
@@ -43,8 +43,12 @@ func growTree() *mesh {
 	trunk.grow(100, &sprouts)
 	logit("sprouts", sprouts)
 
-	m := NewMesh("tree", 20000)
-	trunk.getMesh(m)
+	p := make([]float32, 0)
+	n := make([]float32, 0)
+	uv := make([]float32, 0)
+	fi := make([]uint16, 0)
+	m := newSimpleMesh(100, p, n, uv, fi, "water") //newLandMesh("tree", 20000, 10, 100, 100, kinks)
+	trunk.getMesh(m)                               //uses the meshes internal vert and face write pointer (vwp,fwp)
 
 	return m
 
@@ -70,7 +74,7 @@ func (seg *segment) grow(age int, sprouts *int) {
 			if !bud.direction.equals(up) {
 
 				axis := bud.direction.cross(up)
-				droop := bud.direction.SignedAngleFrom(up, axis) //find the elevatle of the bud
+				droop := bud.direction.SignedAngleFrom(up, axis) //find the elevation	 of the bud
 				sproutYAxis = seg.yAxis.rotateAbout(seg.xAxis, droop)
 			}
 
@@ -84,7 +88,7 @@ func (seg *segment) grow(age int, sprouts *int) {
 			sproutXAxis := seg.xAxis.rotateAbout(seg.yAxis, rotation+bud.twist).normalise()
 			//sproutZAxis:= sproutYAxis.cross(sproutXAxis)
 
-			p := seg.p.add(seg.yAxis.multiply(float64(seg.age)))
+			p := seg.p.add(seg.yAxis.multiply(float64(seg.age) * .05))
 			newSegment := NewSegment(p, sproutYAxis, sproutXAxis, bud.grows, age-seg.age)
 			seg.children = append(seg.children, newSegment)
 			newSegment.grow(age-bud.sproutAge, sprouts)
@@ -92,18 +96,15 @@ func (seg *segment) grow(age int, sprouts *int) {
 	}
 }
 
-func (seg *segment) getMesh(m *mesh) {
+func (seg *segment) getMesh(m *simpleMesh) {
 
-	pi := m.addVert(seg.p, true, 0, 0)
+	uv := newVector(0, 0)
+	po := m.addVert(seg.p, seg.xAxis, uv) //parent origin
 	for _, child := range seg.children {
-		m.addFi(pi)
-		co := m.addVert(child.p, true, 0, 1)
-		m.addFi(co)
-		m.addFi(m.addVert(child.p.add(seg.xAxis.multiply(6)), true, 1, 1))
 
-		// m.addFi(co)
-		// m.addFi(pi)
-		// m.addFi(m.addVert(child.p.add(seg.zAxis.multiply(6))))
+		co := m.addVert(child.p, child.xAxis, uv)
+		sw := m.addVert(child.p.add(seg.xAxis.multiply(1)), seg.zAxis, uv)
+		m.addFace(po, co, sw)
 
 		child.getMesh(m) //recurse
 	}

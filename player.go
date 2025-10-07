@@ -9,7 +9,7 @@ import (
 	"math/rand"
 	"slices"
 	"sync"
-
+	//"unsafe"
 	"github.com/gorilla/websocket"
 )
 
@@ -58,11 +58,11 @@ type player struct {
 	socket           *websocket.Conn // a pointer to the socket - no players shoundnt have a socket, sockets should have a player (more than one socket can feed a player)
 	controllerSocket *websocket.Conn //each player can only have one controller - but more than one player can drive/fly the same vehicle(e.g. pilot/co-pilot)
 
-	landTri   *Tri
-	landMesh  *mesh
-	waterMade bool
+	landTri  *tri
+	landMesh *landMesh
 
 	lastLandPos *vec3 //where were we when we last generated land
+	lastCamDir  *vec3 //direction of the camera when we last generated land
 
 	grid *grid
 
@@ -93,7 +93,7 @@ type player struct {
 	//mouseDown     bool
 	buttons     byte
 	keys        map[string]bool
-	boundValues map[string]boundValue //these form a popup dialog box (mass properties)
+	boundValues map[string]*float64 //boundValue //these form a popup dialog box (mass properties)
 
 	controls map[controlInput]float64
 
@@ -101,6 +101,8 @@ type player struct {
 	mixers []*mix
 
 	movedSinceMouseDown bool
+	follow              bool
+	heading             float64 //heading of the vehicle in degrees
 	//engineSounds        []uint16 //sound ids for the engine sounds (multi-engined aircraft)
 }
 
@@ -127,25 +129,40 @@ func (s *state) tidy() {
 func (p *player) bindMixers(vehicle *thing) {
 
 	for _, mx := range p.mixers {
-		mx.spring = vehicle.findActuator(mx.actuator)
+		mx.spring = vehicle.findSpringActuator(ActuatorEnum(mx.actuator))
 		if mx.engineNum > 0 {
 			vehicle.engines[mx.engineNum-1].spring = mx.spring
+		}
+		if mx.spring == nil { //we didnt bind it to a spring - try a mass
+			mx.mass = vehicle.findMassActuator(ActuatorEnum(mx.actuator))
 		}
 	}
 
 }
 
-func (t *thing) findActuator(fc actuatorEnum) *spring {
+func (t *thing) findMassActuator(act ActuatorEnum) *mass {
+	for m, _ := range t.uniqueMasses {
+		if m.actuatorTag > 0 {
+			if ActuatorEnum(m.actuatorTag) == act {
+				return m
+			}
+		}
+	}
+
+	logit(t.meshName, " has no mass actuator for", springActuators[act])
+	return nil
+}
+
+func (t *thing) findSpringActuator(act ActuatorEnum) *spring {
 	for _, s := range t.springs {
-		if s.flightOutput > 0 {
-			if actuatorEnum(s.flightOutput) == fc {
+		if s.actuatorTag > 0 {
+			if ActuatorEnum(s.actuatorTag) == act {
 				return s
 			}
 		}
-
 	}
 
-	logit(t.meshName, " has no actuator for", actLabels[int(fc)])
+	logit(t.meshName, " has no spring actuator for", springActuators[act])
 	return nil
 }
 
@@ -161,36 +178,31 @@ func (p *player) updateActuators() {
 	}
 
 	for _, mix := range p.mixers {
-		if mix.spring == nil {
-			//logit("unbound control surface", id)
+
+		if mix.engineNum > 0 { //don't think this is needed the mixers could target a float64 by pointer
+
+			e := p.vehicle.engines[mix.engineNum-1]
+			e.kw = e.kwMax * mix.output(p) //this is KW
+
+			//thrust is genrated and applied to the engines spring in runEngines()
+
+			//svn := mix.spring.m1.p.sub(mix.spring.m2.p).normalise()
+			//mix.spring.m1.p.addIn(svn.multiply(e.thrustNewtons * ntm))
+			//mix.spring.m2.p.addIn(svn.multiply(e.thrustNewtons * ntm))
+			//mix.spring.thrust = e.thrustNewtons * ntm //newtons
+
 		} else {
-			if mix.engineNum > 0 { //don't think this is needed the mixers could target a float64 by pointer
+			//o := mix.output(p)
+			//logit(actLabels[int(mix.actuator)], o)
+			if mix.mass != nil { //it's a mass actuator (a brake)
+				mix.mass.brake = mix.output(p)
+			}
 
-				e := p.vehicle.engines[mix.engineNum-1]
-				e.kw = e.kwMax * mix.output(p) //this is KW
-
-				//thrust is genrated and applied to the engines spring in runEngines()
-
-				//svn := mix.spring.m1.p.sub(mix.spring.m2.p).normalise()
-				//mix.spring.m1.p.addIn(svn.multiply(e.thrustNewtons * ntm))
-				//mix.spring.m2.p.addIn(svn.multiply(e.thrustNewtons * ntm))
-				//mix.spring.thrust = e.thrustNewtons * ntm //newtons
-
-			} else {
-				//o := mix.output(p)
-				//logit(actLabels[int(mix.actuator)], o)
-				if mix.isBrake {
-					if mix.spring.m1.axle != nil { //it's a wheel
-						mix.spring.m1.brake = mix.output(p)
-					}
-					if mix.spring.m2.axle != nil { //it's a wheel
-						mix.spring.m1.brake = mix.output(p)
-					}
-				} else {
-					mix.spring.expansion += mix.output(p)
-				}
+			if mix.spring != nil {
+				mix.spring.expansion += mix.output(p)
 			}
 		}
+
 	}
 }
 
@@ -206,13 +218,13 @@ func (p *player) processMouseMove() {
 
 			if delta.lengthSq() != 0 {
 
-				logit("delta", delta.X, delta.Y)
+				logit("delta", delta.x, delta.y)
 
 				camRight := p.downCam.direction.cross(p.downCam.up).normalise()
 
-				p.camera.up = p.downCam.up.rotateAbout(camRight, delta.Y).normalise()
-				pitched := p.downCam.direction.rotateAbout(camRight, delta.Y)
-				yawed := pitched.rotateAbout(p.camera.up, -delta.X)
+				p.camera.up = p.downCam.up.rotateAbout(camRight, delta.y).normalise()
+				pitched := p.downCam.direction.rotateAbout(camRight, delta.y)
+				yawed := pitched.rotateAbout(p.camera.up, -delta.x)
 				//player.camUp = player.camUp.rotateAbout(player.downCamUp, delta.X).normalise()
 				p.camera.direction = yawed
 				p.camera.up = newVec3(0, 1, 0) //auto level the camera
@@ -263,25 +275,41 @@ func (p *player) processMouseMove() {
 	}
 }
 
-func (p *player) bindValue(key string, value *float64, min float32, max float32, step float32, labelSet byte) {
-	p.boundValues[key] = boundValue{id: key, valuePointer: value, min: min, max: max, step: step, labelSet: labelSet}
+func (p *player) bindValue(key string, valuePointer *float64, min float64, max float64, step float64, labelSet byte) {
+
+	p.boundValues[key] = valuePointer //store the address of the value
+
+	buff := new(bytes.Buffer)
+	binary.Write(buff, le, byte(msgBindValue)) //masses
+	writeString(buff, key)
+	binary.Write(buff, le, *(*float64)(valuePointer)) //cast to *float64 and dereference
+	binary.Write(buff, le, min)
+	binary.Write(buff, le, max)
+	binary.Write(buff, le, step)
+	binary.Write(buff, le, labelSet) //0 or an index to a if this is an enumeration, this is the number of values
+
+	p.sendBytes(buff.Bytes())
+
 }
 
 func (p *player) sendLabelSets() { //For options on the sliders
 
-	p.sendLabelSet(1, actLabels)     //acutators
-	p.sendLabelSet(2, sectionLabels) //airfoil sections
+	sendLabelSet(p, 1, massActuators)
+	sendLabelSet(p, 2, springActuators)
+	sendLabelSet(p, 3, sections)
 
 }
 
-func (p *player) sendLabelSet(idx byte, ls []string) {
+func sendLabelSet[E ActuatorEnum | sectionEnum](p *player, idx byte, valueLabelPairs map[E]string) {
+
 	buff := new(bytes.Buffer)
 
 	writeByte(buff, byte(msgLabelSet))
-	writeByte(buff, idx)           //index
-	writeByte(buff, byte(len(ls))) //count (of labels)
-	for _, v := range ls {
-		writeString(buff, v)
+	writeByte(buff, idx)                        //index
+	writeByte(buff, byte(len(valueLabelPairs))) //count (of labels)
+	for v, l := range valueLabelPairs {
+		binary.Write(buff, le, &v)
+		writeString(buff, l)
 	}
 	p.sendBytes(buff.Bytes())
 
@@ -470,20 +498,22 @@ func (p *player) makeNextSpring() {
 
 }
 
-func (p *player) sendBoundValues() {
+// func (p *player) sendBoundValues() {
 
-	e := binary.LittleEndian
-	buff := new(bytes.Buffer)
-	binary.Write(buff, e, byte(msgBoundValues)) //masses
-	binary.Write(buff, e, byte(len(p.boundValues)))
-	for _, bv := range p.boundValues {
-		bv.toByteBuffer(buff, e)
-	}
+// 	e := binary.LittleEndian
+// 	buff := new(bytes.Buffer)
+// 	binary.Write(buff, e, byte(msgBoundValues)) //masses
+// 	binary.Write(buff, e, byte(len(p.boundValues)))
+// 	for _, bv := range p.boundValues {
+// 		bv.toByteBuffer(buff, e)
+// 	}
 
-	p.sendBytes(buff.Bytes())
-}
+// 	p.sendBytes(buff.Bytes())
+// }
 
 func (p *player) sendCamera() {
+
+	//TODO should only send if position or direction has changed
 
 	// up := newVec3(0, 1, 0)
 	// p.camera.up = p.camera.direction.cross(up).cross(p.camera.direction).normalise()
@@ -518,17 +548,54 @@ func (player *player) sendClear() {
 	player.sendBytes([]byte{byte(msgClear)})
 }
 
-func (player *player) sendMakeMesh(name string, numVerts uint32, numFaces uint32) {
+func (p *player) velocity() float32 {
+	tv := 0.0
+	for um := range p.vehicle.uniqueMasses {
+		tv += um.vms
+	}
+	return float32(tv / float64(len(p.vehicle.uniqueMasses)))
+}
+
+func (p *player) climbRate() float32 {
+
+	dv := 0.0
+	for um := range p.vehicle.uniqueMasses {
+		dv += um.p.y - um.op.y
+	}
+	dv = dv / float64(len(p.vehicle.uniqueMasses))
+
+	return float32(dv * 150) //m/s
+
+}
+
+// turnRate is the rate of change of heading in degrees per minute
+func (p *player) turnRate() float32 {
+
+	v := p.vehicle
+	direction := v.fm.p.sub(v.om.p)
+	heading := math.Atan2(direction.x, direction.z) / (math.Pi * 2) * 360 //angle in degrees
+
+	defer func() { p.heading = heading }()
+	return float32((p.heading - heading) * 150 * 60.0) //degrees per minute
+
+}
+
+func (p *player) sendTelemetry() {
 	buff := new(bytes.Buffer)
+	binary.Write(buff, le, byte(msgTelemetry))
 
-	binary.Write(buff, le, byte(msgMesh))
-	binary.Write(buff, le, byte(len(name)))
-	binary.Write(buff, le, []byte(name))
-	binary.Write(buff, le, make([]byte, len(name)%4+2)) //padding
-	binary.Write(buff, le, numVerts)
-	binary.Write(buff, le, numFaces)
+	channels := byte(4)
+	binary.Write(buff, le, channels)
+	writeString(buff, "vel")
+	binary.Write(buff, le, p.velocity())
+	writeString(buff, "climb")
+	binary.Write(buff, le, p.climbRate())
+	writeString(buff, "turn")
+	binary.Write(buff, le, p.turnRate())
+	writeString(buff, "head")
+	binary.Write(buff, le, p.heading)
 
-	player.sendBytes(buff.Bytes())
+	p.sendBytes(buff.Bytes())
 }
 
 func (p *player) sendVectors() {
@@ -595,7 +662,8 @@ func (p *player) sendVectors() {
 
 		if m.axle != nil {
 			m.p.toByteBuffer(buff)
-			m.axle.p.toByteBuffer(buff)
+			quarter := m.p.add(m.axle.p.sub(m.p).multiply(0.25))
+			quarter.toByteBuffer(buff)
 			binary.Write(buff, le, orange) //Axle/leading edge
 		}
 		if m.lift != nil {
@@ -629,20 +697,6 @@ func (p *player) sendVectors() {
 
 // used for sending section of the interleaved (often) floating point data that makes up vertex, normal, position and index buffers
 // in a format very close to that need by the GPU (or three.js buffers)
-func (player *player) sendData(name string, opCode msgEnum, elementOffset uint32, elementCount uint32, data interface{}) {
-	buff := new(bytes.Buffer)
-	e := binary.LittleEndian
-	binary.Write(buff, e, opCode)
-	binary.Write(buff, e, byte(len(name)))
-	binary.Write(buff, e, []byte(name))
-	binary.Write(buff, e, make([]byte, len(name)%4+2)) //padding
-
-	binary.Write(buff, e, elementOffset)
-	binary.Write(buff, e, elementCount)
-	binary.Write(buff, e, data)    //x,y,z float32 triples (or uint16 face indices)
-	player.sendBytes(buff.Bytes()) //&reply{Cmd: "mesh", Payload: meshPayload})
-
-}
 
 func (p *player) sendCursor() {
 	buff := new(bytes.Buffer)
@@ -726,6 +780,10 @@ func (p *player) moveCamera() {
 	dir := newVec3(0, 0, 0)
 
 	speed := .5
+	if p.keys["Alt"] {
+		speed = 10
+	}
+
 	if p.keys["w"] {
 		dir.z = speed
 	}
@@ -795,9 +853,10 @@ func NewPlayer(id uint32, name string, state *state, socket *websocket.Conn) *pl
 		grab:           nil,
 		keys:           make(map[string]bool), //which keys are pressed
 		selectedMasses: make(map[*mass]bool),  //which masses are selected, values are the order in which they were selected
-		boundValues:    make(map[string]boundValue),
-		mixers:         standardMixers,
-		controls:       make(map[controlInput]float64),
+		boundValues:    make(map[string]*float64, 0),
+		//boundValues:    make(map[string]unsafe.Pointer, 0),
+		mixers:   standardMixers,
+		controls: make(map[controlInput]float64),
 	}
 
 	for i, _ := range inLabels {
@@ -923,15 +982,11 @@ func (p *player) processBinaryMsg(mb []byte) {
 		binary.Read(buff, le, &playerName)
 
 	} else if cm == msgValueChange {
-		idl := uint16(0)
-		binary.Read(buff, le, &idl)
-		idb := make([]byte, idl)
-		binary.Read(buff, le, &idb)
-		id := string(idb)
-		value := float32(0)
+		key := readString(buff)
+		value := float64(0)
 		binary.Read(buff, le, &value)
-		bv := p.boundValues[id]
-		*bv.valuePointer = float64(value) //set the value at the pointer
+		pointer := p.boundValues[key]
+		*(*float64)(pointer) = value //cast to *float64 and then dereference
 
 		p.sendVectors() //send the new vectors
 		//if p.highlit.mass != nil {
@@ -1010,12 +1065,12 @@ func (p *player) processBinaryMsg(mb []byte) {
 				p.controls[ciWheelBrakeLeft] = float64(y)/128 - 1
 			}
 
-			if id == 3 {
+			if id == 4 {
 				p.controls[ciWheelBrakeRight] = float64(y)/128 - 1
 			}
 
-			p.updateActuators()
 		}
+		p.updateActuators()
 
 	} else {
 		panic("other Inbound binary messages not implemented" + string(cmd[0]))
@@ -1129,17 +1184,4 @@ func (p *player) Move(state *state) {
 		}
 
 	}
-}
-
-func (player *player) makeWater() {
-	//pour an amount on every vertex proportional to altitude
-
-	lnd := player.landMesh
-
-	for _, v := range lnd.verts {
-		v.wl = v.p.y
-	}
-
-	player.waterMade = true
-
 }

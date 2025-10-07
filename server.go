@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 // these must be upper cased or theu don't get unmarshalled
@@ -56,17 +57,19 @@ func stepWorlds() {
 	for range time.Tick(time.Millisecond * 33) { //<<waits here  //30fps
 		//print(".") //<< this is the heartbeat
 		for _, state := range games {
-			if state.running {
-				state.step() //<- this is a physics step - it queues stuff for all players
 
-				// for _, p := range state.Players {
-				// 	select { //this is a non-blocking send
-				// 	case p.waitChannel <- true: //<- this is a signal to the player that the world has stepped
-				// 	default:
-				// 	}
-				// }
-			}
-			state.moveCameras() //in editing mode
+			state.step(5) //<- this is a physics step - it queues stuff for all players
+
+			// for _, p := range state.Players {
+			// 	select { //this is a non-blocking send
+			// 	case p.waitChannel <- true: //<- this is a signal to the player that the world has stepped
+			// 	default:
+			// 	}
+			// }
+
+			//if !state.running {
+			state.moveCameras()
+			//	} //in editing mode
 		}
 	}
 
@@ -77,29 +80,14 @@ func stepWorlds() {
 // find a random start pos on a triangular land of size +/- s
 func (state *state) RandomStartPos(s float64) *vec3 {
 
-	z := (rand.Float64() - .5) * s * 2
-	xr := (1 - (z+s)/(2*s)) * s //range of x at z (to stay on dry land)
-	x := (rand.Float64() - .5) * xr * 2
+	//z := (rand.Float64()-.5)*(s-1200)*2 + 1200
+	//xr := (1 - (z+s)/(2*s)) * s //range of x at z (to stay on dry land)
+	//x := (rand.Float64() - .5) * xr * 2
 
-	//x = 5.01
-	//z = 2.001
-	return newVec3(x, 0, z)
+	//return newVec3(x, 0, z)
 
-}
+	return newVec3(0, 0, 0) //start at the origin for debugging
 
-// what is distance is the closest thing to P
-func (state *state) thingClearance(p *vec3) float64 {
-
-	clearance := float64(10000)
-	var c float64
-	for _, thing := range state.things {
-		c = thing.distanceFrom(p)
-		if c < clearance {
-			clearance = c
-		}
-	}
-
-	return c
 }
 
 func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player {
@@ -108,23 +96,25 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 	state := NewState(id) //asigns a random game id
 	games[state.filename] = state
 
-	s := float64(10000) //+/- 10km land = 200 km^2
-
-	y0pos := state.RandomStartPos(s)
+	landSize := 10000.0
+	y0pos := state.RandomStartPos(landSize)
 	p := state.AddPlayer(playerId, playerName, y0pos, ws)
-	p.makeLand(y0pos, 10, 2000, s, nil, nil) //initial make to determin runway height
 
-	state.runwayStart, _ = p.landTri.probeLand(y0pos)
-	state.runwayEnd = state.runwayStart.add(newVec3(0, 0, -1200))
+	state.runwayStart = y0pos.add(newVec3(0, 0, 20)) //will be projected onto the land
+	state.runwayEnd = y0pos.add(newVec3(0, 0, -1200))
+	state.runwayWidth = 41
 
-	origin := p.makeLand(y0pos, 10, 2000, s, state.runwayStart, state.runwayEnd) //makes and sends land
+	//	origin := p.makeLand(y0pos, 10, 2000, s) //makes and sends land
+	//+/- 10km land = 200 km^2
+	//splits was 9
+	origin := p.makeLand(y0pos, y0pos.add(newVec3(0, 0, -100)), 12, 500, landSize, false) //makes and sends land
 
 	//p.makeDozer(y0pos)
 
 	p.grid.origin = origin
 	p.grid.send(p)
 
-	aircraft := load("wip22")
+	aircraft := load("wip26")
 	t := state.mergeThing(aircraft.things[0])
 	aircraft = nil
 	p.vehicle = t
@@ -136,6 +126,9 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 
 	logit("aircraft weighs", weight)
 	t.translate(origin.sub(cg).add(newVec3(0, 10, 0)))
+
+	//now we've translated it
+	p.sendCentreOfMass(t)
 
 	//state.scatterCoins(2000, 2000)
 
@@ -251,19 +244,22 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 
 	logit(msg.Cmd)
 
-	if msg.Cmd == "keyUp" {
+	switch msg.Cmd {
+	case "keyUp":
 		//a key was released
 		p.keys[msg.Key] = false
 
-		if msg.Key == "ArrowLeft" || msg.Key == "ArrowRight" {
+		switch msg.Key {
+		case "ArrowLeft", "ArrowRight":
 			dx = 0
-		} else if msg.Key == "ArrowUp" || msg.Key == "ArrowDown" {
+		case "ArrowUp", "ArrowDown":
 			dy = 0
 		}
-	} else if msg.Cmd == "step" {
+
+	case "step":
 		//<-player.waitChannel //see stepworlds fo rthe sending end which releases this
 
-	} else if msg.Cmd == "drive" {
+	case "drive":
 
 		// if strings.HasPrefix(player.name, "control-") {
 		// 	player = state.players[strings.TrimPrefix(player.name, "control-")]
@@ -272,7 +268,7 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 		p.rightDrive = msg.Payload[1] //no need to echo them back - local versions are used for knobs only
 		p.thrust = msg.Payload[2]
 
-	} else if msg.Cmd == "mw" { //mousewheel
+	case "mw": //mousewheel
 
 		//player.camera.position.y += msg.Payload[0] * -0.01 //up and down
 
@@ -282,51 +278,57 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 		p.processMouseMove()
 		p.sendCamera()
 
-	} else if msg.Cmd == "mm" { //mouse move
+	case "mm": //mouse move
 
 		p.movedSinceMouseDown = true
 
 		p.buttons = byte(msg.Payload[0])
 		p.camera.farPos = newVec3(msg.Payload[1], msg.Payload[2], msg.Payload[3])
-		p.cursor.X = msg.Payload[4]
-		p.cursor.Y = msg.Payload[5]
+		p.cursor.x = msg.Payload[4]
+		p.cursor.y = msg.Payload[5]
 
 		p.processMouseMove()
 
-	} else if msg.Cmd == "mu" {
+	case "mu":
 
 		if p.buttons == 2 && p.movedSinceMouseDown == false {
+
+			p.sendVectors() //send the new vectors
 
 			if p.highlit.mass != nil {
 
 				//degreesToRadians := float32(180.0) / float32(math.Pi)
-				p.boundValues = make(map[string]boundValue, 0)
+				p.boundValues = make(map[string]*float64, 0)
+
+				//p.bindValue("radius", &p.highlit.mass.r, 0.01, 1.00, .01, 0)
 				p.bindValue("radius", &p.highlit.mass.r, 0.01, 1.00, .01, 0)
-				p.bindValue("Section", &p.highlit.mass.section, 0, 1, 1, 2)
+				p.bindValue("Section", &p.highlit.mass.section, 0, 1, 1, 3)
 				//p.bindValue("aoa", p.highlit.mass, &p.highlit.mass.aoaRads, -20, +20, 1, 0)
 				p.bindValue("wingArea", &p.highlit.mass.wingArea, 0.1, 500.00, 1, 0)
 				//p.bindValue("dihedral", p.highlit.mass, &p.highlit.mass.dihedralDegrees, -10, 10, 1, 0)
 				//p.bindValue("controlSurface", p.highlit.mass, &p.highlit.mass.flightOutput, 0, 10, 1, 1) //use labelt set 1 (outoput flight controls)
 
-				p.sendBoundValues() //will pop up a context menu clientside
+				p.bindValue("massActuator", (*float64)(unsafe.Pointer(&p.highlit.mass.actuatorTag)), 0, float64(len(massActuators)), 1, 1) //use label set 1 (mass actuator labels)
+				//p.sendBoundValues() //will pop up a context menu clientside
 				p.setMode(props)
 			} else if p.highlit.spring != nil {
-				p.boundValues = make(map[string]boundValue, 0)
-				p.bindValue("actuator", &p.highlit.spring.flightOutput, 0, float32(len(actLabels)), 1, 1) //use label set 1 (actuator labels)
-				p.sendBoundValues()                                                                       //will pop up a context menu clientside
+				//p.boundValues = make(map[string]boundValue, 0)
+				p.bindValue("springActuator", (*float64)(unsafe.Pointer(&p.highlit.spring.actuatorTag)), 0, float64(len(springActuators)), 1, 2) //use label set 2 (spring actuator labels)
+				//p.bindValue("springActuator", &p.highlit.spring.actuatorTag, 0, float64(len(springActuators)), 1, 1) //use label set 1 (actuator labels)
+				//p.sendBoundValues()                                                                      //will pop up a context menu clientside
 				p.setMode(props)
 			}
 		}
 
 		p.buttons = byte(msg.Payload[0])
 
-	} else if msg.Cmd == "md" {
+	case "md":
 
 		p.buttons = byte(msg.Payload[0])
 
 		p.movedSinceMouseDown = false
 
-		p.grab = &vec2{p.cursor.X, p.cursor.Y} //clone
+		p.grab = &vec2{p.cursor.x, p.cursor.y} //clone
 
 		p.downGridPos = p.gridPos.clone()
 
@@ -415,20 +417,7 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 
 		//player.send(&reply{Cmd: "gridPos", Payload: player.gridPos.payload()})
 
-	} else if msg.Cmd == "pickRay" {
-		o := newVec3(msg.Payload[0], msg.Payload[1], msg.Payload[2])
-		dir := newVec3(msg.Payload[3], msg.Payload[4], msg.Payload[5])
-		if p.landMesh != nil {
-			p := p.landMesh.slowProbe(o, o.add(dir.multiply(1000)))
-			if p != nil {
-				//grow a simple tree here
-				m := growTree()
-				m.offset(p)
-				//	m.sendToAll("tree", state)
-			}
-		}
-
-	} else if msg.Cmd == "keyDown" {
+	case "keyDown":
 
 		k := msg.Key
 		kl := strings.ToLower(k)
@@ -489,6 +478,27 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 			p.controls[ciThrottle] -= 0.05
 		} else if kl == "+" {
 			p.controls[ciThrottle] += 0.05
+		} else if kl == "b" {
+
+			// pens := make([]*vec3, 100)
+
+			// count := int(0)
+			// p.landTri.probe(p.camera.position, p.camera.farPos, pens, &count)
+
+			// nearestPen := newVec3(0, 0, 0)
+			// sd := float64(1000000.0)
+			// for _, pen := range pens {
+			// 	if pen != nil {
+			// 		if p.camera.position.distanceFrom(pen) < sd {
+			// 			nearestPen = pen
+			// 		}
+			// 	}
+			// }
+
+			// //grow a tree, offset it, and send it to player
+			m := growTree()
+			//m.offset(nearestPen)
+			m.sendTo(p, 20000) //prep for 20k trees
 
 		} else if kl == "e" {
 			p.setMode(editing)
@@ -522,10 +532,12 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 				p.sendThings([]*thing{p.currentThing})
 			}
 
-		} else if kl == "f" {
+		} else if kl == "f" { //set the forward direction mass
 			if p.checkHighlitMass() {
 				p.currentThing.fm = p.highlit.mass
 				p.sendThings([]*thing{p.currentThing})
+			} else {
+				p.follow = !p.follow
 			}
 		} else if kl == "r" {
 			if p.keys["Control"] {
@@ -614,8 +626,8 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 				p.sendMasses(s, false)
 				p.setMode(editing)
 			} else if p.mode == props {
-				p.boundValues = make(map[string]boundValue, 0)
-				p.sendBoundValues() //sending empty set of bound values clears the popup clientside
+				p.boundValues = make(map[string]*float64, 0)
+				p.clearContextMenu()
 				p.setMode(editing)
 
 			} else {
@@ -662,8 +674,13 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 					p.sendVectors()
 					p.sendMessage("Wing root defined", "info")
 				} else if k == "x" {
-					selectedMass.axle = p.highlit.mass
-					p.sendMessage("Axis/Axle defined", "info")
+					if selectedMass.axle == p.highlit.mass {
+						selectedMass.axle = nil //remove the axle
+						p.sendMessage("Axle removed", "info")
+					} else {
+						selectedMass.axle = p.highlit.mass
+						p.sendMessage("Axis/Axle defined", "info")
+					}
 				}
 				p.sendMasses([]*mass{selectedMass}, true)
 
@@ -681,16 +698,30 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 				p.sendLabels()
 			}
 		} else if kl == "i" {
+			p.state.labels = make([]*label, 0)
 			for _, m := range p.state.masses {
 				if m.wingRoot != nil {
 					p.state.addLabel(NewLabel("AOA", m, m, 1, 30, &m.aoaDegrees))
 				}
-			}
-			for _, m := range p.mixers {
-				if m.spring != nil {
-					p.state.addLabel(NewLabel(actLabels[int(m.actuator)], m.spring.m1, m.spring.m2, 4, 30, &m.spring.flightOutput))
+				if m.actuatorTag > 0 {
+					p.state.addLabel(NewLabel("BRK", m, m, 5, 20, &m.brake))
 				}
 			}
+			if p.currentThing == nil {
+				p.currentThing = p.state.things[0]
+			}
+			for _, s := range p.currentThing.springs {
+				if s.actuatorTag > 0 {
+					p.state.addLabel(NewLabel(springActuators[s.actuatorTag], s.m1, s.m2, 5, 20, &s.expansion))
+				}
+			}
+			// for _, mx := range p.mixers {
+			// 	if mx.spring != nil {
+			// 		p.state.addLabel(NewLabel(springActuators[mx.actuator], mx.spring.m2, mx.spring.m2, 4, 80, &mx.spring.expansion))
+			// 	} else if mx.mass != nil { //a mixer acting on a mass is a brake
+			// 		p.state.addLabel(NewLabel(massActuators[mx.actuator], mx.mass, mx.mass, 4, 30, &mx.mass.brake))
+			// 	}
+			// }
 			p.sendLabels()
 
 		} else if kl == "p" {

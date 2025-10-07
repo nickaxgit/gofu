@@ -19,32 +19,42 @@ const (
 
 var inLabels = []string{"NONE", "StickX", "StickY", "Throttle", "Rudder", "Flaps"}
 
-type actuatorEnum float64 //byte
-
+type ActuatorEnum float64 //do vstab - also give masses mass -
 const (
-	fcNONE                     = 0
-	fcLeftEngine  actuatorEnum = 1
-	fcRightEngine actuatorEnum = 2
-
-	fcLeftAileron  actuatorEnum = 3
-	fcRightAileron actuatorEnum = 4
-
-	fcLeftElevator  actuatorEnum = 5
-	fcRightElevator actuatorEnum = 6
-
-	fcLeftRudder  actuatorEnum = 7
-	fcRightRudder actuatorEnum = 8
-
-	fcLeftFlap  actuatorEnum = 9
-	fcRightFlap actuatorEnum = 10
-
-	fcLeftWheelBrake  actuatorEnum = 11
-	fcRightWheelBrake actuatorEnum = 12
-
-	//remember to add actlabels if adding here
+	fcNONE            ActuatorEnum = 0
+	fcLeftEngine      ActuatorEnum = 1
+	fcRightEngine     ActuatorEnum = 2
+	fcLeftAileron     ActuatorEnum = 3
+	fcRightAileron    ActuatorEnum = 4
+	fcLeftElevator    ActuatorEnum = 5
+	fcRightElevator   ActuatorEnum = 6
+	fcLeftRudder      ActuatorEnum = 7
+	fcRightRudder     ActuatorEnum = 8
+	fcLeftFlap        ActuatorEnum = 9
+	fcRightFlap       ActuatorEnum = 10
+	fcLeftWheelBrake  ActuatorEnum = 11
+	fcRightWheelBrake ActuatorEnum = 12
 )
 
-var actLabels = []string{"NONE", "LeftEngine", "RightEngine", "LeftAileron", "RightAileron", "LeftElevator", "RightElevator", "LeftRudder", "RightRudder", "LeftFlap", "RightFlap", "LeftWheelBrake", "RightWheelBrake"}
+var springActuators = map[ActuatorEnum]string{
+	fcNONE:          "NONE",
+	fcLeftEngine:    "Left Engine",
+	fcRightEngine:   "Right Engine",
+	fcLeftAileron:   "Left Aileron",
+	fcRightAileron:  "Right Aileron",
+	fcLeftElevator:  "Left Elevator",
+	fcRightElevator: "Right Elevator",
+	fcLeftRudder:    "Left Rudder",
+	fcRightRudder:   "Right Rudder",
+	fcLeftFlap:      "Left Flap",
+	fcRightFlap:     "Right Flap",
+}
+
+var massActuators = map[ActuatorEnum]string{
+	fcNONE:            "NONE",
+	fcLeftWheelBrake:  "Left WheelBrake",
+	fcRightWheelBrake: "Right WheelBrake",
+}
 
 type sectionEnum float64 //do vstab - also give masses mass -
 const (
@@ -52,7 +62,7 @@ const (
 	scSymetrical sectionEnum = 1
 )
 
-var sectionLabels = []string{"Cambered", "Symetrical"}
+var sections = map[sectionEnum]string{scCambered: "Cambered", scSymetrical: "Symetrical"}
 
 type mix struct {
 	in controlInput
@@ -61,9 +71,14 @@ type mix struct {
 	max       float64
 	engineNum int //1 based engine number (0 = none)
 	//conversion float64 //final scaling/conversion at output (mostly to convert degrees to radians)
-	actuator actuatorEnum //springs are 'tagged' with this - and 'bound' to the spring herein
-	spring   *spring
-	isBrake  bool //is this a brake (affects mass friction)
+	actuator ActuatorEnum //float64 //springActuatorEnum //springs/masses are 'tagged' with this - and 'bound' to the spring/mass herein
+	spring   *spring      //springs are like hydraulic cylinders (unles they are engines)
+	mass     *mass        //masses are brakes or driven wheels (they must have an axle)
+	//isBrake  bool //is this a brake (affects mass friction)
+}
+
+func newMix(controlIn controlInput, min float64, max float64, engineNum int, actuator ActuatorEnum) *mix { //,spring *spring,mass *mass,isBrake bool) *mix {
+	return &mix{in: controlIn, min: min, max: max, engineNum: engineNum, actuator: actuator, spring: nil, mass: nil}
 }
 
 func (mix *mix) output(p *player) float64 {
@@ -73,22 +88,25 @@ func (mix *mix) output(p *player) float64 {
 var throw float64 = 0.2 //full throw of a control surface (in metres of actuator extension)
 var standardMixers = []*mix{
 
-	{ciStickX, -throw, throw, 0, fcLeftAileron, nil, false},
-	{ciStickX, throw, -throw, 0, fcRightAileron, nil, false},
+	newMix(ciStickX, -throw, throw, 0, fcLeftAileron),
+	newMix(ciStickX, throw, -throw, 0, fcRightAileron),
 
-	{ciStickY, throw, -throw, 0, fcLeftElevator, nil, false},
-	{ciStickY, throw, -throw, 0, fcRightElevator, nil, false},
+	newMix(ciStickY, throw, -throw, 0, fcLeftElevator),
+	newMix(ciStickY, throw, -throw, 0, fcRightElevator),
 
-	{ciRudder, -throw, throw, 0, fcLeftRudder, nil, false},
-	{ciRudder, -throw, throw, 0, fcRightRudder, nil, false},
+	newMix(ciRudder, -throw, throw, 0, fcLeftRudder),
+	newMix(ciRudder, -throw, throw, 0, fcRightRudder),
 
-	{ciThrottle, 0, 1, 1, fcLeftEngine, nil, false}, //1000 newtons of reverse thrust 01 10k newtons of forward thrust
-	{ciThrottle, 0, 1, 2, fcRightEngine, nil, false},
+	newMix(ciThrottle, 0, 1, 1, fcLeftEngine), // 1000 newtons of reverse thrust 01 10k newtons of forward thrust
+	newMix(ciThrottle, 0, 1, 2, fcRightEngine),
 
-	//flaps
-	{ciFlaps, -5, 5, 0, fcLeftAileron, nil, false},
-	{ciFlaps, -5, 5, 0, fcRightAileron, nil, false},
+	// flaps
+	newMix(ciFlaps, -5, 5, 0, fcLeftAileron),
+	newMix(ciFlaps, -5, 5, 0, fcRightAileron),
 
-	{ciWheelBrakeLeft, 0, 1, 0, fcLeftWheelBrake, nil, true},
-	{ciWheelBrakeRight, 0, 1, 0, fcRightWheelBrake, nil, true},
+	newMix(ciWheelBrakeLeft, 1, 0, 0, fcRightWheelBrake),
+	newMix(ciWheelBrakeRight, 1, 0, 0, fcLeftWheelBrake),
+
+	//{ciRudder, -0.5, 0.5, 0, fcRightWheelBrake, nil, true}, //rudder is a brake on the wheel - not a control surface
+
 }

@@ -5,7 +5,7 @@ import "bytes"
 
 type camera struct {
 	position  *vec3
-	direction *vec3
+	direction *vec3 //normalised
 	up        *vec3
 	farPos    *vec3
 }

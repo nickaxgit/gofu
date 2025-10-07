@@ -2,7 +2,7 @@ package main
 
 //import "crypto/rand"
 
-//import "math/rand"
+import "math/rand/v2"
 
 import "math"
 
@@ -12,48 +12,39 @@ type vert struct {
 	uv      vec2
 	wl      float64       //water level
 	acc     float64       //accumulated water (during a pass)
-	touches map[*Tri]bool //the triangles that touch this vertex (whos face normals contribute to the vertex normal)
+	incount int           //number of ferts flowing into this vert
+	touches map[*tri]bool //the triangles that touch this vertex (whos face normals contribute to the vertex normal)
+	// a *vert //the two ends of the edge I was created on
+	// b *vert
+	// depth int
 	//touchCount int
 }
 
-type Tri struct {
+type tri struct {
 	depth    int
-	vi       []uint16 `json:"vi"`
-	children []*Tri   `json:"children"`
-	mesh     *mesh    //a reference to the mesh this tri is part of (that the vi's point into v's of)
+	vi       []uint32
+	children []*tri
+	mesh     *landMesh //a reference to the mesh this tri is part of (that the vi's point into v's of)
 	normal   *vec3
+
 	//faceIndex uint16
 	//isPatch   bool
 }
 
 // keep track of the deepest (up to) 6 triangles touching this vert -- allows us to recalculate normals quickly
-func (v *vert) touch(t ...*Tri) {
+func (v *vert) touch(t ...*tri) {
 
 	for _, t := range t {
 		v.touches[t] = true
 	}
 }
 
-func (vt *vert) updateUV(yMin, yMax float64) {
-
-	vrange := (yMax - yMin)
-	v := (vt.p.y - yMin) / vrange
-
-	if v > 1 || v < 0 {
-		logit("UV out of range", v)
-
-	}
-
-	vt.uv = vec2{math.Atan2(vt.n.x, vt.n.z) / float64(6.28), v} //v
-	//	vt.uv = Vector{1, 1}
-}
-
 func newVert(p *vec3, u, v float64) *vert {
-	return &vert{p: p, uv: vec2{u, v}, n: &vec3{0, 0, 0}, touches: make(map[*Tri]bool, 6)}
+	return &vert{p: p, uv: vec2{u, v}, n: &vec3{0, 0, 0}, touches: make(map[*tri]bool, 6)}
 }
 
-func (t *Tri) addChild(a, b, c uint16) *Tri {
-	child := newTri(t.mesh, []uint16{a, b, c}, t.depth+1) //t.mesh.makeTri(t.depth+1, fi, a, b, c)
+func (t *tri) addChild(vi ...uint32) *tri {
+	child := newTri(t.mesh, t.depth+1, vi...) //t.mesh.makeTri(t.depth+1, fi, a, b, c)
 	t.children = append(t.children, child)
 	return child
 }
@@ -95,7 +86,7 @@ func (t *Tri) addChild(a, b, c uint16) *Tri {
 
 //for every bottom level triangle, look to see if there is a vertex at the midpoint of each edge (caused by a more divided neighbouring tri)
 //if so, split in two to the opposite vertex
-func (t *Tri) patch() {
+func (t *tri) patch() {
 
 	m := t.mesh
 	if len(t.children) == 0 {
@@ -105,13 +96,18 @@ func (t *Tri) patch() {
 			ai := t.vi[i]
 			bi := t.vi[(i+1)%3]
 			ci := t.vi[(i+2)%3]
-			mi := m.midpoint(ai, bi) //looks both ways for a midpoint   -- m.vertAtMidPointXZ(ai, bi) //this could be way faster by recording mid verts
+			//mi := m.midpoint(ai, bi) //looks both ways for a midpoint   -- m.vertAtMidPointXZ(ai, bi) //this could be way faster by recording mid verts
+			mi := m.midpoint(bi, ci) //looks both ways for a midpoint   -- m.vertAtMidPointXZ(ai, bi) //this could be way faster by recording mid verts
 
-			if mi != 65535 {
-				t.removeFromTouches() //remove this tri from the list tris touching this vertex
-				t.addChild(mi, bi, ci)
-				t.addChild(ai, mi, ci)
-				break //only one split per tri
+			if mi != math.MaxUint32 { //is there a midpoint ?
+
+				//if t.aspect() < 2 { //is it 'fat'
+				t.splitIn2(ai, bi, ci, mi)
+				break //only one edge of this tri (becuase it is now multiple child tris)
+				//} else {
+				//	t.split()
+				//}
+
 			}
 
 		}
@@ -123,17 +119,17 @@ func (t *Tri) patch() {
 	}
 
 }
-func (t *Tri) yMin() float64 {
+func (t *tri) yMin() float64 {
 	v := t.mesh.verts
 	return math.Min(math.Min(v[t.vi[0]].p.y, v[t.vi[1]].p.y), v[t.vi[2]].p.y)
 }
 
-func (t *Tri) yMax() float64 {
+func (t *tri) yMax() float64 {
 	v := t.mesh.verts
 	return math.Max(math.Max(v[t.vi[0]].p.y, v[t.vi[1]].p.y), v[t.vi[2]].p.y)
 }
 
-func (t *Tri) addToTouches() {
+func (t *tri) addToTouches() {
 
 	m := t.mesh
 	m.verts[t.vi[0]].touch(t)
@@ -142,29 +138,120 @@ func (t *Tri) addToTouches() {
 
 }
 
-func (t *Tri) removeFromTouches() {
+func (t *tri) removeFromTouches() {
 	if len(t.children) > 0 {
 		panic("Tri has children")
 	}
 	for _, vi := range t.vi {
 		v := t.mesh.verts[vi]
-		delete(v.touches, t) //remove this tri from the list tris touching this vertex
-		// if len(v.touches) == 0 && vi > 2 { //we always keep the original 3 verts of the land
-		// 	logit("Vert", vi, "freed for reuse")
-		// 	v.p = newVec3(0, 0, 0)                            //zero out the vertex (prior to reuse (to make accidental use of a reusable vertex obvious)
-		// 	t.mesh.reuseVerts = append(t.mesh.reuseVerts, vi) //if there are no longer any traingles touchin gthis vert - we can reuse it
-
-		// 	//remove all references to this vertex in the midpoints map
-		// 	for k, v := range t.mesh.midpoints {
-		// 		if v == vi {
-		// 			delete(t.mesh.midpoints, k) //this is safe in go
-		// 		}
-		// 	}
-		// }
+		delete(v.touches, t) //remove this tri from the list of tris touching this vertex
 	}
 }
 
-func (t *Tri) split(pos *vec3, maxRdepth int, maxHeight float64) {
+func (t *tri) facesTowards(direction *vec3) bool {
+	//the extra -.1 is to account for traingles facing away at less than half the camera vertical FOV
+	return t.normal.dot(direction) < -.1 //is the traingle forward facing ? (relative to the camera)
+
+}
+
+func (t *tri) allVertsLeftOrRightOfFov(pos *vec3, focus *vec3, fov float64) bool {
+
+	camDir := focus.sub(pos).normalise()
+	onLeft := 0
+	for _, vi := range t.vi {
+		cam2vert := t.mesh.verts[vi].p.sub(pos).normalise()
+		if camDir.dot(cam2vert) > fov {
+			return false //a vertex is within the FOV
+		}
+		//we're outside the FOV
+		cp := cam2vert.cross(camDir)
+		if cp.y < 0 {
+			onLeft++
+		}
+	}
+
+	if onLeft == 3 {
+		return true //all vertices are outside and on the same side of the FOV
+
+	}
+	if onLeft == 0 {
+		return true
+	}
+
+	return false //vertices straddle the viewing frustum
+
+}
+
+func (t *tri) hasVertexWithinFov(pos *vec3, focus *vec3, fov float64) bool {
+
+	camDir := focus.sub(pos).normalise()
+	for _, vi := range t.vi {
+		cam2vert := t.mesh.verts[vi].p.sub(pos).normalise()
+		if camDir.dot(cam2vert) > fov {
+			return true //a vertex is within the FOV
+		}
+	}
+
+	return false //no vertices are within the FOV
+
+}
+
+func (t *tri) countChildren(count *int) {
+
+	*count += len(t.children)
+
+	for _, c := range t.children {
+		c.countChildren(count)
+	}
+
+}
+
+//get an on screen area
+func (t *tri) pixels(camPos *vec3) float64 {
+
+	a := t.mesh.verts[t.vi[0]].p
+	b := t.mesh.verts[t.vi[1]].p
+	c := t.mesh.verts[t.vi[2]].p
+
+	cama := a.sub(camPos).normalise()
+	camb := b.sub(camPos).normalise()
+	camc := c.sub(camPos).normalise()
+
+	ab := cama.dot(camb)
+	if ab < 0 {
+		return 100
+	} //this triange has vertices in front of and behind the camera
+	bc := camb.dot(camc)
+	if bc < 0 {
+		return 100
+	} //this triangle has vertices in front of and behind the camera
+	ca := camc.dot(cama)
+	if ca < 0 {
+		return 100
+	} //this triange has vertices in front of and behind the camera
+
+	ab = 1 - ab
+	bc = 1 - bc
+	ca = 1 - ca
+
+	s := (ab + bc + ca) / 2 //half the perimeter
+
+	return s
+
+	//A = √[s(s-a)(s-b)(s-c)]
+	p := s * (s - ab) * (s - bc) * (s - ca)
+
+	if p < 0 {
+		return 0
+		logit("negative area", s, ab, bc, ca)
+
+	}
+	area := math.Sqrt(p) //area of the triangle (Herons formula)
+
+	return area
+
+}
+func (t *tri) splitIfNeeded(pos *vec3, focus *vec3) {
 
 	//      0
 	//		/\
@@ -174,60 +261,147 @@ func (t *Tri) split(pos *vec3, maxRdepth int, maxHeight float64) {
 	//  /___\/___\
 	// 2     4    1
 
-	m := t.mesh
-	v0 := t.vi[0]
-	v1 := t.vi[1]
-	v2 := t.vi[2]
+	if t.depth < t.mesh.splits {
 
-	if t.depth < maxRdepth {
+		//triCentre := t.centre()
 
-		triCentre := t.centre()
-		triCentre.y = 0 //we want to measure distance on the x/z plane (otherwise subdivision is affected by terrain height)
-		d := triCentre.distanceFrom(newVec3(pos.x, 0, pos.z))
+		//if t.hasVertexInFrontOf(pos,focus){
+		//if t.facesTowards(focus.sub(pos)) { //is the traingle forward facing ? (relative to the camera)
+		if t.depth < 5 || !t.allVertsLeftOrRightOfFov(pos, focus, .4) { //high numbers here gives a narrow field of view getting split
 
-		d2 := float64(t.depth + 1)
+			dist := pos.distanceFrom(t.centre())
+			apud := (2 * t.area()) / (dist * dist)
+			if apud > .001 { //.001 is a about 1cm triangles at the horizon
 
-		f := 7000 / ((math.Pow(d2, 2)) * d) //distance as a fraction of the land size (a number rougly between 0 and 1)
+				t.split()
+				for _, c := range t.children {
+					c.splitIfNeeded(pos, focus) //recurse
+				}
 
-		if f > .25 { //should i be split in four ?
-
-			if len(t.children) == 0 {
-				Yrange := maxHeight / (float64(t.depth*t.depth*t.depth) + 1) //maximum kink in this edge
-
-				//rnGen = &rand.New(rand.NewPCG(seed+1, seed))
-				//rnGen = &rand.New(rand.NewPCG(m.verts[v0].p.x, m.verts[v0].p.y))
-
-				rn1 := math.Sin(math.Round(m.verts[v0].p.x)) - 0.5
-				rn2 := math.Sin(math.Round(m.verts[v1].p.z)) - 0.5
-				rn3 := math.Sin(math.Round(m.verts[v2].p.z)) - 0.5
-
-				// v3 := m.splitEdge(v0, v1, (rnGen.Float64()-.5)*Yrange)
-				// v4 := m.splitEdge(v1, v2, (rnGen.Float64()-.5)*Yrange)
-				// v5 := m.splitEdge(v2, v0, (rnGen.Float64()-.5)*Yrange)
-
-				v3 := m.splitEdge(v0, v1, rn1/2*Yrange)
-				v4 := m.splitEdge(v1, v2, rn2/2*Yrange)
-				v5 := m.splitEdge(v2, v0, rn3/2*Yrange)
-
-				//when we add a child - reuse the parents face index (for the top triangle) - and add 3 more
-				t.removeFromTouches()
-
-				t.addChild(v0, v3, v5) //top
-				t.addChild(v3, v1, v4) //right
-				t.addChild(v5, v4, v2) //left
-				t.addChild(v3, v4, v5) //centre
-
-			}
-
-			for _, c := range t.children {
-				c.split(pos, maxRdepth, maxHeight)
 			}
 
 		}
-		//if i didn't need splitting ... then my children don't either
+	}
+
+}
+
+func (t *tri) splitDownTo(level int) {
+
+	if t.depth < level {
+		t.split()
+		for _, c := range t.children {
+			c.splitDownTo(level) //recurse
+		}
+	}
+
+}
+
+//extract children of T within a FOV, to a level based on distance from the camera and being in view
+//populate the mapDown list with the used vertex indices
+func (t *tri) extract(pos *vec3, focus *vec3, into *tri, mapDown map[uint32]uint32) {
+
+	//if t.depth < t.mesh.splits {
+
+	//was 0.7
+	if !t.allVertsLeftOrRightOfFov(pos, focus, 0.7) { //if the triangle straddles the viewing frustum
+		pixels := t.pixels(pos) //returns half the permiter of the traingle in units of dot product
+		if pixels > 0.001 {     //smaller number here gives more detail 0.0001 is a lot of detail
+			// 	if pixels < 100 {
+			// 		//logit("split ", t.depth, pixels)
+			// 	}
+
+			//map the vertices from the giant map into a vertex list for this mesh
+			vt := make([]uint32, 3)
+			for i, bvi := range t.vi { //for each vertex of this triangle
+				svi, present := mapDown[bvi]
+				if !present {
+					svi = uint32(len(mapDown))
+					mapDown[bvi] = svi
+				}
+				vt[i] = svi
+			}
+
+			//n := into.addChild(vt...) - we don't want to addchild, because we dont wat to calc normals, or add midpoints, or add to touches
+
+			n := tri{depth: into.depth + 1, vi: vt, children: []*tri{}, mesh: nil}
+			//into.children = append(t.children, &n)
+			into.children = append(into.children, &n)
+			if len(into.children) > 4 {
+				//	logit("more than 4 children in a triangle", len(into.children), into.depth, into.aspect(), pixels)
+			}
+
+			for _, c := range t.children {
+				c.extract(pos, focus, &n, mapDown) //recurse
+			}
+			//} else {
+			//logit("not splitting", t.depth, t.aspect(), pixels)
+			//}
+
+		}
 
 	}
 
+}
+
+func (t *tri) splitIn2(a, b, c, m uint32) {
+
+	t.removeFromTouches() //remove this tri from the list tris touching this vertex
+	t.addChild(a, m, c)   //left (clockwise wound)
+	t.addChild(a, b, m)   //right
+
+}
+
+//returns the longest edge of the triangle divided by the shortest edge - so a big number is a 'slinny triangle (and no triangle can be 'fatter' than 0.5)
+func (t *tri) aspect() float64 {
+
+	v := t.mesh.verts
+	a := v[t.vi[0]].p
+	b := v[t.vi[1]].p
+	c := v[t.vi[2]].p
+
+	ab := a.sub(b).length()
+	ac := a.sub(c).length()
+	bc := b.sub(c).length()
+
+	return max(ab, ac, bc) / min(ab, ac, bc)
+
+}
+
+func (t *tri) split() {
+	if len(t.children) == 0 {
+
+		//	kink := (t.mesh.height/(float64(t.depth*t.depth)+1) - 1) * .5 //maximum kink in this edge
+		//kink := (t.mesh.height/(float64(t.depth*5)+1) - 1) * .5 //maximum kink in this edge
+		//kink := -t.mesh.height / math.Pow(2, float64(t.depth))
+		kink := t.mesh.kinks[t.depth] * t.mesh.height //maximum kink in this edge
+
+		m := t.mesh
+		v0 := t.vi[0]
+		v1 := t.vi[1]
+		v2 := t.vi[2]
+
+		seed := uint64(m.verts[v1].p.y)
+		rnGen = rand.New(rand.NewPCG(seed, seed+1))
+		//rnGen = &rand.New(rand.NewPCG(m.verts[v0].p.x, m.verts[v0].p.y))
+
+		rn1 := rnGen.NormFloat64()
+		rn2 := rnGen.NormFloat64()
+		rn3 := rnGen.NormFloat64()
+
+		v3 := m.splitEdge(v0, v1, rn1*kink, t.depth)
+		v4 := m.splitEdge(v1, v2, rn2*kink, t.depth)
+		v5 := m.splitEdge(v2, v0, rn3*kink, t.depth)
+
+		t.removeFromTouches() //the list of tirangles touching a vertex is used for normal calculation
+
+		t.addChild(v0, v3, v5) //top
+		t.addChild(v3, v1, v4) //right
+		t.addChild(v5, v4, v2) //left
+		t.addChild(v3, v4, v5) //centre
+
+	} else {
+		logit("splitting a triangle that already has children ??")
+	}
 }
 
 // //plough a runway between p1 and p2 flattening all points with 10 metres
@@ -240,12 +414,20 @@ func (t *Tri) split(pos *vec3, maxRdepth int, maxHeight float64) {
 // 	}
 // }
 
-func (t *Tri) centre() *vec3 {
+func (t *tri) centre() *vec3 {
 	v := t.mesh.verts
 	return v[t.vi[0]].p.add(v[t.vi[1]].p).add(v[t.vi[2]].p).multiply(float64(1) / 3)
 }
 
-func (t *Tri) contains(pop *vec3, includeOnVert bool, includeOnEdge bool) bool {
+func (t *tri) area() float64 {
+	v := t.mesh.verts
+	a := v[t.vi[0]].p
+	b := v[t.vi[1]].p
+	c := v[t.vi[2]].p
+	return a.sub(b).cross(a.sub(c)).length() / 2
+}
+
+func (t *tri) contains(pop *vec3, includeOnVert bool, includeOnEdge bool) bool {
 
 	v := t.mesh.verts //this is a reference not a copy
 
@@ -253,25 +435,54 @@ func (t *Tri) contains(pop *vec3, includeOnVert bool, includeOnEdge bool) bool {
 	b := v[t.vi[1]].p
 	c := v[t.vi[2]].p
 
-	return pop.isInsideTri(a, b, c, includeOnEdge, includeOnVert)
+	return pop.isInsideTri(a, b, c, t.normal, includeOnEdge, includeOnVert)
 
 }
 
-func (t *Tri) probeLand(p *vec3) (surfacePoint *vec3, surfaceNormal *vec3) {
+//returns the deepest (i.e. childless) triangle intersected by the ray from p0 to p1
+//maintaining a count, and populating the slice of penetrations by refererence is easier to get your head around than appending slices (possibly faster too)
+func (t *tri) probe(p0 *vec3, p1 *vec3, pens []*vec3, penCount *int) []*vec3 {
 
-	found := t.vProbe(p) //recursively find the leaf tri that contains the point
+	pop := t.probePlane(p0, p1) //fire a 10km ray
+	if pop != nil {
+
+		if len(t.children) == 0 {
+			if t.contains(pop, true, true) {
+
+				pens[*penCount] = pop
+				*penCount++
+
+			}
+
+		}
+	}
+
+	for _, ct := range t.children {
+		ct.probe(p0, p1, pens, penCount)
+
+	}
+
+	return pens
+
+}
+
+func (t *tri) probeLand(p *vec3) (surfacePoint *vec3, surfaceNormal *vec3) {
+
+	pc := p.clone()
+	pc.y = 0
+	found := t.vProbe(pc) //recursively find the leaf tri that contains the point
 
 	if found == nil {
 		return nil, nil
 	}
-	//fire a ray through that
-	return found.probePlane(newVec3(p.x, -10000, p.z), newVec3(p.x, 10000, p.z)), found.normal
+	//fire a ray through that plane
+	return found.probePlane(newVec3(p.x, -100000, p.z), newVec3(p.x, 100000, p.z)), found.normal
 }
 
-func (t *Tri) vProbe(p *vec3) *Tri {
+func (t *tri) vProbe(p *vec3) *tri {
 
 	if p.y != 0 {
-		panic("tri vProbe Y must be 0")
+		logit("warn: tri vProbe Y is not 0")
 	}
 	a := t.mesh.verts[t.vi[0]].p.clone()
 	b := t.mesh.verts[t.vi[1]].p.clone()
@@ -281,7 +492,8 @@ func (t *Tri) vProbe(p *vec3) *Tri {
 	b.y = 0
 	c.y = 0
 
-	if p.isInsideTri(a, b, c, true, true) {
+	up := &vec3{0, 1, 0}
+	if p.isInsideTri(a, b, c, up, true, true) {
 		if len(t.children) == 0 {
 			return t
 		}
@@ -299,11 +511,11 @@ func (t *Tri) vProbe(p *vec3) *Tri {
 
 }
 
-func (t *Tri) calcNormal() *vec3 {
+func (t *tri) calcNormal() *vec3 {
 
 	v := t.mesh.verts
 
-	numMeshVerts := uint16(len(v))
+	numMeshVerts := uint32(len(v))
 	if t.vi[0] >= numMeshVerts || t.vi[1] >= numMeshVerts || t.vi[2] >= numMeshVerts {
 		panic("index out of range in tri.normal")
 	}
@@ -324,59 +536,60 @@ func (t *Tri) calcNormal() *vec3 {
 
 //join up the edge penetrations of the tool along the edges of the clay triangle (mutuates segs)
 
-func (ct *Tri) joinEdgePenetrations(segs *segSet, toolMesh *mesh, output *mesh) *segSet {
-	//create the outer loop of the clay triangle by walking the edges and their penetrations
+// func (ct *tri) joinEdgePenetrations(segs *segSet, toolMesh *landMesh, output *landMesh) *segSet {
+// 	//create the outer loop of the clay triangle by walking the edges and their penetrations
 
-	outerSegs := newSegSet()
-	//create segments to close the outer ring(s) from the original triangle
-	//ctn := ct.normal()
+// 	outerSegs := newSegSet()
+// 	//create segments to close the outer ring(s) from the original triangle
+// 	//ctn := ct.normal()
 
-	if len(ct.vi) > 3 {
-		panic("not a traingle")
-	}
+// 	if len(ct.vi) > 3 {
+// 		panic("not a traingle")
+// 	}
 
-	for i := 0; i < 3; i++ { //range ct.Vi { //for each vertex of the clay triangle
+// 	for i := 0; i < 3; i++ { //range ct.Vi { //for each vertex of the clay triangle
 
-		vt := ct.vi[i]
-		vn := ct.vi[(i+1)%3]
+// 		vt := ct.vi[i]
+// 		vn := ct.vi[(i+1)%3]
 
-		edgePens := segs.getEdgePenetrations(output, vt, vn) //get a sorted (by distance from vt) set of edge penetrations
-		if len(edgePens) == 0 {
-			outerSegs.add(vt, vn, 0) //this an unpentrated outer edge of the triangle
-		} else {
-			corner := output.verts[vt].p //the corner of the triangle
-			// ep0 := ct.mesh.verts[edgePens[0]].p //the first penetration point
-			// cornerIsCut := ep0.sub(corner).dot(segs.normalTo(ct.mesh, edgePens[0], ctn)) > 0
-			cornerIsCut := corner.isInside(toolMesh)
-			outerSegs.addFromEdgePens(toolMesh, vt, vn, edgePens, cornerIsCut, output) //collect alternating segments
-		}
+// 		edgePens := segs.getEdgePenetrations(output, vt, vn) //get a sorted (by distance from vt) set of edge penetrations
+// 		if len(edgePens) == 0 {
+// 			outerSegs.add(vt, vn, 0) //this an unpentrated outer edge of the triangle
+// 		} else {
+// 			corner := output.verts[vt].p //the corner of the triangle
+// 			// ep0 := ct.mesh.verts[edgePens[0]].p //the first penetration point
+// 			// cornerIsCut := ep0.sub(corner).dot(segs.normalTo(ct.mesh, edgePens[0], ctn)) > 0
+// 			cornerIsCut := corner.isInside(toolMesh)
+// 			outerSegs.addFromEdgePens(toolMesh, vt, vn, edgePens, cornerIsCut, output) //collect alternating segments
+// 		}
 
-	}
+// 	}
 
-	return outerSegs
+// 	return outerSegs
 
-}
+// }
 
-func (ss *segSet) discardOpenSegments() *segSet {
+// func (ss *segSet) discardOpenSegments() *segSet {
 
-	keep := newSegSet()
-	for _, s := range ss.segs {
-		if s.touchesEdges == 0 || s.touchesEdges == 2 { //it's an internal segment (from a pointy triangle penetrating the face somewhere in the middle) - OR it clips off one corner
-			keep.add(s.from, s.to, s.touchesEdges)
-		} else {
-			if s.connectsToEdge(ss) {
-				keep.add(s.from, s.to, s.touchesEdges)
-			}
-		}
-	}
+// 	keep := newSegSet()
+// 	for _, s := range ss.segs {
+// 		if s.touchesEdges == 0 || s.touchesEdges == 2 { //it's an internal segment (from a pointy triangle penetrating the face somewhere in the middle) - OR it clips off one corner
+// 			keep.add(s.from, s.to, s.touchesEdges)
+// 		} else {
+// 			if s.connectsToEdge(ss) {
+// 				keep.add(s.from, s.to, s.touchesEdges)
+// 			}
+// 		}
+// 	}
 
-	return keep
+// 	return keep
 
-}
+// }
 
 // return the point of intersection of a ray with the triangle
-func (tri *Tri) probePlane(p0 *vec3, p1 *vec3) *vec3 {
+func (tri *tri) probePlane(p0 *vec3, p1 *vec3) *vec3 {
 
+	d := p1.sub(p0) //the direction of the ray
 	if p0.equals(p1) {
 		panic("Degenerate probing ray")
 	}
@@ -385,7 +598,7 @@ func (tri *Tri) probePlane(p0 *vec3, p1 *vec3) *vec3 {
 		panic("normal not normalised")
 	}
 
-	if tri.normal.dot(p1.sub(p0)) == 0 {
+	if tri.normal.dot(d) == 0 {
 		return nil //this is legit, consider a traingle on the x/y plane and an edge of a triangle else where that is paralell with the X/Y plane
 		//panic("ray is parallel to the plane of the triangle")
 	}
@@ -400,8 +613,8 @@ func (tri *Tri) probePlane(p0 *vec3, p1 *vec3) *vec3 {
 		return p1
 	}
 
-	d0 := p0.distanceFromPlaneOf(tri) //))tri.distanceFrom(p0, true)
-	d1 := p1.distanceFromPlaneOf(tri)
+	d0 := p0.signedDistanceFromPlaneOf(tri) //))tri.distanceFrom(p0, true)
+	d1 := p1.signedDistanceFromPlaneOf(tri)
 
 	// if d0 == 0 || d1 == 0 {
 	// 	logit("probe on the plane")
@@ -413,15 +626,7 @@ func (tri *Tri) probePlane(p0 *vec3, p1 *vec3) *vec3 {
 		return nil
 	}
 
-	if d0 < 0 {
-		d0 = -d0
-	}
-
-	if d1 < 0 {
-		d1 = -d1
-	} //becase go has no abs
-
-	t := d0 / (d0 + d1)
+	t := abs(d0) / (abs(d0) + abs(d1))
 
 	if t > 1 {
 		panic("t>1")
@@ -433,8 +638,10 @@ func (tri *Tri) probePlane(p0 *vec3, p1 *vec3) *vec3 {
 
 	if t >= 0 && t <= 1 { //this is significant includes ray ends touching planes
 		pop := p0.tween(p1, t)
-		if pop.distanceFromPlaneOf(tri) > 0.01 {
-			panic("tween is not on the plane")
+		pd := pop.signedDistanceFromPlaneOf(tri)
+		if pd > 0.05 || pd < -0.05 {
+			logit("tween is not on the plane")
+			pop.signedDistanceFromPlaneOf(tri)
 		}
 		return pop
 	}
@@ -443,22 +650,30 @@ func (tri *Tri) probePlane(p0 *vec3, p1 *vec3) *vec3 {
 	return nil
 }
 
-func (s *seg) connectsToEdge(ss *segSet) bool {
-
-	//TODO Implement !
-	return true //false
+func abs(a float64) float64 {
+	if a < 0 {
+		return -a
+	}
+	return a
 }
 
+// func (s *seg) connectsToEdge(ss *segSet) bool {
+
+// 	//TODO Implement !
+// 	return true //false
+// }
+
 //for testing
-func (t *Tri) edge0() *vec3 {
+func (t *tri) edge0() *vec3 {
 	return t.mesh.verts[t.vi[1]].p.sub(t.mesh.verts[t.vi[0]].p)
 }
 
-func (t *Tri) check() {
+func (t *tri) check() {
 
 	m := t.mesh
-	panic("triangle has two or more vertices at the same point")
+
 	if m.verts[t.vi[0]].p.equals(m.verts[t.vi[1]].p) || m.verts[t.vi[0]].p.equals(m.verts[t.vi[2]].p) || m.verts[t.vi[1]].p.equals(m.verts[t.vi[2]].p) {
+		panic("triangle has two or more vertices at the same point")
 	}
 	if m.inAline(t.vi[0], t.vi[1], t.vi[2]) {
 		panic("triangle is a line")
@@ -467,7 +682,7 @@ func (t *Tri) check() {
 }
 
 //return 0, 1 or 2 points of intersection of the edges of the tool triangle, with the plane of triangle a
-func (clayTri *Tri) penetrationsByEdgesOf(toolTri *Tri, isEdgePen bool) *penSet {
+func (clayTri *tri) penetrationsByEdgesOf(toolTri *tri, isEdgePen bool) *penSet {
 
 	pens := NewPenSet()
 
@@ -497,7 +712,7 @@ func (clayTri *Tri) penetrationsByEdgesOf(toolTri *Tri, isEdgePen bool) *penSet 
 
 }
 
-func newTri(m *mesh, vi []uint16, depth int) *Tri {
+func newTri(m *landMesh, depth int, vi ...uint32) *tri {
 
 	if vi[0] == vi[1] || vi[0] == vi[2] || vi[1] == vi[2] {
 		panic("degenerate triangle")
@@ -523,7 +738,7 @@ func newTri(m *mesh, vi []uint16, depth int) *Tri {
 	// }
 
 	//t := Tri{depth: depth, vi: vi, children: []*Tri{}, mesh: m, faceIndex: fi}
-	t := Tri{depth: depth, vi: vi, children: []*Tri{}, mesh: m}
+	t := tri{depth: depth, vi: vi, children: []*tri{}, mesh: m}
 
 	//add this traingle to its verts list of triangles
 	t.addToTouches()
@@ -536,87 +751,88 @@ func newTri(m *mesh, vi []uint16, depth int) *Tri {
 
 	return &t
 }
-func (ct *Tri) internalSegmentsFromPenetrationsOf(tool *mesh, output *mesh) *segSet {
 
-	segs := newSegSet()
+// func (ct *tri) internalSegmentsFromPenetrationsOf(tool *landMesh, output *landMesh) *segSet {
 
-	if ct.mesh == tool {
-		panic("tool and clay are the same mesh")
-	}
+// 	segs := newSegSet()
 
-	ctn := ct.normal
+// 	if ct.mesh == tool {
+// 		panic("tool and clay are the same mesh")
+// 	}
 
-	for j := 0; j < len(tool.fi); j += 3 {
-		tt := tool.triangleFrom(j)
-		ttn := tt.normal
+// 	ctn := ct.normal
 
-		tt.check()
+// 	for j := 0; j < len(tool.fi); j += 3 {
+// 		tt := tool.triangleFrom(j)
+// 		ttn := tt.normal
 
-		//each pen has a toolTri, a claytri, v1, v2 and a point
-		//the v1 and v2 are always the indices of the penetrating edge
+// 		tt.check()
 
-		//facePens := ct.penetrationsByEdgesOf(tt, false) //they *may* be on the edge of the clay triangle - or not
-		t := tt.penetrationsByEdgesOf(ct, true)
-		touchesEdges := len(t.pens)
-		if len(t.pens) == 2 {
-			logit("two edge penetrations")
-		}
-		if len(t.pens) > 2 {
-			panic("More than 2 edge penetrations")
-		}
+// 		//each pen has a toolTri, a claytri, v1, v2 and a point
+// 		//the v1 and v2 are always the indices of the penetrating edge
 
-		if len(t.pens) != 2 {
+// 		//facePens := ct.penetrationsByEdgesOf(tt, false) //they *may* be on the edge of the clay triangle - or not
+// 		t := tt.penetrationsByEdgesOf(ct, true)
+// 		touchesEdges := len(t.pens)
+// 		if len(t.pens) == 2 {
+// 			logit("two edge penetrations")
+// 		}
+// 		if len(t.pens) > 2 {
+// 			panic("More than 2 edge penetrations")
+// 		}
 
-			facePens := ct.penetrationsByEdgesOf(tt, false) //they *may* be on the edge of the clay triangle - or not
+// 		if len(t.pens) != 2 {
 
-			for _, fp := range facePens.pens {
-				if t.penAt(fp.p) == nil {
-					t.pens = append(t.pens, fp)
-				}
-			}
-		}
+// 			facePens := ct.penetrationsByEdgesOf(tt, false) //they *may* be on the edge of the clay triangle - or not
 
-		//we want the union of these - but edgepens should overried facepens at the same point
+// 			for _, fp := range facePens.pens {
+// 				if t.penAt(fp.p) == nil {
+// 					t.pens = append(t.pens, fp)
+// 				}
+// 			}
+// 		}
 
-		// penPair := NewPenSet()
-		// for p := range facePens.pens {
-		// 	oep := edgePens.penAt(p.p) //is there an overring edge penetration at this point?
-		// 	if oep != nil {
-		// 		penPair.pens = append(penPair.pens, p, oep)
-		// 	} else {
-		// 		penPair.pens = append(penPair.pens, p)
-		// 	}
-		// }
+// 		//we want the union of these - but edgepens should overried facepens at the same point
 
-		if len(t.pens) > 0 {
-			if len(t.pens) != 2 {
-				e := ct.penetrationsByEdgesOf(tt, false)
-				f := tt.penetrationsByEdgesOf(ct, true)
-				logit(len(e.pens), len(f.pens))
+// 		// penPair := NewPenSet()
+// 		// for p := range facePens.pens {
+// 		// 	oep := edgePens.penAt(p.p) //is there an overring edge penetration at this point?
+// 		// 	if oep != nil {
+// 		// 		penPair.pens = append(penPair.pens, p, oep)
+// 		// 	} else {
+// 		// 		penPair.pens = append(penPair.pens, p)
+// 		// 	}
+// 		// }
 
-				logit("unmatched pen")
-				continue //break
-			}
-			//pens.append(t)
+// 		if len(t.pens) > 0 {
+// 			if len(t.pens) != 2 {
+// 				e := ct.penetrationsByEdgesOf(tt, false)
+// 				f := tt.penetrationsByEdgesOf(ct, true)
+// 				logit(len(e.pens), len(f.pens))
 
-			v0 := output.addVert(t.pens[0].p, true, 0, 0) //add a vertex at this point (or reuse an existing one)
-			v1 := output.addVert(t.pens[1].p, true, 0, 0) //add a vertex at this point (or reuse an existing one) TODO TC's
+// 				logit("unmatched pen")
+// 				continue //break
+// 			}
+// 			//pens.append(t)
 
-			v := t.pens[1].p.sub(t.pens[0].p) //vector between the pair of penetrations points (of this tool face on this clay face)
+// 			v0 := output.addVert(t.pens[0].p, true, 0, 0) //add a vertex at this point (or reuse an existing one)
+// 			v1 := output.addVert(t.pens[1].p, true, 0, 0) //add a vertex at this point (or reuse an existing one) TODO TC's
 
-			dir := v.cross(ttn).dot(ctn)
-			if dir == 0 {
-				panic("zero cross product dotted")
-			}
-			if dir > 0 { //add a directed segment (this is very significant and affects the winding of holes)
-				segs.add(v0, v1, touchesEdges)
-			} else {
-				segs.add(v1, v0, touchesEdges)
-			}
-		}
+// 			v := t.pens[1].p.sub(t.pens[0].p) //vector between the pair of penetrations points (of this tool face on this clay face)
 
-	}
+// 			dir := v.cross(ttn).dot(ctn)
+// 			if dir == 0 {
+// 				panic("zero cross product dotted")
+// 			}
+// 			if dir > 0 { //add a directed segment (this is very significant and affects the winding of holes)
+// 				segs.add(v0, v1, touchesEdges)
+// 			} else {
+// 				segs.add(v1, v0, touchesEdges)
+// 			}
+// 		}
 
-	return segs
+// 	}
 
-}
+// 	return segs
+
+// }

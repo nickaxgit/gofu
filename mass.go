@@ -46,14 +46,15 @@ type mass struct {
 	//flightOutput     float64 //outputEnum - what am I ? aileron, elevator, rudder, flap, engine
 	//gain             float32 //multiplier/inverter for the (normalised) control input - e.g. convert to radians of aileron deflection
 	//isThrust         bool    //throttles create thrust - control surfaces have their AoA changed
-
+	actuatorTag ActuatorEnum //float64
+	vms         float64
 }
 
 func (m *mass) mass() float64 {
 	//this assumes a density of 10kg/liter
 
-	m3 := 4 / 3 * 3.14159 * m.r * m.r * m.r
-	return m3 * 1000 * 1000 //litres in a m^3
+	m3 := (4 / 3) * 3.14159 * m.r * m.r * m.r
+	return m3 * 1000 * 500 //litres in a m^3
 }
 
 func newMass(p *vec3, r float64, fixed bool, isCoin bool, collideable bool, thing *thing, transFormOf *mass) *mass {
@@ -132,6 +133,10 @@ func (m *mass) fromByteBuffer(buff *bytes.Buffer, withDetail byte, s *state) {
 		binary.Read(buff, le, &sb)
 		m.section = float64(sb)
 
+		mab := byte(0) //mass actuator tag byte
+		binary.Read(buff, le, &mab)
+		m.actuatorTag = ActuatorEnum(mab)
+
 	}
 }
 
@@ -170,6 +175,7 @@ func (m *mass) toByteBuffer(buff *bytes.Buffer, withDetail bool, selected byte) 
 
 		binary.Write(buff, le, m.flip)
 		binary.Write(buff, le, byte(m.section))
+		binary.Write(buff, le, byte(m.actuatorTag))
 
 	}
 
@@ -269,10 +275,11 @@ func (m *mass) resolveMasSpringOverlap(masses []*mass, spring *spring, pen float
 func (m *mass) sideOf(f *face) float64 {
 	//return the signed distance of centre of the mass from the plane of the face
 	a := f.m[0].p
-	b := f.m[1].p
-	c := f.m[2].p //..note a face may have more than three verts
+	//b := f.m[1].p
+	//c := f.m[2].p //..note a face may have more than three verts
 
-	return m.p.distanceFromTriPlane(a, b, c)
+	//return m.p.signedDistanceFromTriPlane(a, b, c)
+	return m.p.signedDistanceFromTriPlane(a, f.normal())
 
 }
 

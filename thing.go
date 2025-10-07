@@ -159,7 +159,7 @@ func (t *thing) toByteBuffer(buff *bytes.Buffer) {
 		binary.Write(buff, le, spring.m2.index)
 		binary.Write(buff, le, spring.collideable)
 		binary.Write(buff, le, float32(spring.restLength))
-		binary.Write(buff, le, byte(spring.flightOutput))
+		binary.Write(buff, le, byte(spring.actuatorTag))
 
 	}
 }
@@ -204,7 +204,7 @@ func (t *thing) fromByteBuffer(buff *bytes.Buffer, e binary.ByteOrder) {
 		fo := byte(0)
 		binary.Read(buff, e, &fo)
 
-		spring := t.AddSpring(t.state.masses[m1], t.state.masses[m2], collideable, actuatorEnum(fo))
+		spring := t.AddSpring(t.state.masses[m1], t.state.masses[m2], collideable, ActuatorEnum(fo))
 		spring.restLength = float64(restLength)
 
 	}

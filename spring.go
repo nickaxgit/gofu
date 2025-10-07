@@ -3,19 +3,19 @@ package main
 import ()
 
 type spring struct {
-	index        int32
-	restLength   float64 `json:"-"` //length is not needed clientside
-	m1           *mass
-	m2           *mass
-	collideable  byte
-	flightOutput float64
-	expansion    float64
+	index       int32
+	restLength  float64 `json:"-"` //length is not needed clientside
+	m1          *mass
+	m2          *mass
+	collideable byte
+	actuatorTag ActuatorEnum //float64
+	expansion   float64
 	//thrust       float64
 	lastError float64 //used for Derivative calculation
 
 }
 
-func NewSpring(m1 *mass, m2 *mass, collideable byte, fo actuatorEnum) *spring {
+func NewSpring(m1 *mass, m2 *mass, collideable byte, actuatorTag ActuatorEnum) *spring {
 	//set rest length at constrcution
 	if m1 == m2 {
 		panic(`degenerate spring (both ends same mass) at construction `)
@@ -25,7 +25,7 @@ func NewSpring(m1 *mass, m2 *mass, collideable byte, fo actuatorEnum) *spring {
 	if restLength == 0 {
 		panic(`zero length spring at construction`)
 	}
-	return &spring{-1, restLength, m1, m2, collideable, float64(fo), 0, 0}
+	return &spring{-1, restLength, m1, m2, collideable, actuatorTag, 0, 0}
 }
 
 // func (s *Spring) crosses(m []*Mass, p1 *Vector, p2 *Vector) bool {
@@ -63,10 +63,13 @@ func (s *spring) stretch() {
 		d = err - s.lastError
 	}
 	s.lastError = err                              //derivative of the error
-	move := springVector.multiply(err*1.0 + d*0.0) //0.1) //stiffness
+	move := springVector.multiply(err*0.6 + d*0.0) //0.1) //stiffness
 
 	m1 := s.m1.mass()
 	m2 := s.m2.mass()
+	if m1 == 0 || m2 == 0 {
+		panic("zero mass ")
+	}
 
 	f1 := move.multiply(m2 / (m1 + m2))
 	f2 := move.sub(f1)
@@ -119,12 +122,12 @@ func (s *spring) send(player *player, state *state) {
 func lineSegmentsCross(a1 *vec2, a2 *vec2, b1 *vec2, b2 *vec2) bool {
 
 	//returns true if the lines a1-a2 and b1-b2 cross
-	d := (a2.X-a1.X)*(b2.Y-b1.Y) - (a2.Y-a1.Y)*(b2.X-b1.X)
+	d := (a2.x-a1.x)*(b2.y-b1.y) - (a2.y-a1.y)*(b2.x-b1.x)
 	if d == 0 {
 		return false
 	} //lines are parallel
-	u := ((b1.X-a1.X)*(b2.Y-b1.Y) - (b1.Y-a1.Y)*(b2.X-b1.X)) / d
-	v := ((b1.X-a1.X)*(a2.Y-a1.Y) - (b1.Y-a1.Y)*(a2.X-a1.X)) / d
+	u := ((b1.x-a1.x)*(b2.y-b1.y) - (b1.y-a1.y)*(b2.x-b1.x)) / d
+	v := ((b1.x-a1.x)*(a2.y-a1.y) - (b1.y-a1.y)*(a2.x-a1.x)) / d
 	return (u >= 0 && u <= 1 && v >= 0 && v <= 1)
 
 }

@@ -46,9 +46,9 @@ type pen struct {
 	ps *penSet //hold a reference to the set a belong to
 	p  *vec3   //the point of penetration
 	//vi	   	 int       //the new vertex of penetration
-	v1, v2     uint16 // for face penetrations, the edge of the tool that penetrated
-	toolTri    *Tri   //the penatrator
-	clayTri    *Tri   //the penetratee
+	v1, v2     uint32 // for face penetrations, the edge of the tool that penetrated
+	toolTri    *tri   //the penatrator
+	clayTri    *tri   //the penetratee
 	used       bool   //has this been incoroporated into a ring
 	isBoundary bool   //is on an edge of the clay triangle - v1 and v2 are of the penetrated edge
 	next       *pen   //penetrations are formed into rings
@@ -59,7 +59,7 @@ type penSet struct {
 	usedCount int
 }
 
-func (ps *penSet) add(p *vec3, v1, v2 uint16, toolTri, clayTri *Tri, isBoundary bool) {
+func (ps *penSet) add(p *vec3, v1, v2 uint32, toolTri, clayTri *tri, isBoundary bool) {
 	ps.pens = append(ps.pens, &pen{ps, p, v1, v2, toolTri, clayTri, false, isBoundary, nil})
 }
 

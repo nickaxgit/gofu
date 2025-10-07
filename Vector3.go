@@ -177,10 +177,10 @@ func (a *vec3) equals(b *vec3) bool {
 	if a.x == b.x && a.y == b.y && a.z == b.z {
 		return true
 	}
-	if a.distanceFrom(b) < 0.0001 {
-		//logit("distance is close enough")
-		return true
-	}
+	// if a.distanceFrom(b) < 0.0001 {
+	// 	//logit("distance is close enough")
+	// 	return true
+	// }
 	return false
 
 }
@@ -308,14 +308,21 @@ func (p *vec3) liesBetween(a *vec3, b *vec3) bool {
 
 //		return bestDist
 //	}
-func (p *vec3) distanceFromPlaneOf(t *Tri) float64 {
+func (p *vec3) signedDistanceFromPlaneOf(t *tri) float64 {
 
 	v := t.mesh.verts
 	a := v[t.vi[0]].p
-	b := v[t.vi[1]].p
-	c := v[t.vi[2]].p
+	//b := v[t.vi[1]].p
+	//c := v[t.vi[2]].p
 
-	return p.distanceFromTriPlane(a, b, c)
+	//return p.signedDistanceFromTriPlane(a, b, c)
+
+	ln := t.normal.length()
+	if ln < .99 || ln > 1.01 {
+		panic("normal not unit length")
+	}
+
+	return p.signedDistanceFromTriPlane(a, t.normal)
 
 }
 
@@ -325,29 +332,26 @@ func (p *vec3) closestPointOnPlane(a, n *vec3) *vec3 {
 	return p.sub(n.multiply(pop.dot(n)))
 }
 
-func (p *vec3) closestPointOnTriPlane(a, b, c *vec3) *vec3 {
+// func (p *vec3) closestPointOnTriPlane(a, b, c *vec3) *vec3 {
 
-	n := b.sub(a).cross(c.sub(a)).normalise() //todo - cache/gen the normals once
+// 	n := b.sub(a).cross(c.sub(a)).normalise() //todo - cache/gen the normals once
 
-	return p.sub(n.multiply(p.distanceFromTriPlane(a, b, c)))
-}
+// 	return p.sub(n.multiply(p.signedDistanceFromTriPlane(a, b, c)))
+// }
 
-func (p *vec3) distanceFromTriPlane(a, b, c *vec3) float64 {
+// can be negative if the point on the side away from the normal
+func (p *vec3) signedDistanceFromTriPlane(a, n *vec3) float64 {
 
 	//get the normal of the triangle
-	n := b.sub(a).cross(c.sub(a)) //.normalise() //todo - cache/gen the normals once
+	//n := b.sub(a).cross(c.sub(a)) //todo - cache/gen the normals once
+	//n := (b.sub(a).normalise()).cross((c.sub(a)).normalise()).normalise() //todo - cache/gen the normals once
 
-	pop := p.sub(a)
-
-	//get the distance from the point to the plane
-	d := pop.dot(n) / n.length()
-
-	return d
+	return p.sub(a).dot(n)
 
 }
 
 // is the point inside the mesh
-func (p *vec3) isInside(m *mesh) bool {
+func (p *vec3) isInside(m *landMesh) bool {
 
 	//todo - add trivial bounds check
 
@@ -367,7 +371,7 @@ func (p *vec3) isInside(m *mesh) bool {
 
 }
 
-func (pop *vec3) isInsideTri(a, b, c *vec3, includeOnEdge bool, includeOnVert bool) bool {
+func (pop *vec3) isInsideTri(a, b, c *vec3, n *vec3, includeOnEdge bool, includeOnVert bool) bool {
 	//get the normal of the triangle
 
 	if a.equals(pop) || b.equals(pop) || c.equals(pop) {
@@ -382,17 +386,17 @@ func (pop *vec3) isInsideTri(a, b, c *vec3, includeOnEdge bool, includeOnVert bo
 	if dp < -.999999 || dp > .999999 {
 		panic("degenerate triangle (has parallel edges)")
 	}
-	cp := ab.cross(bc)
-	n := cp //.normalise() //todo - remove ? (normalising is just a loss of precision)
+	//cp := ab.cross(bc)
+	//n := cp.normalise() //todo - remove ? (normalising is just a loss of precision)
 
 	//project the point onto the plane of the triangle
 	//and get the vector from the point to the plane
 	//j := pop.sub(a)
 
 	//get the distance from the point to the plane
-	d := pop.distanceFromTriPlane(a, b, c)
+	d := pop.signedDistanceFromTriPlane(a, n) // b, c)
 
-	if d > 0.001 || d < -0.001 {
+	if d > 0.1 || d < -0.1 {
 		panic("point not on plane " + strconv.Itoa(int(d*1000)))
 	}
 
