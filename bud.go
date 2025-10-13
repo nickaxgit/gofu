@@ -25,6 +25,13 @@ type segment struct { //of a plant/tree
 	children []*segment
 }
 
+func squareSimpleMesh(id uint16, materialName string) *simpleMesh {
+
+	sm := newSimpleMesh(id, materialName, 4, 2)
+	sm.billboard(newVec3(0, 0, 0), newVec3(0, 1, 0), newVec3(0, 0, -1), 1, 1, 1, 4) //just to set up the arrays
+	return sm
+
+}
 func growTree() *simpleMesh {
 
 	// segmentTypes:=make(map[string]*segmentType, 0)
@@ -43,12 +50,8 @@ func growTree() *simpleMesh {
 	trunk.grow(100, &sprouts)
 	logit("sprouts", sprouts)
 
-	p := make([]float32, 0)
-	n := make([]float32, 0)
-	uv := make([]float32, 0)
-	fi := make([]uint16, 0)
-	m := newSimpleMesh(100, p, n, uv, fi, "water") //newLandMesh("tree", 20000, 10, 100, 100, kinks)
-	trunk.getMesh(m)                               //uses the meshes internal vert and face write pointer (vwp,fwp)
+	m := newSimpleMesh(100, "bark", 3000, 1000) //newLandMesh("tree", 20000, 10, 100, 100, kinks)
+	trunk.getMesh(m)                            //uses the meshes internal vert and face write pointer (vwp,fwp)
 
 	return m
 
@@ -98,13 +101,18 @@ func (seg *segment) grow(age int, sprouts *int) {
 
 func (seg *segment) getMesh(m *simpleMesh) {
 
-	uv := newVector(0, 0)
-	po := m.addVert(seg.p, seg.xAxis, uv) //parent origin
+	//uv := newVec2(0, 0)
+	//po := m.addVert(seg.p, seg.xAxis, uv) //parent origin
+	//n:=newVec3(0,0,-1)
+
+	campos := newVec3(0, 0, -10) //turn billboards to a virtual camera 10metres away
 	for _, child := range seg.children {
 
-		co := m.addVert(child.p, child.xAxis, uv)
-		sw := m.addVert(child.p.add(seg.xAxis.multiply(1)), seg.zAxis, uv)
-		m.addFace(po, co, sw)
+		//co := m.addVert(child.p, child.xAxis, uv)
+		//sw := m.addVert(child.p.add(seg.xAxis.multiply(1)), seg.zAxis, uv)
+		//m.addFace(po, co, sw)
+
+		m.billboard(seg.p, child.p.sub(seg.p), campos, float64(seg.age)/100, float64(child.age)/100, 1, 4) //NB: width and heigs are determined by the non-normalised 'up' vector
 
 		child.getMesh(m) //recurse
 	}

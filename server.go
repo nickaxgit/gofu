@@ -94,7 +94,6 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 	//create a new game
 	id := fmt.Sprintf("%d", uint32(rand.Float32()*1000000))
 	state := NewState(id) //asigns a random game id
-	games[state.filename] = state
 
 	landSize := 10000.0
 	y0pos := state.RandomStartPos(landSize)
@@ -104,10 +103,24 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 	state.runwayEnd = y0pos.add(newVec3(0, 0, -1200))
 	state.runwayWidth = 41
 
+	m := growTree()
+	//m.offset(nearestPen)
+	m.sendTo(p, 20000) //prep for 20k trees
+
+	//flames := squareSimpleMesh(201, "flame")
+	//flames.sendTo(p, 1000) //prep for 1 k flames
+
 	//	origin := p.makeLand(y0pos, 10, 2000, s) //makes and sends land
 	//+/- 10km land = 200 km^2
 	//splits was 9
+
+	p.state.fire = newFireMesh(landSize)
+
+	p.state.fire.ignite(newVec3(10, 0, 10)) //note the position is on the x/z plane
+
 	origin := p.makeLand(y0pos, y0pos.add(newVec3(0, 0, -100)), 12, 500, landSize, false) //makes and sends land
+
+	//p.state.fire.ignite(newVec3(-1, 100, 0.1)) //note the position is on the x/z plane
 
 	//p.makeDozer(y0pos)
 
@@ -153,6 +166,8 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 	logit("Game created", state.filename)
 
 	//state.save("game" + fmt.Sprint(state.gameId) + ".bson")
+
+	games[state.filename] = state
 
 	return p
 }
@@ -496,9 +511,6 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 			// }
 
 			// //grow a tree, offset it, and send it to player
-			m := growTree()
-			//m.offset(nearestPen)
-			m.sendTo(p, 20000) //prep for 20k trees
 
 		} else if kl == "e" {
 			p.setMode(editing)

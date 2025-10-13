@@ -206,21 +206,21 @@ func (m *landMesh) addVert(p *vec3, reUseVert bool, u float64, v float64) uint32
 // 	m.fi = append(m.fi, vi...)
 // }
 
-func (m *landMesh) rain(amount float64) {
+// func (m *landMesh) rain(amount float64) {
 
-	//pour an amount on every vertex proportional to altitude
-	for _, v := range m.verts {
+// 	//pour an amount on every vertex proportional to altitude
+// 	for _, v := range m.verts {
 
-		distFromMid := (v.p.y - (m.height / 2)) / m.height
-		if distFromMid < 0 {
-			distFromMid = 0
-		}
-		//rainfall := (1 - distFromMid) * 1 //rainfall is proportional to altitude - the midground is wettest
-		rainfall := float64(amount)
-		v.wl = v.p.y + rainfall
-	}
+// 		distFromMid := (v.p.y - (m.height / 2)) / m.height
+// 		if distFromMid < 0 {
+// 			distFromMid = 0
+// 		}
+// 		//rainfall := (1 - distFromMid) * 1 //rainfall is proportional to altitude - the midground is wettest
+// 		rainfall := float64(amount)
+// 		v.wl = v.p.y + rainfall
+// 	}
 
-}
+// }
 
 // create a shore by dropping the land vertex to the level of
 func (m *landMesh) flowWater(fis []uint16) {
@@ -248,7 +248,9 @@ func (m *landMesh) flowWater(fis []uint16) {
 func (m *landMesh) updateUVxsFromNormals() {
 	for _, v := range m.verts {
 		v.uv.x = math.Atan2(v.n.x, v.n.z) / float64(6.28)
+
 	}
+
 }
 
 func (m *landMesh) getUVs() []float32 {
@@ -298,51 +300,97 @@ func (m *landMesh) getPositions(asWater bool) []float32 {
 
 }
 
-func (t *tri) getAboveGroundWaterFacesInto(lm *landMesh, fis []uint16, p *uint32) {
+func (t *tri) isUnderwater() bool {
 
+	m := t.mesh
+	a := m.verts[t.vi[0]]
+	b := m.verts[t.vi[1]]
+	c := m.verts[t.vi[2]]
+
+	if a.wl >= a.p.y && b.wl >= b.p.y && c.wl >= c.p.y { //if all verts are below water
+		return true
+	}
+	return false
+}
+
+// func (t *tri) getScorchedFacesInto(fis []uint16, p *uint32) {
+// 	if len(t.children) == 0 {
+// 		j := *p
+// 		if t.scorched {
+// 			fis[j] = uint16(t.vi[0])
+// 			fis[j+1] = uint16(t.vi[1])
+// 			fis[j+2] = uint16(t.vi[2])
+// 			*p += 3
+// 		}
+// 	}
+// 	for _, c := range t.children {
+// 		c.getScorchedFacesInto(fis, p)
+// 	}
+// }
+
+func (t *tri) getFacesInto(fis []uint16, p *uint32, fm *fireMesh, test func(*tri, *fireMesh) bool) {
 	if len(t.children) == 0 {
 		j := *p
-
-		a := lm.verts[t.vi[0]]
-		b := lm.verts[t.vi[1]]
-		c := lm.verts[t.vi[2]]
-
-		//if this water triangle is entirely above the local ground, include it
-		//if a.wl > a.p.y && b.wl > b.p.y && c.wl > c.p.y {
-		if a.wl > a.p.y || b.wl > b.p.y || c.wl > c.p.y { //if any vertext is ABOVE ground
-			//if a.wl == b.wl && b.wl == c.wl {
+		if test(t, fm) {
 			fis[j] = uint16(t.vi[0])
 			fis[j+1] = uint16(t.vi[1])
 			fis[j+2] = uint16(t.vi[2])
 			*p += 3
 		}
-		//}
 	}
-
 	for _, c := range t.children {
-		c.getAboveGroundWaterFacesInto(lm, fis, p)
+		c.getFacesInto(fis, p, fm, test)
 	}
-
 }
+
+// func (t *tri) getWetFacesInto(fis []uint16, p *uint32) {
+
+// 	if len(t.children) == 0 {
+// 		j := *p
+
+// 		if t.isUnderwater() {
+// 			//if a.wl == b.wl && b.wl == c.wl {
+// 			fis[j] = uint16(t.vi[0])
+// 			fis[j+1] = uint16(t.vi[1])
+// 			fis[j+2] = uint16(t.vi[2])
+// 			*p += 3
+// 		}
+// 		//}
+// 	}
+
+// 	for _, c := range t.children {
+// 		c.getWetFacesInto(fis, p)
+// 	}
+
+// }
 
 // construct a list of vertex index triples (faces) for bottom level triangles
-func (t *tri) getFacesInto(fis []uint16, p *uint32) {
+// func (t *tri) getDryFacesInto(fis []uint16, p *uint32) {
 
-	if len(t.children) == 0 {
-		j := *p
+// 	if len(t.children) == 0 {
 
-		fis[j] = uint16(t.vi[0])
-		fis[j+1] = uint16(t.vi[1])
-		fis[j+2] = uint16(t.vi[2])
+// 		v := t.mesh.verts
+// 		a := v[t.vi[0]]
+// 		b := v[t.vi[1]]
+// 		c := v[t.vi[2]]
 
-		*p += 3
-	}
+// 		//only include faces that have at least one vertex above water level
+// 		if a.p.y >= a.wl || b.p.y >= b.wl || c.p.y >= c.wl {
+// 			j := *p
 
-	for _, c := range t.children {
-		c.getFacesInto(fis, p)
-	}
+// 			fis[j] = uint16(t.vi[0])
+// 			fis[j+1] = uint16(t.vi[1])
+// 			fis[j+2] = uint16(t.vi[2])
 
-}
+// 			*p += 3
+// 		}
+// 	}
+
+// 	for _, c := range t.children {
+// 		c.getDryFacesInto(fis, p)
+// 	}
+
+// }
 
 func (m *landMesh) getDepths() []float32 {
 	vc := uint32(len(m.verts))
@@ -507,55 +555,78 @@ func thingsToBytes(things []*thing) []byte {
 
 }
 
-func (t *tri) fetchTrees(depth int, positions *[]float32, wp *int, landTri *tri, camPos *vec3, hidden *int) {
+func (t *tri) scorchedAt(p *vec3) bool {
+	if len(t.children) == 0 {
+		return t.scorched
+	} else {
+		for _, c := range t.children {
+			if c.contains(p, true, true) {
+				return c.scorchedAt(p)
+			}
+		}
+		return false
+	}
+}
+
+func (t *tri) fetchTrees(depth int, positions *[]float32, bbm *simpleMesh, wp *int, landTri *tri, camPos *vec3, hidden *int) {
 
 	if *wp >= len(*positions)-3 {
 		return
 	}
 
+	mid := t.centre()
+	up := newVec3(0, 1, 0)
+
 	if t.depth == depth {
-		a := t.mesh.verts[t.vi[0]]
-		b := t.mesh.verts[t.vi[1]]
-		c := t.mesh.verts[t.vi[2]]
-		if a.p.y <= a.wl || b.p.y <= b.wl || c.p.y <= c.wl {
-			//one of the verts is underwater - no trees here
-			return
-		}
-		//place a tree here
-
-		mid := t.centre()
-		treeTop := mid.clone()
-		treeTop.y += 3
-
-		pop := t.probePlane(treeTop, camPos) //fire a 10km ray
-		if pop != nil {
-			if t.contains(pop, true, true) {
-				*hidden++
+		if !t.scorchedAt(mid) {
+			a := t.mesh.verts[t.vi[0]]
+			b := t.mesh.verts[t.vi[1]]
+			c := t.mesh.verts[t.vi[2]]
+			if a.p.y <= a.wl || b.p.y <= b.wl || c.p.y <= c.wl {
+				//one of the verts is underwater - no trees here
 				return
 			}
+			//place a tree here
+
+			if mid.distanceFrom(camPos) < 100 {
+				treeTop := mid.clone()
+				treeTop.y += 3
+
+				pop := t.probePlane(treeTop, camPos) //fire a 10km ray
+				if pop != nil {
+					if t.contains(pop, true, true) {
+						*hidden++
+						return
+					}
+				}
+
+				//pens := make([]*vec3, 100)
+				//count := int(0)
+				//landTri.probe(treeTop, camPos, pens, &count) //can we see the camera from the tree top
+
+				(*positions)[*wp] = float32(mid.x)
+				(*positions)[*wp+1] = float32(mid.y)
+				(*positions)[*wp+2] = float32(mid.z)
+				*wp += 3
+			} else {
+				bbm.billboard(mid, up, camPos, 20, 20, 20, 4) //billboard tree
+
+			}
 		}
-
-		//pens := make([]*vec3, 100)
-		//count := int(0)
-		//landTri.probe(treeTop, camPos, pens, &count) //can we see the camera from the tree top
-
-		(*positions)[*wp] = float32(mid.x)
-		(*positions)[*wp+1] = float32(mid.y)
-		(*positions)[*wp+2] = float32(mid.z)
-		*wp += 3
-
 	} else {
 		for _, c := range t.children {
-			c.fetchTrees(depth, positions, wp, landTri, camPos, hidden)
+			c.fetchTrees(depth, positions, bbm, wp, landTri, camPos, hidden)
 		}
 	}
+
 }
 
 func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeight float64, size float64, sendIt bool) *vec3 {
 
 	kinks := []float64{1.0, 0.8, 1.0, 0.5, 0.25, 0.125, 1.0 / 16, 1.0 / 32, 1.0 / 64, 1.0 / 128, 1.0 / 256, 1.0 / 200, 1.0 / 300}
-	player.landMesh = newLandMesh("land", 65000, splits, maxHeight, size, kinks) //&state.land    //get a reference to state.land (saves a lot of typing)
-	land := player.landMesh
+	//player.landMesh = newLandMesh("land", 65000, splits, maxHeight, size, kinks) //&state.land    //get a reference to state.land (saves a lot of typing)
+	//land := player.landMesh
+	land := newLandMesh("land", 65000, splits, maxHeight, size, kinks) //&state.land    //get a reference to state.land (saves a lot of typing)
 	player.lastLandPos = position.clone()
 	player.lastCamDir = focus.sub(position).normalise()
 
@@ -571,8 +642,7 @@ func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeigh
 	land.addVert(newVec3(size, 0, -size), false, 0, 0)
 	land.addVert(newVec3(-size, 0, -size), false, 0, 0)
 
-	t := newTri(land, 0, 0, 1, 2)
-	player.landTri = t
+	landTri := newTri(land, 0, 0, 1, 2)
 
 	ts := time.Now()
 
@@ -586,135 +656,133 @@ func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeigh
 	//just an even split - no proximity to focus
 	//t.splitDownTo(splits) //approx 131k verts
 
-	logit(len(t.mesh.verts), " verts")
+	logit(len(landTri.mesh.verts), " verts")
 
-	t.splitIfNeeded(position, focus) //split the triangle into 4 recursively
-	t.patch()
+	landTri.splitIfNeeded(position, focus) //split the triangle into 4 recursively
+	landTri.patch()
 
 	//patch convert and send
 
 	s := player.state
-	if s.runwayStart != nil {
-		//project the runway up onto the land
-		s.runwayStart, _ = t.probeLand(s.runwayStart)
-		//s.runwayEnd, _ = t.probeLand(s.runwayEnd)
-		s.runwayEnd.y = s.runwayStart.y //keep the runway level with the start point
+	//if s.runwayStart != nil {
+	//project the runway up onto the land
+	s.runwayStart, _ = landTri.probeLand(s.runwayStart)
+	//s.runwayEnd, _ = t.probeLand(s.runwayEnd)
+	s.runwayEnd.y = s.runwayStart.y //keep the runway level with the start point
 
-		t.plough(s.runwayStart, s.runwayEnd, s.runwayWidth) //recurse down through and plough a runway
+	landTri.plough(s.runwayStart, s.runwayEnd, s.runwayWidth) //recurse down through and plough a runway
 
-		//probe the land at the four corners of the runway and add two triangles
-		cross := s.runwayStart.sub(s.runwayEnd).normalise().cross(newVec3(0, 1, 0)).multiply(s.runwayWidth / 2)
-		bl := s.runwayStart.sub(cross)
-		br := s.runwayStart.add(cross)
-		tl := s.runwayEnd.sub(cross)
-		tr := s.runwayEnd.add(cross)
-		var n *vec3
-		bl, _ = t.probeLand(bl) //find the ground surface
-		tl, _ = t.probeLand(tl) //find the ground surface
-		br, _ = t.probeLand(br) //find the ground surface
-		tr, n = t.probeLand(tr) //find the ground surface
+	//probe the land at the four corners of the runway and add two triangles
+	cross := s.runwayStart.sub(s.runwayEnd).normalise().cross(newVec3(0, 1, 0)).multiply(s.runwayWidth / 2)
+	bl := s.runwayStart.sub(cross)
+	br := s.runwayStart.add(cross)
+	tl := s.runwayEnd.sub(cross)
+	tr := s.runwayEnd.add(cross)
+	//var n *vec3
+	bl, _ = landTri.probeLand(bl) //find the ground surface
+	tl, _ = landTri.probeLand(tl) //find the ground surface
+	br, _ = landTri.probeLand(br) //find the ground surface
+	tr, _ = landTri.probeLand(tr) //find the ground surface
 
-		if tl.y != br.y || n.y != 1 {
-			logit("runway is not level")
-		}
+	//if tl.y != br.y || n.y != 1 {
+	//		logit("runway is not level")
+	//	}
 
-		bl.y += 0.05
-		tl.y += 0.05
-		br.y += 0.05
-		tr.y += 0.05
+	bl.y += 0.05
+	tl.y += 0.05
+	br.y += 0.05
+	tr.y += 0.05
 
-		runwayMesh := makeSimpleMesh(3, 2, 4, "runway") //2 faces
-		up := newVec3(0, 1, 0)
-		bli := runwayMesh.addVert(bl, up, &vec2{0, 1})
-		bri := runwayMesh.addVert(br, up, &vec2{1, 1})
-		tli := runwayMesh.addVert(tl, up, &vec2{0, 0})
-		tri := runwayMesh.addVert(tr, up, &vec2{1, 0})
+	runwayMesh := newSimpleMesh(3, "runway", 4, 2) //2 faces
+	up := newVec3(0, 1, 0)
+	bli := runwayMesh.addVert(bl, up, &vec2{0, 1})
+	bri := runwayMesh.addVert(br, up, &vec2{1, 1})
+	tli := runwayMesh.addVert(tl, up, &vec2{0, 0})
+	trix := runwayMesh.addVert(tr, up, &vec2{1, 0})
 
-		runwayMesh.addFace(tli, bri, bli)
-		runwayMesh.addFace(tli, tri, bri)
+	runwayMesh.addFace(tli, bri, bli)
+	runwayMesh.addFace(tli, trix, bri)
 
-		logit("splitting took", time.Since(ts).Milliseconds())
+	logit("splitting took", time.Since(ts).Milliseconds())
+	//}
 
-		//gather triangles within the fov
+	waterlines := []float64{maxHeight * 0.71, maxHeight * 0.41, 0.1, -maxHeight * 0.52}
 
-		// mapDown := make(map[uint32]uint32, 0)
-		// inView := newTri(land, 0, 0, 1, 2) //make a new root level triangle (with no parent)
+	landTri.shoreLines(waterlines) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
 
-		// //extract triangles from the big mesh into inView (a new triangle heirarchy)
-		// player.landTri.extract(position, focus, inView, mapDown)
-		// //inView.patch()
+	for i, wl := range waterlines {
+		land.flood(wl) //set the waterlevel of all land below this waterline
 
-		// //need to pass in mapDown so we can create a sub 65k mesh
+		if i != len(waterlines)-1 {
+			for lake := 0; lake < 10; lake++ {
+				drained := false
+				for _, v := range land.verts {
+					if v.wl > v.p.y+300 {
+						count := 0
+						land.drain(v, wl, &count)
 
-		// orig := 0
-		// player.landTri.countChildren(&orig)
-		// logit("orig", orig, "children")
+						logit("drained", count)
+						drained = true
 
-		// count := 0
-		// inView.countChildren(&count)
-		// logit("counted", count, "children")
-
-		//small := inView.toSimpleMesh(1, player.landTri.mesh, "land", mapDown)
-		//small := inView.toSimpleMesh(1, player.landTri.mesh, "land", mapDown)
-		//small.sendTo(player)
-
-		if sendIt {
-
-			//what is a landmesh - vs
-
-			waterlines := []float64{maxHeight * 0.71, maxHeight * 0.41, 0.1, -maxHeight * 0.52}
-
-			player.landTri.shoreLines(waterlines) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
-			smallLandMesh := player.landTri.toSimpleMesh(2, player.landMesh, "land", false)
-
-			smallLandMesh.sendTo(player, 1)
-
-			// wires := player.landTri.toSimpleMesh(32, player.landMesh, "whiteWires", false)
-			// wires.sendTo(player)
-
-			runwayMesh.sendTo(player, 1)
-
-			for i, wl := range waterlines {
-				player.landMesh.flood(wl) //set the waterlevel of all land below this waterline
-
-				if i != len(waterlines)-1 {
-					for lake := 0; lake < 10; lake++ {
-						drained := false
-						for _, v := range player.landMesh.verts {
-							if v.wl > v.p.y+300 {
-								count := 0
-								player.landMesh.drain(v, wl, &count)
-
-								logit("drained", count)
-								drained = true
-
-								break
-							}
-						}
-						if !drained {
-							logit("no more lakes to drain")
-							break
-						}
+						break
 					}
 				}
-
-				waterMesh := player.landTri.toSimpleMesh(uint16(4+i), player.landMesh, "water", true)
-
-				waterMesh.sendTo(player, 1)
+				if !drained {
+					logit("no more lakes to drain")
+					break
+				}
 			}
+		}
 
-			//need to do treews after waterlines so we don't get trees underwater
-			treePositions := make([]float32, 100000) ///3000 xyz floats = 1000 trees
-			wp := 0
-			hidden := 0
-			t.fetchTrees(9, &treePositions, &wp, player.landTri, position, &hidden)
-			sendTrees(player, 100, treePositions[:wp])
+		funcIsUnderwater := func(t *tri, fm *fireMesh) bool { return t.isUnderwater() }
+		waterMesh := landTri.toSimpleMesh(uint16(4+i), land, nil, "water", true, funcIsUnderwater)
 
+		if sendIt {
+			waterMesh.sendTo(player, 1)
 		}
 	}
 
-	pos, _ := t.probeLand(focus)
+	if sendIt {
 
+		runwayMesh.sendTo(player, 1)
+
+		isLand := func(t *tri, fm *fireMesh) bool {
+			if t.isUnderwater() {
+				return false
+			}
+			if fm.scorchedAt(t) {
+				t.scorched = true
+			}
+			return !t.scorched
+		}
+		smallLandMesh := landTri.toSimpleMesh(2, land, player.state.fire, "land", false, isLand)
+
+		funcIsScorchedLand := func(t *tri, fm *fireMesh) bool { return t.scorched } //fm.scorchedAt(t) }
+		scorchedLand := landTri.toSimpleMesh(56, land, player.state.fire, "scorched", false, funcIsScorchedLand)
+
+		smallLandMesh.sendTo(player, 1) //send them together - or transient gaps can appear
+		scorchedLand.sendTo(player, 1)
+
+		// wires := landTri.toSimpleMesh(32, land, "whiteWires", false,isLand)
+		// wires.sendTo(player, 1)
+
+		//need to do trees after waterlines so we don't get trees underwater
+		treePositions := make([]float32, 100000) ///3000 xyz floats = 1000 trees
+		wp := 0
+		hidden := 0
+
+		//TODO only reposition/resend trees in new positions (most trees do not need resending)
+		treeBillboards := newSimpleMesh(105, "tree", 4000, 1000)
+		landTri.fetchTrees(9, &treePositions, treeBillboards, &wp, landTri, position, &hidden)
+		sendInstancePositions(player, 100, treePositions[:wp])
+		treeBillboards.sendTo(player, 1)
+
+		logit("sent", wp/3, "trees (hid", hidden, ")")
+
+	}
+	pos, _ := landTri.probeLand(focus)
+
+	player.landTri = landTri
 	return pos
 
 }
@@ -798,24 +866,21 @@ func (m *landMesh) drain(v *vert, wl float64, count *int) {
 	}
 }
 
-func (tri *tri) toSimpleMesh(id uint16, lm *landMesh, material string, asWater bool) *simpleMesh {
+func (tri *tri) toSimpleMesh(id uint16, lm *landMesh, fm *fireMesh, material string, asWater bool, faceTest func(*tri, *fireMesh) bool) *simpleMesh {
 
 	//vc := uint32(len(lm.verts)) //vertex count
 	vc := uint32(len(lm.verts))  //vertex count
 	fis := make([]uint16, vc*10) //there will actually be many less faces than verts - but we need 3 uints per face
 
 	wp := uint32(0)
-	if asWater {
-		tri.getAboveGroundWaterFacesInto(lm, fis, &wp) //populate Fis (recursivley from the root triangle)
-	} else {
-		tri.getFacesInto(fis, &wp) //populate Fis (recursivley from the root triangle)
-	}
+
+	tri.getFacesInto(fis, &wp, fm, faceTest) //populate Fis (recursivley from the root triangle)
 
 	fis = fis[:wp] //truncate at the write pointer
 
 	normals := lm.getNormals(asWater) //we must get normals (becuase it calculates them) before updating UVx's
 	lm.updateUVxsFromNormals()
-	return newSimpleMesh(id, lm.getPositions(asWater), normals, lm.getUVs(), fis, material)
+	return newFilledSimpleMesh(id, lm.getPositions(asWater), normals, lm.getUVs(), fis, material)
 
 }
 

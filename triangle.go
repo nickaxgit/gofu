@@ -26,6 +26,7 @@ type tri struct {
 	children []*tri
 	mesh     *landMesh //a reference to the mesh this tri is part of (that the vi's point into v's of)
 	normal   *vec3
+	scorched bool
 
 	//faceIndex uint16
 	//isPatch   bool
@@ -41,6 +42,67 @@ func (v *vert) touch(t ...*tri) {
 
 func newVert(p *vec3, u, v float64) *vert {
 	return &vert{p: p, uv: vec2{u, v}, n: &vec3{0, 0, 0}, touches: make(map[*tri]bool, 6)}
+}
+
+// func (ft *fTri) find(p *vec3, fm *fireMesh) *fTri {
+// 	if len(ft.children) == 0 {
+// 		if ft.contains(p, fm) {
+// 			return ft
+// 		}
+// 		return nil
+// 	}
+// 	for _, c := range ft.children {
+// 		f := c.find(p, fm)
+// 		if f != nil {
+// 			return f
+// 		}
+// 	}
+// 	logit("warn: fTri find failed to find a tri")
+// 	return nil
+// }
+
+func (ft *fTri) find(p *vec3, fm *fireMesh) *fTri {
+
+	if ft.fastContains(p, fm) {
+		if len(ft.children) == 0 {
+			return ft
+		}
+
+		scorched := 0
+		for _, c := range ft.children {
+			if c.flames == -1 {
+				scorched++
+			}
+			f := c.find(p, fm)
+			if f != nil {
+				return f
+			}
+		}
+		if scorched == len(ft.children) {
+			ft.flames = -1 //mark parent as scorched
+			ft.children = nil
+		}
+	} else {
+		return nil
+	}
+	logit("warn: fTri find failed to find a tri")
+	return nil
+}
+
+func (fm *fireMesh) scorchedAt(t *tri) bool {
+	p := t.centre()
+	p.y = 0
+
+	leaf := fm.root.find(p, fm) //once leafs have burned out - they can be retracted into a single scorched parent
+
+	if leaf == nil {
+		return false //no leaf node here
+	}
+	if leaf.flames == -1 || leaf.flames > 10 {
+		return true
+	}
+
+	return false
 }
 
 func (t *tri) addChild(vi ...uint32) *tri {
@@ -466,7 +528,7 @@ func (t *tri) probe(p0 *vec3, p1 *vec3, pens []*vec3, penCount *int) []*vec3 {
 
 }
 
-func (t *tri) probeLand(p *vec3) (surfacePoint *vec3, surfaceNormal *vec3) {
+func (t *tri) probeLand(p *vec3) (surfacePoint *vec3, surfaceTri *tri) {
 
 	pc := p.clone()
 	pc.y = 0
@@ -476,7 +538,7 @@ func (t *tri) probeLand(p *vec3) (surfacePoint *vec3, surfaceNormal *vec3) {
 		return nil, nil
 	}
 	//fire a ray through that plane
-	return found.probePlane(newVec3(p.x, -100000, p.z), newVec3(p.x, 100000, p.z)), found.normal
+	return found.probePlane(newVec3(p.x, -100000, p.z), newVec3(p.x, 100000, p.z)), found
 }
 
 func (t *tri) vProbe(p *vec3) *tri {

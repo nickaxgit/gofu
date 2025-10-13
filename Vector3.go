@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
-	"strconv"
+	//	"strconv"
 )
 
 type vec3 struct {
@@ -397,7 +397,7 @@ func (pop *vec3) isInsideTri(a, b, c *vec3, n *vec3, includeOnEdge bool, include
 	d := pop.signedDistanceFromTriPlane(a, n) // b, c)
 
 	if d > 0.1 || d < -0.1 {
-		panic("point not on plane " + strconv.Itoa(int(d*1000)))
+		//		panic("point not on plane " + strconv.Itoa(int(d*1000)))
 	}
 
 	//get the vectors from the projected point to the vertices of the triangle
@@ -437,7 +437,7 @@ func (pop *vec3) isInsideTri(a, b, c *vec3, n *vec3, includeOnEdge bool, include
 	dc := nc.dot(n)
 
 	if da == 0 || db == 0 || dc == 0 {
-		panic("collapsed normal")
+		//panic("collapsed normal") /
 	}
 	//if the dot products are all positive, then the point is inside the triangle
 	if da > 0 && db > 0 && dc > 0 {

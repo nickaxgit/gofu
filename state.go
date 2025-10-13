@@ -122,7 +122,8 @@ type state struct { //the DATA of a game in progress - it can be entirely replac
 	runwayWidth float64
 	stretchDir  bool
 	zeroG       bool
-	sounds      uint16 //next sound handle
+	sounds      uint16    //next sound handle
+	fire        *fireMesh //messh/root triangle of the fire map
 }
 
 func (s *state) addLabel(l *label) *label {
@@ -211,8 +212,37 @@ type simpleMesh struct {
 	fwp          uint16
 }
 
-func newSimpleMesh(id uint16, p []float32, n []float32, uv []float32, fi []uint16, materialName string) *simpleMesh {
-	return &simpleMesh{id: id, pad: 0, p: p, n: n, uv: uv, fi: fi, materialName: materialName}
+func newSimpleMesh(id uint16, materialName string, numVerts int, numFaces int) *simpleMesh {
+	// p []float32, n []float32, uv []float32, fi []uint16
+	return &simpleMesh{id: id, pad: 0, p: make([]float32, numVerts*3), n: make([]float32, numVerts*3), uv: make([]float32, numVerts*2), fi: make([]uint16, numFaces*3), materialName: materialName}
+}
+
+func (sm *simpleMesh) billboard(p *vec3, up *vec3, camPos *vec3, widthBottom float64, widthTop float64, height float64, shape int) {
+
+	//	up := newVec3(0, 1, 0)
+	toCam := camPos.sub(p).normalise()
+	right := toCam.cross(up).normalise()
+	rightTop := right.multiply(widthTop * .5)
+	rightBottom := right.multiply(widthBottom * .5)
+
+	top := p.add(up.multiply(height))
+
+	v0 := sm.addVert(p.sub(rightBottom), toCam, newVec2(0, 0))
+	v1 := sm.addVert(p.add(rightBottom), toCam, newVec2(1, 0))
+
+	//triangular billboard (pine trees/flames)
+	if shape == 3 {
+		v2 := sm.addVert(top, toCam, newVec2(0.5, 1))
+		sm.addFace(v0, v1, v2)
+		return
+	}
+
+	v2 := sm.addVert(top.add(rightTop), toCam, newVec2(1, 1))
+	v3 := sm.addVert(top.sub(rightTop), toCam, newVec2(0, 1))
+
+	sm.addFace(v0, v1, v2)
+	sm.addFace(v2, v3, v0)
+
 }
 
 func (m *simpleMesh) offset(offset *vec3) *simpleMesh {
@@ -224,14 +254,8 @@ func (m *simpleMesh) offset(offset *vec3) *simpleMesh {
 	return m
 }
 
-func makeSimpleMesh(id uint16, numfaces int32, numVerts int32, materialName string) *simpleMesh {
-
-	p := make([]float32, 0, numVerts*3) //inital length of zero - because we're using appends
-	n := make([]float32, 0, numVerts*3)
-	uv := make([]float32, 0, numVerts*2)
-	fi := make([]uint16, 0, numfaces*3)
-
-	return newSimpleMesh(id, p, n, uv, fi, materialName)
+func newFilledSimpleMesh(id uint16, p []float32, n []float32, uv []float32, fi []uint16, materialName string) *simpleMesh {
+	return &simpleMesh{id: id, pad: 0, p: p, n: n, uv: uv, fi: fi, materialName: materialName, vwp: uint16(len(p) / 3), fwp: uint16(len(fi) / 3)}
 }
 
 func (sm *simpleMesh) addVert(p *vec3, n *vec3, uv *vec2) uint16 {
@@ -261,7 +285,7 @@ func (sm *simpleMesh) addFace(v1, v2, v3 uint16) {
 
 // }
 
-func sendTrees(p *player, meshId uint16, positions []float32) {
+func sendInstancePositions(p *player, meshId uint16, positions []float32) {
 
 	instanceCount := uint16((len(positions) - 1) / 3)
 	buff := new(bytes.Buffer)
@@ -414,19 +438,28 @@ func (state *state) step(subSteps int) { //this is called every 33ms from stepWo
 		//updateLabels(state)
 	}
 
+	state.fire.burn(state.fire.root)
+
 	for _, p := range state.players {
 		if p.socket != nil {
+
+			//sendInstancePositions(p, 201, flamePositions[:wp])
+
 			if state.running && p.follow {
 				p.camera.follow(p.vehicle)
 			}
 			p.sendCamera()
 			p.sendLabels()
 
-			dist := p.camera.position.distanceFrom(p.lastLandPos)
-			dir := p.camera.direction.dot(p.lastCamDir)
-			if dist > 100 || dir < .95 {
-				p.makeLand(p.camera.position, p.camera.position.add(p.camera.direction), 12, 500, 10000.0, true) //makes and sends new land
+			if p.lastLandPos != nil {
 
+				dist := p.camera.position.distanceFrom(p.lastLandPos)
+				dir := p.camera.direction.dot(p.lastCamDir)
+				if dist > 100 || dir < .95 {
+					go p.getFlames()
+					go p.makeLand(p.camera.position.clone(), p.camera.position.add(p.camera.direction), 12, 500, 10000.0, true) //makes and sends new land
+
+				}
 			}
 
 			//remake land when we have moved
@@ -843,23 +876,23 @@ func (state *state) resolvePenetrations() bool {
 			np := state.nearestPlayer(m.p)
 			if np != nil {
 				if np.landTri != nil {
-					surface, normal := np.landTri.probeLand(newVec3(m.p.x, 0, m.p.z))
+					impact, surface := np.landTri.probeLand(newVec3(m.p.x, 0, m.p.z))
 					//am i beneath the land
-					if surface != nil {
+					if impact != nil {
 
-						pen := surface.y - (m.p.y - m.r)
+						pen := impact.y - (m.p.y - m.r)
 
 						if pen > 0 { //m.p.y < surface.y+m.r {
 							v := m.p.sub(m.op)
-							vr := v.reflect(normal)
+							vr := v.reflect(surface.normal)
 
 							if pen > 0.1 {
 								logit("deep penetration", v.length()*30, "m/s")
 							}
 
-							m.p.y = surface.y + m.r
+							m.p.y = impact.y + m.r
 
-							vr = vr.sub(normal.multiply(vr.dot(normal) * .8)) //kill 80% of the vertical velocity (20% bounce)
+							vr = vr.sub(surface.normal.multiply(vr.dot(surface.normal) * .8)) //kill 80% of the vertical velocity (20% bounce)
 
 							if m.axle != nil {
 								axle := m.axle.p.sub(m.p).normalise()

@@ -58,8 +58,8 @@ type player struct {
 	socket           *websocket.Conn // a pointer to the socket - no players shoundnt have a socket, sockets should have a player (more than one socket can feed a player)
 	controllerSocket *websocket.Conn //each player can only have one controller - but more than one player can drive/fly the same vehicle(e.g. pilot/co-pilot)
 
-	landTri  *tri
-	landMesh *landMesh
+	landTri *tri
+	//landMesh *landMesh
 
 	lastLandPos *vec3 //where were we when we last generated land
 	lastCamDir  *vec3 //direction of the camera when we last generated land
@@ -849,7 +849,7 @@ func NewPlayer(id uint32, name string, state *state, socket *websocket.Conn) *pl
 		lives:          3,
 		socket:         socket,
 		grid:           &grid{origin: gridOrigin, Xaxis: gridX, Yaxis: gridY},
-		cursor:         newVector(0, 0),
+		cursor:         newVec2(0, 0),
 		grab:           nil,
 		keys:           make(map[string]bool), //which keys are pressed
 		selectedMasses: make(map[*mass]bool),  //which masses are selected, values are the order in which they were selected

@@ -9,12 +9,12 @@ type vec2 struct {
 	y float64
 }
 
-func newVector(x, y float64) *vec2 {
+func newVec2(x, y float64) *vec2 {
 	return &vec2{x, y}
 }
 
 func (a *vec2) add(b *vec2) *vec2 {
-	return newVector(a.x+b.x, a.y+b.y)
+	return newVec2(a.x+b.x, a.y+b.y)
 }
 
 func hypo(adjacent, opposite float64) float64 {
@@ -39,11 +39,11 @@ func (a *vec2) addIn(b vec2) {
 }
 
 func (a *vec2) multiply(f float64) *vec2 {
-	return newVector(a.x*f, a.y*f)
+	return newVec2(a.x*f, a.y*f)
 }
 
 func (a *vec2) subtract(b *vec2) *vec2 {
-	return newVector(a.x-b.x, a.y-b.y)
+	return newVec2(a.x-b.x, a.y-b.y)
 }
 
 func (a *vec2) normalise() *vec2 {
@@ -62,14 +62,14 @@ func (a *vec2) Equals(b *vec2) bool {
 func (p vec2) rotate(angle float64) *vec2 {
 	x := p.x*math.Cos(angle) - p.y*math.Sin(angle)
 	y := p.x*math.Sin(angle) + p.y*math.Cos(angle)
-	return newVector(x, y)
+	return newVec2(x, y)
 }
 
 func (a *vec2) dot(b *vec2) float64 {
 	return a.x*b.x + a.y*b.y
 }
 
-func (a vec2) cross(b vec2) float64 {
+func (a vec2) cross(b *vec2) float64 {
 	return (a.x * b.y) - (a.y * b.x)
 }
 
