@@ -27,6 +27,7 @@ type tri struct {
 	mesh     *landMesh //a reference to the mesh this tri is part of (that the vi's point into v's of)
 	normal   *vec3
 	scorched bool
+	cull     bool
 
 	//faceIndex uint16
 	//isPatch   bool
@@ -151,7 +152,7 @@ func (t *tri) addChild(vi ...uint32) *tri {
 func (t *tri) patch() {
 
 	m := t.mesh
-	if len(t.children) == 0 {
+	if len(t.children) == 0 && !t.cull {
 
 		for i := 0; i < 3; i++ {
 
@@ -322,30 +323,51 @@ func (t *tri) splitIfNeeded(pos *vec3, focus *vec3) {
 	//   / \  / \
 	//  /___\/___\
 	// 2     4    1
+	if t.depth >= len(t.mesh.kinks) {
+		return
+	}
 
-	if t.depth < t.mesh.splits {
+	//triCentre := t.centre()
 
-		//triCentre := t.centre()
-
-		//if t.hasVertexInFrontOf(pos,focus){
-		//if t.facesTowards(focus.sub(pos)) { //is the traingle forward facing ? (relative to the camera)
-		if t.depth < 5 || !t.allVertsLeftOrRightOfFov(pos, focus, .4) { //high numbers here gives a narrow field of view getting split
+	//if t.hasVertexInFrontOf(pos,focus){
+	//if t.facesTowards(focus.sub(pos)) { //is the traingle forward facing ? (relative to the camera)
+	camDir := focus.sub(pos).normalise()
+	inFov := !t.allVertsLeftOrRightOfFov(pos, focus, .4)
+	if t.depth < 5 || inFov { //high numbers here gives a narrow field of view getting split
+		//if t.normal.dot(camDir) < -0.1 { //is the traingle forward facing ? (relative to the camera)
+		if t.normal.dot((t.centre().sub(pos)).normalise()) < 0.3 { //lower number here cull more backfacing tris
 
 			dist := pos.distanceFrom(t.centre())
-			apud := (2 * t.area()) / (dist * dist)
-			if apud > .001 { //.001 is a about 1cm triangles at the horizon
+			//apud := (2 * t.area()) / (dist * dist)
+			apud := (2 * t.area()) / (0.0005 * (dist * dist))
 
+			dp := camDir.dot(t.centre().sub(pos).normalise())
+			//at a value of 1 (area per unit distance), a notional 100 square metre square, would require splitting when it was 10 metres away
+			if apud > 8-(dp*4) || t.depth < 5 { //.001 is a about 1cm triangles at the horizon
+
+				//logit("splitting", t.depth, apud, dist, t.area())
 				t.split()
 				for _, c := range t.children {
 					c.splitIfNeeded(pos, focus) //recurse
 				}
-
 			}
 
-		}
+		} //else {
+		//		t.cull = true
+		//		}
+		//}
+	}
+
+	//}
+
+	if len(t.children) == 0 && t.depth > 5 && t.normal.dot((t.centre().sub(pos)).normalise()) > 0.2 {
+		t.cull = true
+		//final triangle is backfacing - cull it
 	}
 
 }
+
+//}
 
 func (t *tri) splitDownTo(level int) {
 
@@ -444,9 +466,9 @@ func (t *tri) split() {
 
 		seed := uint64(m.verts[v1].p.y)
 		rnGen = rand.New(rand.NewPCG(seed, seed+1))
-		//rnGen = &rand.New(rand.NewPCG(m.verts[v0].p.x, m.verts[v0].p.y))
+		//rnGe§n = &rand.New(rand.NewPCG(m.verts[v0].p.x, m.verts[v0].p.y))
 
-		rn1 := rnGen.NormFloat64()
+		rn1 := rnGen.NormFloat64() //random number between -1 and 1
 		rn2 := rnGen.NormFloat64()
 		rn3 := rnGen.NormFloat64()
 

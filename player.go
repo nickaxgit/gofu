@@ -218,7 +218,7 @@ func (p *player) processMouseMove() {
 
 			if delta.lengthSq() != 0 {
 
-				logit("delta", delta.x, delta.y)
+				//logit("delta", delta.x, delta.y)
 
 				camRight := p.downCam.direction.cross(p.downCam.up).normalise()
 
@@ -729,11 +729,11 @@ func (p *player) sendHighlit() {
 	}
 	if p.highlit.thing != nil {
 		ht = p.highlit.thing.index
-		logit("ht", p.highlit.thing.index)
+		//logit("ht", p.highlit.thing.index)
 	}
 	if p.highlit.spring != nil {
 		hs = p.highlit.spring.index
-		logit("hs", p.highlit.spring.index)
+		//logit("hs", p.highlit.spring.index)
 	}
 	binary.Write(buff, le, hm)
 	binary.Write(buff, le, ht)

@@ -8,7 +8,8 @@ import (
 type fireMesh struct {
 	root      *fTri
 	p         []*vec3
-	midpoints map[uint64]uint32
+	midpoints map[uint64]uint32 //used to index vertices on their edges
+
 }
 type fTri struct {
 	vi       [3]uint32 //vertex indices
@@ -30,13 +31,15 @@ func (fm *fireMesh) ignite(firePos *vec3) {
 	//find the triangle containing this position, and ignite it
 
 	result := fm.root.splitUntil(fm, firePos, 10)
-	if len(result.children) > 0 {
-		logit("Igniting a non-leaf triangle at depth", result.depth)
-	}
-	if result != nil { //possibly tried to go off the edge of the map ?
+	if result != nil { // are we on the map ?
+		if len(result.children) > 0 {
+			logit("Igniting a non-leaf triangle at depth", result.depth)
+		}
+
 		if result.flames == 0 {
 			result.flames = 1
 		}
+
 	}
 }
 
@@ -85,17 +88,19 @@ func (fTri *fTri) allBLTsAlight() bool {
 // collects and sends the flames vsible to this player
 func (p *player) getFlames() {
 	flameMesh := newSimpleMesh(201, "flame", 10000, 30000) //10k faces, 30k verts
-	p.state.fire.root.getFlames(p.landTri, p.state.fire, flameMesh, p.camera)
 
-	flameCount := p.state.fire.root.getFlames(p.landTri, p.state.fire, flameMesh, p.camera) //update flame base heights with this players observable land
-	logit("Player", p.name, "sees", flameCount, "flames")
+	tcs := &tcs{left: 0, top: 1, right: 1, bottom: 0} //texture atlas coordinates
+	p.state.fire.root.getFlames(p.landTri, p.state.fire, flameMesh, p.camera, tcs)
+
+	//flameCount := p.state.fire.root.getFlames(p.landTri, p.state.fire, flameMesh, p.camera) //update flame base heights with this players observable land
+	//logit("Player", p.name, "sees", flameCount, "flames")
 
 	flameMesh.sendTo(p, 1)
 
 }
 
 // recurse from fTri to find all triangles with flames, insert them (as billboards) into the simpleMesh
-func (fTri *fTri) getFlames(lt *tri, fm *fireMesh, sm *simpleMesh, cam *camera) int {
+func (fTri *fTri) getFlames(lt *tri, fm *fireMesh, intoMesh *simpleMesh, cam *camera, tcs *tcs) int {
 
 	up := newVec3(0, 1, 0)
 	if fTri.flames > 0 { //fTri.allBLTsAlight() { //fTri.flames > 0 {
@@ -112,7 +117,7 @@ func (fTri *fTri) getFlames(lt *tri, fm *fireMesh, sm *simpleMesh, cam *camera) 
 				fTri.y = p.y //we have a better observation - update the flame base height
 				fTri.normal = t.normal
 			}
-			if t.isUnderwater() {
+			if t.isUnderwater(0) {
 				fTri.flames = -1 //extinguish the flame
 				return 0
 			} //flames under water do not burn
@@ -137,13 +142,13 @@ func (fTri *fTri) getFlames(lt *tri, fm *fireMesh, sm *simpleMesh, cam *camera) 
 
 		//landTri.probe(treeTop, camPos, pens, &count) //can we see the camera from the tree top
 
-		sm.billboard(mid, up, cam.position, 4, 0, 8, 3) //triangular flame
+		intoMesh.billboard(mid, up, cam.position, 4, 0, 8, 3, tcs) //triangular flame
 		return 1
 
 	} else {
 		flames := 0
 		for _, c := range fTri.children {
-			flames += c.getFlames(lt, fm, sm, cam)
+			flames += c.getFlames(lt, fm, intoMesh, cam, tcs)
 		}
 		return flames
 	}
@@ -237,6 +242,7 @@ func newFireMesh(size float64) *fireMesh {
 func (fm *fireMesh) addVert(p *vec3) uint32 {
 
 	fm.p = append(fm.p, p)
+
 	return uint32(len(fm.p) - 1)
 
 }

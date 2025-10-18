@@ -210,14 +210,65 @@ type simpleMesh struct {
 	materialName string
 	vwp          uint16
 	fwp          uint16
+	vertIndex    map[coordKey]uint16 //map to store vert indices by coordinate for re-use
+}
+
+type coordKey struct {
+	x int //stores the int of 100x the coordiate (giving 1cm precision, and over 20,00km range
+	y int
 }
 
 func newSimpleMesh(id uint16, materialName string, numVerts int, numFaces int) *simpleMesh {
 	// p []float32, n []float32, uv []float32, fi []uint16
 	return &simpleMesh{id: id, pad: 0, p: make([]float32, numVerts*3), n: make([]float32, numVerts*3), uv: make([]float32, numVerts*2), fi: make([]uint16, numFaces*3), materialName: materialName}
 }
+func (sm *simpleMesh) addTube(start *vec3, end *vec3, xAxis *vec3, startRadius float64, endRadius float64, tcs *tcs, sides int) {
+	//add a tube between start and end, with the given radii at each end
+	//the tube is aligned with the vector start->end
 
-func (sm *simpleMesh) billboard(p *vec3, up *vec3, camPos *vec3, widthBottom float64, widthTop float64, height float64, shape int) {
+	ftcs := tcs.clone() //flipable tcs
+
+	yAxis := end.sub(start).normalise()
+	zAxis := xAxis.cross(yAxis).normalise()
+
+	v2 := uint16(0)
+	v3 := uint16(1)
+
+	ov0 := uint16(0)
+	ov1 := uint16(1)
+
+	for i := range sides { // goes from 0 to sides -1
+		a := float64(i) * 2 * math.Pi / float64(sides)
+		dx := xAxis.multiply(math.Cos(a))
+		dz := zAxis.multiply(math.Sin(a))
+		n := dx.add(dz).normalise()
+
+		//toggle tcs as we wrap / and or flip them on alternate outbound segments
+		ftcs = ftcs.flipH()
+		v0 := sm.addVert(start.add(dx.multiply(startRadius)).add(dz.multiply(startRadius)), n, newVec2(ftcs.left, ftcs.top))
+		v1 := sm.addVert(end.add(dx.multiply(endRadius)).add(dz.multiply(endRadius)), n, newVec2(ftcs.left, ftcs.bottom))
+
+		if i > 0 {
+			//sm.addFace(v0, v1, v2)
+			//sm.addFace(v1, v3, v2)
+			sm.addFace(v0, v2, v1)
+			sm.addFace(v1, v2, v3)
+		} else {
+			ov0 = v0
+			ov1 = v1
+		}
+		v2 = v0
+		v3 = v1
+
+	}
+
+	//stitch the tube seam closed
+	sm.addFace(ov0, v2, v3)
+	sm.addFace(ov1, ov0, v3)
+
+}
+
+func (sm *simpleMesh) billboard(p *vec3, up *vec3, camPos *vec3, widthBottom float64, widthTop float64, height float64, shape int, tcs *tcs) {
 
 	//	up := newVec3(0, 1, 0)
 	toCam := camPos.sub(p).normalise()
@@ -227,21 +278,27 @@ func (sm *simpleMesh) billboard(p *vec3, up *vec3, camPos *vec3, widthBottom flo
 
 	top := p.add(up.multiply(height))
 
-	v0 := sm.addVert(p.sub(rightBottom), toCam, newVec2(0, 0))
-	v1 := sm.addVert(p.add(rightBottom), toCam, newVec2(1, 0))
+	v0 := sm.addVert(p.sub(rightBottom), toCam, newVec2(tcs.left, tcs.bottom))
+	v1 := sm.addVert(p.add(rightBottom), toCam, newVec2(tcs.right, tcs.bottom))
 
 	//triangular billboard (pine trees/flames)
 	if shape == 3 {
-		v2 := sm.addVert(top, toCam, newVec2(0.5, 1))
+		tcMid := (tcs.left + tcs.right) * .5
+		v2 := sm.addVert(top, toCam, newVec2(tcMid, tcs.top))
 		sm.addFace(v0, v1, v2)
 		return
 	}
 
-	v2 := sm.addVert(top.add(rightTop), toCam, newVec2(1, 1))
-	v3 := sm.addVert(top.sub(rightTop), toCam, newVec2(0, 1))
+	v2 := sm.addVert(top.add(rightTop), toCam, newVec2(tcs.right, tcs.top))
+	v3 := sm.addVert(top.sub(rightTop), toCam, newVec2(tcs.left, tcs.top))
 
-	sm.addFace(v0, v1, v2)
-	sm.addFace(v2, v3, v0)
+	//v3--v2
+	//f1 /
+	//  /f0
+	// /
+	//v0--v1
+	sm.addFace(v0, v2, v1) //f0
+	sm.addFace(v0, v3, v2) //f1
 
 }
 
@@ -438,7 +495,7 @@ func (state *state) step(subSteps int) { //this is called every 33ms from stepWo
 		//updateLabels(state)
 	}
 
-	state.fire.burn(state.fire.root)
+	//state.fire.burn(state.fire.root) -reinstate
 
 	for _, p := range state.players {
 		if p.socket != nil {
@@ -457,7 +514,7 @@ func (state *state) step(subSteps int) { //this is called every 33ms from stepWo
 				dir := p.camera.direction.dot(p.lastCamDir)
 				if dist > 100 || dir < .95 {
 					go p.getFlames()
-					go p.makeLand(p.camera.position.clone(), p.camera.position.add(p.camera.direction), 12, 500, 10000.0, true) //makes and sends new land
+					go p.makeLand(p.camera.position.clone(), p.camera.position.add(p.camera.direction), 12, 250, 10000.0, true) //makes and sends new land
 
 				}
 			}

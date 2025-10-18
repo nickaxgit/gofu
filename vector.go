@@ -9,6 +9,10 @@ type vec2 struct {
 	y float64
 }
 
+func (a *vec2) tween(b *vec2, f float64) *vec2 {
+	return newVec2(a.x+(b.x-a.x)*f, a.y+(b.y-a.y)*f)
+}
+
 func newVec2(x, y float64) *vec2 {
 	return &vec2{x, y}
 }

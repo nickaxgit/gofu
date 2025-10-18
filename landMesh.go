@@ -86,7 +86,7 @@ func newLandMesh(name string, maxFaces uint16, splits int, height float64, size 
 	//l := int(maxFaces) * 3
 	//fis := make([]uint32, l)
 	//return &landMesh{name: name, verts: []*vert{}, fi: fis, midpoints: make(map[uint64]uint32, 0), splits: splits, height: height, size: size, kinks: kinks}
-	return &landMesh{name: name, verts: []*vert{}, midpoints: make(map[uint64]uint32, 0), splits: splits, height: height, size: size, kinks: kinks}
+	return &landMesh{name: name, verts: []*vert{}, midpoints: make(map[uint64]uint32, maxFaces*3), splits: splits, height: height, size: size, kinks: kinks}
 }
 
 func (m *landMesh) midpoint(v1 uint32, v2 uint32) uint32 {
@@ -176,7 +176,7 @@ func (m *landMesh) splitEdge(a, b uint32, dy float64, depth int) uint32 {
 	}
 
 	//we don't have normals yet - so must calc UVX's later
-	vi = m.addVert(p, false, 0, uvy) //OrReuseVertAtXZ(p)
+	vi = m.addVert(p, 0, uvy) //OrReuseVertAtXZ(p)
 
 	//}
 
@@ -187,15 +187,15 @@ func (m *landMesh) splitEdge(a, b uint32, dy float64, depth int) uint32 {
 	return vi
 }
 
-func (m *landMesh) addVert(p *vec3, reUseVert bool, u float64, v float64) uint32 {
+func (m *landMesh) addVert(p *vec3, u float64, v float64) uint32 {
 
-	if reUseVert {
-		for i, v := range m.verts {
-			if v.p.equals(p) {
-				return uint32(i)
-			}
-		}
-	}
+	// if reUseVert {
+	// 	for i, v := range m.verts { //todo - this is slow - use a map
+	// 		if v.p.equals(p) {
+	// 			return uint32(i)
+	// 		}
+	// 	}
+	// }
 
 	m.verts = append(m.verts, newVert(p, u, v))
 
@@ -300,14 +300,14 @@ func (m *landMesh) getPositions(asWater bool) []float32 {
 
 }
 
-func (t *tri) isUnderwater() bool {
+func (t *tri) isUnderwater(by float64) bool {
 
 	m := t.mesh
 	a := m.verts[t.vi[0]]
 	b := m.verts[t.vi[1]]
 	c := m.verts[t.vi[2]]
 
-	if a.wl >= a.p.y && b.wl >= b.p.y && c.wl >= c.p.y { //if all verts are below water
+	if a.wl-a.p.y > by && b.wl-b.p.y > by && c.wl-c.p.y > by { //if all verts are below water
 		return true
 	}
 	return false
@@ -328,8 +328,8 @@ func (t *tri) isUnderwater() bool {
 // 	}
 // }
 
-func (t *tri) getFacesInto(fis []uint16, p *uint32, fm *fireMesh, test func(*tri, *fireMesh) bool) {
-	if len(t.children) == 0 {
+func (t *tri) getFacesInto(fis []uint16, p *uint32, fm *fireMesh, test func(face *tri, fire *fireMesh) bool) {
+	if len(t.children) == 0 && !t.cull {
 		j := *p
 		if test(t, fm) {
 			fis[j] = uint16(t.vi[0])
@@ -576,6 +576,7 @@ func (t *tri) fetchTrees(depth int, positions *[]float32, bbm *simpleMesh, wp *i
 
 	mid := t.centre()
 	up := newVec3(0, 1, 0)
+	tcs := &tcs{0, 1, 1, 0}
 
 	if t.depth == depth {
 		if !t.scorchedAt(mid) {
@@ -609,7 +610,10 @@ func (t *tri) fetchTrees(depth int, positions *[]float32, bbm *simpleMesh, wp *i
 				(*positions)[*wp+2] = float32(mid.z)
 				*wp += 3
 			} else {
-				bbm.billboard(mid, up, camPos, 20, 20, 20, 4) //billboard tree
+
+				if mid.sub(camPos).dot(t.normal) < 0 { //if the triangle slopes towards camera
+					bbm.billboard(mid, up, camPos, 20, 20, 20, 4, tcs) //billboard tree
+				}
 
 			}
 		}
@@ -623,7 +627,7 @@ func (t *tri) fetchTrees(depth int, positions *[]float32, bbm *simpleMesh, wp *i
 
 func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeight float64, size float64, sendIt bool) *vec3 {
 
-	kinks := []float64{1.0, 0.8, 1.0, 0.5, 0.25, 0.125, 1.0 / 16, 1.0 / 32, 1.0 / 64, 1.0 / 128, 1.0 / 256, 1.0 / 200, 1.0 / 300}
+	kinks := []float64{1.0, 0.8, 1.0, 0.5, 0.25, 0.125, 1.0 / 16, 1.0 / 32, 1.0 / 64, 1.0 / 128, 1.0 / 256, 1.0 / 512, 1.0 / 1024, 1.0 / 2048, 1.0 / 4096, 1.0 / 8192} //, 1.0 / 16384} //, 1.0 / 32768, 1.0 / 65536} //how much to pull down the midpoint at each level of recursion
 	//player.landMesh = newLandMesh("land", 65000, splits, maxHeight, size, kinks) //&state.land    //get a reference to state.land (saves a lot of typing)
 	//land := player.landMesh
 	land := newLandMesh("land", 65000, splits, maxHeight, size, kinks) //&state.land    //get a reference to state.land (saves a lot of typing)
@@ -638,9 +642,9 @@ func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeigh
 	rnGen = rand.New(rand.NewPCG(seed+1, seed))
 
 	//(rnGen.Float64()-.5)*maxHeight
-	land.addVert(newVec3(0, .1, size), false, 0, 0) //the height of the first vertex is the initial seed for the entire land
-	land.addVert(newVec3(size, 0, -size), false, 0, 0)
-	land.addVert(newVec3(-size, 0, -size), false, 0, 0)
+	land.addVert(newVec3(0, .1, size), 0, 0) //the height of the first vertex is the initial seed for the entire land
+	land.addVert(newVec3(size, 0, -size), 0, 0)
+	land.addVert(newVec3(-size, 0, -size), 0, 0)
 
 	landTri := newTri(land, 0, 0, 1, 2)
 
@@ -719,7 +723,7 @@ func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeigh
 				for _, v := range land.verts {
 					if v.wl > v.p.y+300 {
 						count := 0
-						land.drain(v, wl, &count)
+						land.drain(v, wl, &count) //all deel lakes at this WL are drained to -1000000
 
 						logit("drained", count)
 						drained = true
@@ -734,7 +738,7 @@ func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeigh
 			}
 		}
 
-		funcIsUnderwater := func(t *tri, fm *fireMesh) bool { return t.isUnderwater() }
+		funcIsUnderwater := func(t *tri, fm *fireMesh) bool { return t.isUnderwater(.1) }
 		waterMesh := landTri.toSimpleMesh(uint16(4+i), land, nil, "water", true, funcIsUnderwater)
 
 		if sendIt {
@@ -747,7 +751,7 @@ func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeigh
 		runwayMesh.sendTo(player, 1)
 
 		isLand := func(t *tri, fm *fireMesh) bool {
-			if t.isUnderwater() {
+			if t.isUnderwater(.1) {
 				return false
 			}
 			if fm.scorchedAt(t) {
@@ -755,7 +759,10 @@ func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeigh
 			}
 			return !t.scorched
 		}
+		ts := time.Now()
 		smallLandMesh := landTri.toSimpleMesh(2, land, player.state.fire, "land", false, isLand)
+		logit("converted land mesh in", time.Since(ts).Milliseconds(), "ms")
+		logit("small land mesh has", len(smallLandMesh.fi)/3, "faces ", len(smallLandMesh.p)/3, " verts")
 
 		funcIsScorchedLand := func(t *tri, fm *fireMesh) bool { return t.scorched } //fm.scorchedAt(t) }
 		scorchedLand := landTri.toSimpleMesh(56, land, player.state.fire, "scorched", false, funcIsScorchedLand)
@@ -763,8 +770,8 @@ func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeigh
 		smallLandMesh.sendTo(player, 1) //send them together - or transient gaps can appear
 		scorchedLand.sendTo(player, 1)
 
-		// wires := landTri.toSimpleMesh(32, land, "whiteWires", false,isLand)
-		// wires.sendTo(player, 1)
+		wires := landTri.toSimpleMesh(32, land, player.state.fire, "whiteWires", false, isLand)
+		wires.sendTo(player, 1)
 
 		//need to do trees after waterlines so we don't get trees underwater
 		treePositions := make([]float32, 100000) ///3000 xyz floats = 1000 trees
@@ -773,7 +780,7 @@ func (player *player) makeLand(position *vec3, focus *vec3, splits int, maxHeigh
 
 		//TODO only reposition/resend trees in new positions (most trees do not need resending)
 		treeBillboards := newSimpleMesh(105, "tree", 4000, 1000)
-		landTri.fetchTrees(9, &treePositions, treeBillboards, &wp, landTri, position, &hidden)
+		landTri.fetchTrees(10, &treePositions, treeBillboards, &wp, landTri, position, &hidden)
 		sendInstancePositions(player, 100, treePositions[:wp])
 		treeBillboards.sendTo(player, 1)
 
@@ -829,8 +836,9 @@ func (m *landMesh) flood(wl float64) {
 	for _, v := range m.verts {
 		if v.p.y <= wl {
 			v.wl = wl
+
 		} else {
-			v.wl = -100000
+			v.wl = -100000 //high and dry
 		}
 	}
 
@@ -866,11 +874,15 @@ func (m *landMesh) drain(v *vert, wl float64, count *int) {
 	}
 }
 
-func (tri *tri) toSimpleMesh(id uint16, lm *landMesh, fm *fireMesh, material string, asWater bool, faceTest func(*tri, *fireMesh) bool) *simpleMesh {
+func (tri *tri) toSimpleMesh(id uint16, lm *landMesh, fm *fireMesh, material string, asWater bool, faceTest func(face *tri, fire *fireMesh) bool) *simpleMesh {
 
 	//vc := uint32(len(lm.verts)) //vertex count
 	vc := uint32(len(lm.verts))  //vertex count
 	fis := make([]uint16, vc*10) //there will actually be many less faces than verts - but we need 3 uints per face
+
+	if vc >= math.MaxUint16 {
+		logit("mesh too big - over 65535 verts")
+	}
 
 	wp := uint32(0)
 
@@ -1057,9 +1069,9 @@ func tests() {
 
 	s := float64(100)
 	t1 := newLandMesh("t1", 4, 4, 100, 100, kinks)
-	t1.addVert(newVec3(0, 0, s), false, 0, 0)   //far
-	t1.addVert(newVec3(s, 0, -s), false, 0, 0)  //right
-	t1.addVert(newVec3(-s, 0, -s), false, 0, 0) //left
+	t1.addVert(newVec3(0, 0, s), 0, 0)   //far
+	t1.addVert(newVec3(s, 0, -s), 0, 0)  //right
+	t1.addVert(newVec3(-s, 0, -s), 0, 0) //left
 
 	// t1.fi = []uint32{0, 1, 2}
 

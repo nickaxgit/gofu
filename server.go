@@ -118,7 +118,7 @@ func createGame(playerId uint32, playerName string, ws *websocket.Conn) *player 
 
 	p.state.fire.ignite(newVec3(10, 0, 10)) //note the position is on the x/z plane
 
-	origin := p.makeLand(y0pos, y0pos.add(newVec3(0, 0, -100)), 12, 500, landSize, false) //makes and sends land
+	origin := p.makeLand(y0pos, y0pos.add(newVec3(0, 0, -100)), 12, 250, landSize, false) //makes and sends land
 
 	//p.state.fire.ignite(newVec3(-1, 100, 0.1)) //note the position is on the x/z plane
 
@@ -257,7 +257,7 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 		logit("No player for message", msg)
 	}
 
-	logit(msg.Cmd)
+	//logit(msg.Cmd)
 
 	switch msg.Cmd {
 	case "keyUp":
@@ -365,7 +365,7 @@ func processMsg(msg msg, p *player, ws *websocket.Conn) {
 				if phm != nil {
 					psm := p.selectedMasses
 
-					there, _ := psm[phm]
+					there := psm[phm]
 					if there {
 						delete(psm, phm)
 					} else {
