@@ -4,67 +4,43 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/nickax/gofu/game/msg"
+	"github.com/nickax/gofu/game/player"
+	"github.com/nickax/gofu/jsonmsg"
+	"github.com/nickax/gofu/log"
+	"github.com/nickax/gofu/server"
+
+	"github.com/nickax/gofu/vec"
+	//"log"
+
 	"net/http"
+	_ "net/http/pprof"
 	"strings"
 
 	"github.com/gorilla/websocket"
 	//"golang.org/x/tools/playground/socket"
 )
 
+var globalOrigin = vec.NewVec3(0, 0, 0)
+
 var le = binary.LittleEndian
-var ntm = 0.000000001                                          //newtons to metres of movement per substep
-var testFlight = newVec3(0, -.1, -1).normalise().multiply(.33) //50 m/s
-var rho = 1.225                                                //kg / m3 //air density
+var ntm = 0.000000001 //newtons to metres of movement per substep
+
+var accountsByGuid map[string]*account
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-// type user struct {
-// 	mtx *sync.Mutex // a mutex is required to 'lock' access to each users connection (for writing)
-// 	// many calls (to wsEndpoint) can be running in paralell - and more than one of them may attempt to write to a single users socket at the same time (not allowed!)
-// 	conn *websocket.Conn // a pointer to the socket
-// }
-
-//var users []user
-
-// func (player *Player) readForever() {
-
-// 	for {
-// 		// read in a message
-// 		//websocket.BinaryMessage or websocket.TextMessage
-// 		messageType, msg, err := player.socket.ReadMessage()
-
-// 		if err != nil {
-// 			logit ("Error reading message from websocket: " + err.Error())
-// 		}
-
-// 		if messageType == websocket.TextMessage{
-
-// 			var block block
-// 			//err = json.NewDecoder(msg).Decode(&block)
-// 			err = json.Unmarshal(msg, &block)
-
-// 			processBlock(block) //block{MessageType: messageType, Message: msg})
-
-// 		}
-// 	}
-// }
-
-// func send(user *user, messageType int, msg *[]byte) error {
-// 	user.mtx.Lock()
-// 	defer user.mtx.Unlock()                          //the defer statement runs this code when the function exits .. it's "idiomatic" in go .. it's excatly the same as if we made this the last line of the function
-// 	return user.conn.WriteMessage(messageType, *msg) //write the message (and return any error)
-// }
-
 func homePage(w http.ResponseWriter, _ *http.Request) {
-	logit("homePage", "called")
+	log.Logit("homePage called")
 	fmt.Fprintf(w, "<h1>Dozer game server</h1>")
-	for i, g := range games {
-		fmt.Fprintf(w, "<p>Game %s has %d players", i, len(g.players))
-		for _, p := range g.players {
-			fmt.Fprintf(w, "<p>Player %s", p.name)
+	for i, g := range server.Games {
+		fmt.Fprintf(w, "<p>Game %s has %d players", i, len(g.Players))
+		for _, p := range g.Players {
+			fmt.Fprintf(w, "<p>Player %s", p.Name)
 		}
 	}
 }
@@ -117,12 +93,11 @@ func homePage(w http.ResponseWriter, _ *http.Request) {
 // }
 
 func main() {
-	port := ":8081" //":443" //":8081"
-	logit("Gofu server - listening on " + port)
+	port := "127.0.0.1:8081" //":443" //":8081"
+	log.Logit("Gofu server - listening on " + port)
 	fs := http.FileServer(http.Dir("../dozer"))
 
 	//important!
-	games = make(map[string]*state)
 
 	accountsByGuid = make(map[string]*account)
 
@@ -141,8 +116,13 @@ func main() {
 	go http.ListenAndServe(port, customHeaders(fs)) //, nil) // customHeaders(fs))
 	//go http.ListenAndServeTLS(port, "dozer_world.crt", "./dozer.key", customHeaders(fs))
 
-	logit("Starting ticker")
-	stepWorlds() //step the worlds every 33ms
+	go func() {
+		log.Logit("pprof listening :6060")
+		log.Fatal(http.ListenAndServe("localhost:6060", nil))
+	}()
+
+	log.Logit("Starting ticker")
+	server.StepWorldsForever() //step the worlds every 33ms
 
 }
 
@@ -153,47 +133,51 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 	ws, err := upgrader.Upgrade(w, r, nil)
 
 	if err != nil {
-		logit(err)
+		log.Logit(err)
 	}
 
 	//var state *state //initially nil set inside processMsg
 	//var player *player
 
 	//when a player creates or joins a game - their websocket is hooked up to the player
-	var player *player
+	var player *player.Player
 	for { // read in a messages forever on this socket (from this player)
 
 		messageType, msgBytes, err := ws.ReadMessage()
 
 		if err != nil {
-			logit("Error reading message from websocket: " + err.Error())
+			log.Logit("Error reading message from websocket: " + err.Error())
 			break
 		}
 
 		if messageType == websocket.TextMessage {
 			if player != nil {
-				var structuredMessage msg
-				//err = json.NewDecoder(msg).Decode(&block)
-				err := json.Unmarshal(msgBytes, &structuredMessage)
+				var jsonMessage jsonmsg.Msg
+				err := json.Unmarshal(msgBytes, &jsonMessage)
 				if err != nil {
-					logit(err.Error())
+					log.Logit(err.Error())
 				}
 
-				processMsg(structuredMessage, player, ws)
+				server.ProcessStructuredMsg(player, &jsonMessage, ws)
+
 			}
 
 		} else if messageType == websocket.BinaryMessage {
 			//msgbytes is a slice of bytes
+
+			m := msg.NewFromBytes(msgBytes)
 			if player == nil {
-				player = processCreateJoinOrControl(msgBytes, ws) //ws is loaded into the player.socket or player.controllerSocket
-				if player == nil {
+				error := server.ProcessCreateJoinOrControl(m, ws) //ws is loaded into the player.socket or player.controllerSocket
+				if error != nil {
+					log.Logit("Error processing create/join/control:", error)
 					break
-				} // bad pin - abort
+				}
 			} else {
 
-				player.inMtx.Lock()
-				player.processBinaryMsg(msgBytes)
-				player.inMtx.Unlock()
+				player.InMtx.Lock()
+				server.Games[player.GameId].ProcessBinaryMsg(m, player)
+				//player.ProcessBinaryMsg(m)
+				player.InMtx.Unlock()
 
 			}
 
@@ -201,14 +185,14 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 
 	}
 	ws.Close()
-	if ws == player.socket {
-		player.socket = nil
+	if ws == player.Socket {
+		player.Socket = nil
 	}
-	if ws == player.controllerSocket {
-		player.controllerSocket = nil
+	if ws == player.ControllerSocket {
+		player.ControllerSocket = nil
 	}
 
-	logit("socket error/ended for", player.name)
+	log.Logit("socket error/ended for", player.Name)
 }
 
 func customHeaders(fs http.Handler) http.HandlerFunc {

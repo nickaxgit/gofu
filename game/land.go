@@ -1,0 +1,168 @@
+package game
+
+import (
+	//"math/rand/v2"
+	"strconv"
+	"time"
+
+	"github.com/nickax/gofu/game/msg"
+	"github.com/nickax/gofu/log"
+	"github.com/nickax/gofu/mesh"
+	"github.com/nickax/gofu/ray"
+	"github.com/nickax/gofu/terrain"
+	"github.com/nickax/gofu/vec"
+)
+
+func (s *State) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
+
+	//TODO only reposition/resend trees in new positions (most trees do not need resending)
+	//need to do trees after waterlines so we don't get trees underwater
+	msgs := []*msg.Msg{}
+	treePositions := make([]float32, 100000) // a slice of zero length, and a CAPACITY of 100000 ///3000 xyz floats = 1000 trees
+
+	hidden := 0
+
+	treeBillboards := mesh.New(105, "tree", 4000, 1000)
+	ray := ray.New(camPos, vec.NoWhereSpecial) //set up *one* ray for firing at the treetops (reuse it!)
+
+	root.FetchTrees(10, treePositions, treeBillboards, camPos, camDir, ray, &hidden)
+	nearTreesMsg := msg.NewMsg(msg.PositionInstances)
+	//nearTreesMsg.WriteUint16(uint16(len(treePositions) / 3))
+	msg.GenericWrite(nearTreesMsg.Buff, uint16(len(treePositions)/3))
+	msg.GenericWrite[[]float32](nearTreesMsg.Buff, treePositions)
+
+	msgs = append(msgs, nearTreesMsg)
+	msgs = append(msgs, treeBillboards.ToMsg(1))
+
+	return msgs
+
+}
+
+func (s *State) MakeLand(camPos *vec.V3, camDir *vec.V3, fire *terrain.TriMesh) []*msg.Msg {
+
+	msgs := []*msg.Msg{}
+
+	land := terrain.NewTriMesh("land", 65000, s.landSize, s.kinks, s.landHeight)
+	ts := time.Now()
+	up := vec.Up
+
+	//note - runway is projected onto y=0 up to here
+
+	rs := s.runwayStart
+	re := s.runwayEnd
+	rs.Y = 0
+	re.Y = 0
+
+	//just an even split - no proximity to focus
+	//t.splitDownTo(splits) //approx 131k verts
+
+	log.Logit(land.VertCount(), " verts")
+
+	ts = time.Now()
+	seed := uint64(0) //uint64(time.Now().Nanosecond())
+	log.Logit("seed:" + strconv.FormatUint(seed, 10))
+
+	//rnGen := rand.New(rand.NewPCG(seed+1, seed))
+	//size := player.state.landSize
+	//(rnGen.Float64()-.5)*maxHeight
+
+	land.Root.SplitIfNeeded(camPos, camDir, 0.4) //split the triangle into 4 recursively
+	log.Logit("splitting to focus took", time.Since(ts).Milliseconds(), "ms")
+
+	ts = time.Now()
+	land.Root.CalcVerticalExtents() //we need the y extents for occlusion culling
+	log.Logit("calced y extents took", time.Since(ts).Milliseconds(), "ms")
+
+	ts = time.Now()
+	land.Root.MakePrisms() //we want to consrtruct volumes once for each triangle - not repeatedly during occlusion culling
+	log.Logit("made prisms took", time.Since(ts).Milliseconds(), "ms")
+
+	culled, kept := 0, 0
+	ts = time.Now()
+	land.Root.OccludeVerts(camPos) //TODO- only occlude verts in view frustum
+	log.Logit("occlude verts took", time.Since(ts).Milliseconds(), "ms")
+
+	ts = time.Now()
+	land.Root.OcclusionCull(&culled, &kept)
+	log.Logit("occlusion cull took", time.Since(ts).Milliseconds(), "ms")
+
+	log.Logit("culled:", culled, " kept:", kept, " tris")
+
+	ts = time.Now()
+	land.Root.Patch()
+	log.Logit("patch took", time.Since(ts).Milliseconds(), "ms")
+
+	//patch convert and send
+
+	s.runwayStart, _ = land.Root.VprobeLand(s.runwayStart)
+	s.runwayEnd.SetY(s.runwayStart.GetY()) //keep the runway level with the start point
+
+	land.Root.Plough(s.runwayStart, s.runwayEnd, s.runwayWidth) //recurse down through and plough a runway
+
+	//probe the land at the four corners of the runway and add two triangles
+	cross := s.runwayStart.Sub(s.runwayEnd).Normalise().Cross(up).Multiply(s.runwayWidth / 2)
+	bl := s.runwayStart.Sub(cross)
+	br := s.runwayStart.Add(cross)
+	tl := s.runwayEnd.Sub(cross)
+	tr := s.runwayEnd.Add(cross)
+	//var n *vec3
+	bl, _ = land.Root.VprobeLand(bl) //find the ground surface
+	tl, _ = land.Root.VprobeLand(tl) //find the ground surface
+	br, _ = land.Root.VprobeLand(br) //find the ground surface
+	tr, _ = land.Root.VprobeLand(tr) //find the ground surface
+
+	//if tl.y != br.y || n.y != 1 {
+	//		log.Logit("runway is not level")
+	//	}
+
+	bl.Y += 0.05
+	tl.Y += 0.05
+	br.Y += 0.05
+	tr.Y += 0.05
+
+	runwayMesh := mesh.New(3, "runway", 4, 2) //2 faces
+
+	bli := runwayMesh.AddVert(bl, vec.Up, 0, 1)
+	bri := runwayMesh.AddVert(br, up, 1, 1)
+	tli := runwayMesh.AddVert(tl, up, 0, 0)
+	trix := runwayMesh.AddVert(tr, vec.Up, 1, 0)
+
+	runwayMesh.AddFace(tli, bri, bli)
+	runwayMesh.AddFace(tli, trix, bri)
+
+	log.Logit("splitting took", time.Since(ts).Milliseconds())
+	//}
+
+	waterlines := []float64{s.landHeight * 0.71, s.landHeight * 0.41, 0.1, -s.landHeight * 0.52}
+
+	//makes end send the water surfaces - one for each waterline
+	msgs = append(msgs, land.FloodAndDrain(waterlines)...)
+
+	msgs = append(msgs, runwayMesh.ToMsg(1))
+
+	isLand := func(t *terrain.Tri) bool {
+		if t.IsUnderwater(.1) {
+			return false
+		}
+		if t.Scorched {
+			return false
+		}
+		return !t.Scorched
+	}
+
+	ts = time.Now()
+	land.Root.Scorch(fire) //update the scorched state of non culled leaf triangles
+	log.Logit("scorching took", time.Since(ts).Milliseconds(), "ms")
+
+	smallLandMesh := land.Root.ToSimpleMesh(2, land, fire, "land", false, isLand)
+	log.Logit("converted land mesh in", time.Since(ts).Milliseconds(), "ms")
+	log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
+
+	scorchedLand := land.Root.ToSimpleMesh(56, land, s.fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
+	wireframe := land.Root.ToSimpleMesh(32, land, s.fire, "whiteWires", false, isLand)
+
+	msgs = append(msgs, smallLandMesh.ToMsg(1), scorchedLand.ToMsg(1), wireframe.ToMsg(1)) //send them together - or transient gaps can appear
+
+	return msgs
+
+}

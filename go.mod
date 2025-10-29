@@ -1,4 +1,4 @@
-module gofu //bitbucket.org/nickax/gofu.git
+module github.com/nickax/gofu //bitbucket.org/nickax/gofu.git
 
 go 1.24 //18 .22
 
