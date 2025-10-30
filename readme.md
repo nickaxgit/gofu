@@ -112,6 +112,211 @@ Playback mission higlights (or lowlights) from multiple angles on RTB
 
 
 
+* spawn into existing game (a table holds gameId, vehicle name, seat, position, orientation, velocity,water, fuel, engineRpms) - save/merge should be able to snapshot all these things
+* vehicle views/seats - array of camera offsets and rotations (yaw and pitch), and folow types (hard/soft/withRoll) - for multiple internal and external (named) views
+
+
+Welcome Nick(from cookie)
+
+Join a game
+
+2939 - Canadian forest - 1,244 acres alight 10,074 burned, 36 players
+    Snowfall base - CL415
+    Hardy Lake - Air tractor
+    Box canyon - Parachute
+
+2939 - Canadian forest - 12 acres alight, 700 burned, 12 players
+    Chey mountain - on foot
+
+
+Create a game
+
+* Candian forest
+Mediterrainian Islands
+Californian suburbs
+
+
+Only 'registered' players can create games
+/createGame?world=foo&vehicle=bar (cookie determines player)
+
+
+*Spawning into a running game*
+
+/spawnin?gameId=foo&vehicle=bar&view=pilot (cookie determines player - absent, creates new player (and sets cookie)) - note, no cookie is *required* to join a game 
+
+Vehicle is merged (at the position/velocity/rpm/fuel/water loading it was snapshot)
+
+May need to wait for airspace to be clear at the spawn point - waits of more than 5 second should spawn at an offset
+
+
+*Add view*
+Adds a view/spectate/instrument panel/cockpit side window
+
+//records the current camera position and direction 'vehicle space'
+msgAddView
+name=portWindow
+
+save it into the vehicle (thing)
+
+Thing.views.add Name,camera
+
+
+msgView
+playerToViewId
+viewpoint
+
+struct thing
+    viewpoints map[string]*Camera //Additional *initial* (named) position, direction and up in vehicle space
+
+game
+    viewers []*Viewer
+
+    There are players, viewers and controllers
+    A separation of concerns here allows a player to have many viewers and many controllers
+
+    Game
+        []players
+            []viewers
+
+struct Viewer
+    ws Websocket
+    *player  (to get vehicle)
+    viewpoint string
+    camera //initially a clone of viewPoint(within the vehicle) - Ongoing, additional position direction and up in vehicle space (our head swivel/slew)
+    
+
+If a player has no vehicle - the world is their vehicle and all normal rules apply 
+(you are moving/rotating the camera in vehicle space)
+Boarding a vehicle - sets the camera offset and rotation to that initially specified in the view
+and the vehicle translation/roatation is (always) added to the camera when it is sent
+
+
+You don't need an account, or permission to view
+Multiple viewers of the same cameras are allowed (spectators might all want the pilot seat)
+Each viewer has an additional camera offset (position and direction)
+
+ - allows you hop in as co-pilot
+/join?pid=4524&view=copilot&invite=fdfs (cookie determines player - absent, creates new player) 
+
+sends a joinAsConstroller(token) message over a socket - then streams blob positions
+
+
+each player has a collection of invites - they can be revoked
+
+
+You are joining the existing players vehicle (in an unoccupied 'seat'), 
+
+Both players have the same vehicle - your control inputs will be merged.
+A player can only be in one game at a time so no game id is required
+
+Invite/Mission is used so that links can be shared, but permission (which is automatically granted) can be revoked in future
+
+Joins with an expired mission should be actively refused (and logged)
+
+/spawnbehind?pid=4524&vehicle=cl415&seat=copilot
+
+"Player 4524 is not presently in a game - spawning at default point for mission"
+
+
+
+
+
+Missions encode a lot of things - spawning, joining, co-piloting, permissions and expiry, multiple views (multi-monitor setup)
+
+ID:-
+XKWPL
+
+World:-
+Canadian Forest
+
+Game:
+2542
+
+Owner (Who can edit/revoke)
+Nick (choose)
+
+Name
+Firefight 101
+
+Description
+Final approach on the fire, drop the water and return to base.
+
+Expires:-
+1 minute
+1 hour
+12 hours
+24 hours
+1 week
+1 month
+* Never
+
+Scope:-
+* Anyone
+Named Group (choose/create)
+
+Num Available:
+
+1
+10
+100
+1000
+*Infinite
+
+Numused:
+683
+
+Vehicle:-
+None
+CL415 (choose)
+
+View:
+* Pilot
+CoPilot
+Chase
+outside Port
+outside Starboard
+Dash
+Ovehead panel
+Port window
+Starboard window
+
+Control Permissions:-
+* StickX
+* StickY
+* Rudder
+* Brakes left
+* Water drop
+* Gear Flaps
+
+
+Join:-
+* Spawn in new vehicle
+Join inviter in their vehicle (if present)
+Spawn behind inviter - if present (with their speed and heading)
+Join as a new camera in your own vehicle (cockpit windows and dashboards)
+
+
+
+*Taking control*
+of a player (using a control token) *
+
+/control?token=ddjsj
+
+Means a device can provide additonal input via msg.ControlPositions - which sends a set of tracking blobs (which update control surfaces via standard Mixers)
+
+The controller device should set a cookie of the control token so it remains permanently linked
+(or can be re-linked via a single click)
+
+If the player being controlled disconnects - the controller should periodically (every 1 second) attempt reconnection.
+
+
+Q: How do clients reliably communicate who they are
+A: Cookie (auth token) until socket is connected
+
+
+
+
+
 
 
 Playing on your TV

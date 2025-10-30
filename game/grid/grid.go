@@ -61,3 +61,7 @@ func (g *Grid) AsMsg() *msg.Msg {
 	return msg.NewMsg(msg.Grid, g.Origin, g.Xaxis, g.Yaxis)
 
 }
+
+func (g *Grid) WriteTo(msg *msg.Msg) {
+	msg.Write(g.Origin, g.Xaxis, g.Yaxis)
+}

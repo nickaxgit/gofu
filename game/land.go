@@ -38,7 +38,7 @@ func (s *State) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3) [
 
 }
 
-func (s *State) MakeLand(camPos *vec.V3, camDir *vec.V3, fire *terrain.TriMesh) []*msg.Msg {
+func (s *State) MakeLand(camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
 
 	msgs := []*msg.Msg{}
 
@@ -151,10 +151,10 @@ func (s *State) MakeLand(camPos *vec.V3, camDir *vec.V3, fire *terrain.TriMesh) 
 	}
 
 	ts = time.Now()
-	land.Root.Scorch(fire) //update the scorched state of non culled leaf triangles
+	land.Root.Scorch(s.fire) //update the scorched state of non culled leaf triangles
 	log.Logit("scorching took", time.Since(ts).Milliseconds(), "ms")
 
-	smallLandMesh := land.Root.ToSimpleMesh(2, land, fire, "land", false, isLand)
+	smallLandMesh := land.Root.ToSimpleMesh(2, land, s.fire, "land", false, isLand)
 	log.Logit("converted land mesh in", time.Since(ts).Milliseconds(), "ms")
 	log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
 

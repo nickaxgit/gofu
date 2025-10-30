@@ -22,6 +22,7 @@ import (
 	"github.com/nickax/gofu/plant"
 	"github.com/nickax/gofu/terrain"
 	"github.com/nickax/gofu/vec"
+	"github.com/nickax/gofu/viewer"
 	"math/rand/v2"
 
 	"io"
@@ -60,7 +61,12 @@ type State struct { //the DATA of a game in progress - it can be entirely replac
 	kinks      []float64 //land bends
 }
 
-func NewGame(games map[uint32]*State, creator *player.Player) *State {
+func (game *State) AddPlayer(player *player.Player) {
+	player.GameId = game.GameId
+	game.Players = append(game.Players, player)
+}
+
+func NewGame(games map[uint32]*State) *State {
 	//create a new game
 	var gameId uint32
 
@@ -69,15 +75,13 @@ func NewGame(games map[uint32]*State, creator *player.Player) *State {
 		gameId = uint32(rand.Float32() * 9999)
 	}
 
-	creator.GameId = gameId
-
 	landSize := 10000.0
 	landHeight := 600.0
 	kinks := []float64{1.0, 0.8, 1.0, 0.5, 0.25, 0.125, 1.0 / 16, 1.0 / 32, 1.0 / 64, 1.0 / 128, 1.0 / 256, 1.0 / 512, 1.0 / 1024, 1.0 / 2048, 1.0 / 4096, 1.0 / 8192} //, 1.0 / 16384} //, 1.0 / 32768, 1.0 / 65536} //how much to pull down the midpoint at each level of recursion
 
 	game := &State{
 		GameId:     gameId,
-		Players:    []*player.Player{creator}, //Add the creator as the first player
+		Players:    []*player.Player{},
 		masses:     []*mass.Mass{},
 		things:     []*thing.Thing{},
 		landSize:   landSize,
@@ -85,59 +89,9 @@ func NewGame(games map[uint32]*State, creator *player.Player) *State {
 		kinks:      kinks,
 	}
 
+	game.BuildFireMesh()
+
 	games[gameId] = game
-
-	y0pos := vec.NewVec3(0, 0, 0)
-
-	game.runwayStart = y0pos.Add(vec.NewVec3(0, 0, 20)) //will be projected onto the land
-	game.runwayEnd = y0pos.Add(vec.NewVec3(0, 0, -1200))
-	game.runwayWidth = 41
-
-	fire := game.BuildFireMesh()
-
-	fire.Ignite(vec.NewVec3(10, 0, 10)) //note the Y position has no effect
-
-	//initial (camera has not yet moved)
-	game.MakeLand(creator.Camera.Position, creator.Camera.Direction, fire)
-
-	//asigns a random game id
-
-	gridOrigin := vec.NewVec3(0, 0, 0)
-
-	//state.Players[player.Id] = player
-
-	treeMesh := plant.GrowTree()
-	//m.offset(nearestPen)
-	creator.Send(treeMesh.ToMsg(200)) //prep for 200 instance meshed trees (there will be many more billboarded)
-
-	//p.state.fire.ignite(NewVec3(-1, 100, 0.1)) //note the position is on the x/z plane
-
-	creator.Send(creator.Grid.AsMsg())
-
-	aircraft := Load("wip26")
-	t := game.MergeThing(aircraft.things[0], aircraft.masses)
-	aircraft = nil
-	creator.SetVehicle(t)
-
-	cg, weight := t.CentreOfMass()
-
-	log.Logit("aircraft weighs", weight)
-	t.Translate(gridOrigin.Sub(cg).Add(vec.NewVec3(0, 10, 0)))
-
-	creator.FollowVehicleWithCamera()
-
-	//p.updateActuators()
-
-	creator.Start(gameId, game.masses, game.things)
-	creator.SendControlPin()
-
-	//state.makeWater() //water is flowed and sent every cycle
-	//state.sendWater()
-
-	log.Logit("Game created", game.GameId)
-
-	//state.save("game" + fmt.Sprint(state.gameId) + ".bson")
-
 	return game
 }
 
@@ -181,8 +135,8 @@ func (st *State) MergeThing(t *thing.Thing, tm []*mass.Mass) *thing.Thing {
 // 	return closestThing, closestSpring
 // }
 
-func (game *State) ProcessStructuredMsg(p *player.Player, msg *jsonmsg.Msg, ws *websocket.Conn) {
-	p.ProcessStructuredMsg(game.running, game.masses, game.things, msg, ws, game.sounds, game.Players)
+func (game *State) ProcessStructuredMsg(viewer *viewer.Viewer, p *player.Player, msg *jsonmsg.Msg, ws *websocket.Conn) {
+	p.ProcessStructuredMsg(viewer, &game.running, game.masses, game.things, msg, ws, game.sounds, game.Players)
 }
 
 func (state *State) sendMovedMasses() {
@@ -207,7 +161,15 @@ func (state *State) sendMovedMasses() {
 			}
 		}
 
-		state.SendToAll(msg)
+		state.SendToAllViewers(msg)
+	}
+}
+
+func (state *State) SendToAllViewers(msg *msg.Msg) {
+	for _, player := range state.Players {
+		for _, viewer := range player.Viewers {
+			viewer.Send(msg)
+		}
 	}
 }
 
@@ -221,21 +183,20 @@ func (state *State) Step(subSteps int) { //this is called every 33ms from stepWo
 	state.fire.Burn(state.fire.Root) //-reinstate
 
 	for _, player := range state.Players {
-		if player.Socket != nil {
 
-			//sendInstancePositions(p, 201, flamePositions[:wp])
+		for _, viewer := range player.Viewers {
 
 			if state.running {
-				player.FollowVehicleWithCamera()
+				viewer.FollowVehicleWithCamera()
 			}
 
-			player.SendCamera()
-			player.SendLabels()
+			viewer.SendCamera()
+			viewer.SendLabels()
 
-			if player.ViewChangedSignificantly() {
+			if viewer.ViewChangedSignificantly() {
 
-				go player.GetFlames(state.fire)    //update visible flames for this player
-				go state.makeAndSendLandTo(player) //makes and sends new land
+				go viewer.GetFlames(state.fire)    //update visible flames for this player
+				go state.makeAndSendLandTo(viewer) //makes and sends new land
 
 			}
 		}
@@ -243,8 +204,8 @@ func (state *State) Step(subSteps int) { //this is called every 33ms from stepWo
 
 }
 
-func (s *State) makeAndSendLandTo(p *player.Player) {
-	p.Send(s.MakeLand(p.Camera.Position, p.Camera.Direction, s.fire)...)
+func (s *State) makeAndSendLandTo(v *viewer.Viewer) {
+	v.Send(s.MakeLand(v.Camera.Position, v.Camera.Direction)...)
 }
 
 // func loadGame(filename string) *state {
@@ -314,7 +275,7 @@ func landToBytes(s *State) []byte {
 	return buff.Bytes()
 }
 
-func (game *State) ProcessBinaryMsg(m *msg.Msg, player *player.Player) {
+func (NewGame *State) ProcessBinaryMsg(m *msg.Msg, viewer *viewer.Viewer, player *player.Player, games map[uint32]*State) {
 
 	switch m.MsgType {
 	case msg.CreateGame, msg.JoinGame, msg.JoinAsController:
@@ -323,27 +284,32 @@ func (game *State) ProcessBinaryMsg(m *msg.Msg, player *player.Player) {
 	case msg.ValueChange:
 		key := msg.GenericRead[string](m.Buff)
 		value := msg.GenericRead[float64](m.Buff)
-		player.SetBoundValue(key, value, game.masses, game.things)
+		player.SetBoundValue(key, value, NewGame.masses, NewGame.things)
 
 	case msg.Load:
 
 		filename := ""
 		m.Read(&filename)
 
-		game = Load(filename) //replace the game (globalls - as the game is a pointer)
-		game.FlyMasses()      //once to get lift vectors
+		//the old game is not destroyed - a new game is created and I am started in it
+		oGid := NewGame.GameId
+		NewGame = Load(games, filename) //replace the game (globals - as the game is a pointer)
 
-		//game.Players[player.Id] = player //put me (and my connected socket, camera and grid)into the game i just loaded
-		game.Players = append(game.Players, player)
+		NewGame.GameId = oGid
 
-		player.Start(filename, game.masses, game.things)
+		NewGame.FlyMasses() //once to get lift vectors
 
-		log.Logit("Game loaded", game.GameId)
+		//put me (and my connected socket, camera and grid)into the game i just loaded
+		NewGame.Players = append(NewGame.Players, player)
+
+		viewer.Start(NewGame.GameId, NewGame.masses, NewGame.things, make(map[*mass.Mass]bool)) //empty selected masses
+
+		log.Logit("Game loaded", NewGame.GameId)
 
 	case msg.Save:
 		filename := ""
 		m.Read(&filename)
-		game.save(filename, player.selectedMasses)
+		NewGame.save(filename, player.selectedMasses)
 		player.Notify("Saved OK", "info")
 
 	case msg.ControlPositions:
@@ -365,7 +331,7 @@ func (game *State) ProcessBinaryMsg(m *msg.Msg, player *player.Player) {
 
 }
 
-func Load(filename string) *State {
+func Load(games map[uint32]*State, filename string) *State {
 
 	file, err := os.Open(filename + ".bin")
 	if err != nil {
@@ -386,7 +352,7 @@ func Load(filename string) *State {
 	things := thing.ThingsFromMsg(m, masses)
 	players := player.PlayersFromBuff(buff, filename, things)
 
-	state := NewGame(filename, 1, 1, []float64{0})
+	state := NewGame(games)
 	state.masses = masses
 	state.things = things
 	state.Players = players
@@ -401,6 +367,12 @@ func Load(filename string) *State {
 
 	return state
 
+}
+
+func (s *State) SetRunway(start *vec.V3, vector *vec.V3, width float64) {
+	s.runwayStart = start
+	s.runwayEnd = start.Add(vector)
+	s.runwayWidth = width
 }
 
 func (s *State) BuildFireMesh() *terrain.TriMesh {
@@ -591,21 +563,21 @@ func (state *State) moveAll(substeps int) {
 			//move by inertia and friction
 			for _, m := range state.masses {
 
-				v := m.p.sub(m.op)
-				m.op = m.p.clone()
-				m.p.addIn(v.multiply(.999)) //inertia and friction (and damping)
-				m.p.y -= gravity
+				//TODO optimise - reduce allocs
+				v := m.P.Sub(m.Op)
+				m.Op = m.P.Clone()
+				m.P.AddIn(v.Multiply(.999)) //inertia and friction (and damping)
+				m.P.Y -= gravity
 
 			}
 
 			//socket will b closed - in gofu.go gameTraffic()
 
 			for _, p := range state.Players {
-				if p.Socket != nil {
-					p.sendVectors() //new
-					p.sendTelemetry()
+				for _, viewer := range p.Viewers {
+					viewer.SendVectors()
+					viewer.SendTelemetry()
 				}
-
 			}
 
 			state.runEngines() //places thrust on some springs
@@ -628,58 +600,6 @@ func (state *State) moveAll(substeps int) {
 		}
 	}
 
-	// for _, p := range state.players {
-	// 	if p.vehicle != nil {
-	// 		if p.moved(state) {
-	// 			state.RecordTrack(p)
-	// 		}
-	// 	}
-	// }
-
-}
-
-func (player *player) getMasses(state *State) []*mass.Mass {
-
-	port := player.vehicle.springs[1]
-	starboard := player.vehicle.springs[3]
-
-	fl := port.m2
-	rl := port.m1
-	fr := starboard.m2
-	rr := starboard.m2
-
-	return []*mass.Mass{fl, rl, fr, rr}
-}
-
-func (state *State) RecordTrack(player *player) {
-
-	if state.Tracks[player.name] == nil {
-		state.Tracks[player.name] = &track{Pointer: 0, Points: make([]float64, 800)}
-	}
-	track := state.Tracks[player.name]
-
-	track.record(player.getMasses(state))
-
-}
-
-// encode float 64's into the tracks points
-// A track is a stream of float 64's 8 per frame per player, 2 (x/y)  values per vert, 4 verts
-// this is to (massively) reduce the JSON overhead
-func (track *track) record(masses []*mass.Mass) {
-	if len(masses) > 4 {
-		panic("more than 4 track masses!" + strconv.Itoa(len(masses)))
-	}
-	if len(track.Points) < 8 {
-		panic("track points too small!")
-	}
-	for _, m := range masses {
-		track.Points[track.Pointer] = m.P.X
-		track.Points[track.Pointer+1] = m.P.Y
-		track.Pointer += 2
-	}
-	if track.Pointer >= len(track.Points) {
-		track.Pointer = 0
-	}
 }
 
 func (state *State) resolveMassOverlaps() {

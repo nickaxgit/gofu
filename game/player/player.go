@@ -14,6 +14,7 @@ import (
 	//"unsafe"
 	"github.com/gorilla/websocket"
 	"github.com/nickax/gofu/cam"
+	"github.com/nickax/gofu/viewer"
 
 	"github.com/nickax/gofu/fiz/mass"
 	"github.com/nickax/gofu/fiz/mixer"
@@ -64,20 +65,20 @@ type Player struct {
 	//state          *game.State //the game he is in
 	vehicle *thing.Thing //int    `json:"dozer"` //index of dozer in the things array
 
-	highlit highlitType
+	highlit     highlitType
+	Viewers     []*viewer.Viewer  //cameras watching this player
+	controllers []*websocket.Conn ///devices controlling this player/vehicle
 
 	currentThing *thing.Thing
 	mode         ModeEnum
 
-	mtx   *sync.Mutex // a mutex is required to 'lock' access to each users connection (for writing)
-	InMtx *sync.Mutex //inbound mutex, ensure only one command is processed at a time
 	// many calls (to wsEndpoint) can be running in paralell - and more than one of them may attempt to write to a single users Socket at the same time (not allowed!)
-	Socket           *websocket.Conn // a pointer to the socket - no players shoundnt have a socket, sockets should have a player (more than one socket can feed a player)
-	ControllerSocket *websocket.Conn //each player can only have one controller - but more than one player can drive/fly the same vehicle(e.g. pilot/co-pilot)
+	//Socket           *websocket.Conn // a pointer to the socket - no players shoundnt have a socket, sockets should have a player (more than one socket can feed a player)
+	//ControllerSocket *websocket.Conn //each player can only have one controller - but more than one player can drive/fly the same vehicle(e.g. pilot/co-pilot)
 
 	landTri *terrain.Tri //terrain is generated JIT for each player
-	Camera  *cam.Camera
-	lastCam *cam.Camera //where were we positioned/looking when we last generated land
+	//Camera  *cam.Camera
+	//lastCam *cam.Camera //where were we positioned/looking when we last generated land
 
 	Grid *grid.Grid
 
@@ -121,6 +122,10 @@ func (p *Player) SetVehicle(t *thing.Thing) {
 	p.vehicle = t
 }
 
+func (p *Player) AddViewer(pov string, ws *websocket.Conn) *viewer.Viewer {
+	return viewer.New(p.Viewers, p.vehicle, pov, ws)
+}
+
 // collects and sends the flames visible to this player
 func (p *Player) GetFlames(fire *terrain.TriMesh) {
 
@@ -130,9 +135,6 @@ func (p *Player) GetFlames(fire *terrain.TriMesh) {
 
 	p.Send(flameMesh.ToMsg(1))
 
-}
-
-func (player *Player) updateCamera() {
 }
 
 func (player *Player) clearContextMenu() {
@@ -296,34 +298,6 @@ func (player *Player) SetControlInputsFromBlob(blobId byte, x float64, y float64
 
 }
 
-func (player *Player) sendCentreOfMass(t *thing.Thing) {
-
-	cg, weight := t.CentreOfMass()
-	player.Send(msg.NewMsg(msg.CentreOfMass, t.Index, cg, float32(weight)))
-
-}
-
-func (player *Player) Send(msg ...*msg.Msg) {
-	for _, msg := range msg {
-		player.sendBytes(msg.AllBytes())
-	}
-
-}
-
-func (player *Player) ViewChangedSignificantly() bool {
-	if player.lastCam == nil {
-		return true
-	}
-
-	dist := player.Camera.Position.DistanceFrom(player.lastCam.Position)
-	dir := player.Camera.Direction.Dot(player.lastCam.Direction)
-	if dist > 100 || dir < .95 {
-		player.lastCam = player.Camera.Clone() //store this as the new old position
-		return true
-	}
-	return false
-}
-
 func (player *Player) sendControlPin() uint32 {
 
 	m := msg.NewMsg(msg.ControlToken)
@@ -345,6 +319,13 @@ func (player *Player) sendGameId(gameId uint32) {
 	m := msg.NewMsg(msg.GameId)
 	m.Write(gameId)
 	player.Send(m)
+}
+
+func (player *Player) sendCentreOfMass(t *thing.Thing) {
+
+	cg, weight := t.CentreOfMass()
+	player.Send(msg.NewMsg(msg.CentreOfMass, t.Index, cg, float32(weight)))
+
 }
 
 // func (p *Player) moveHighlit() {
@@ -394,25 +375,6 @@ func (player *Player) moveSelected(masses []*mass.Mass) {
 		player.sendMasses(s, false) //just send the new positions
 	}
 
-}
-
-func (player *Player) Start(masses []*mass.Mass, things []*thing.Thing) {
-
-	player.SendCamera()
-	player.Send(player.Grid.AsMsg())
-
-	player.currentThing = things[0]
-
-	player.sendMasses(masses, true)
-	player.sendThings(things)        //[]*thing.Thing{p.vehicle}) //sends mesh name and springs
-	player.sendGameId(player.gameId) //game id starts it running
-	player.SendLabelSets()
-	player.vehicle = things[0]
-	player.vehicle.SetVelocity(aero.TestFlight)
-	player.sendVectors(masses)
-	player.sendCentreOfMass(player.currentThing)
-
-	player.Notify("Loaded", "info")
 }
 
 func (player *Player) SetBoundValue(key string, value float64, masses []*mass.Mass, things []*thing.Thing) {
@@ -475,58 +437,7 @@ func (player *Player) regenTransformed(masses []*mass.Mass) {
 // 	p.sendBytes(buff.Bytes())
 // }
 
-func (player *Player) SendCamera() {
-
-	msg := msg.NewMsg(msg.Camera)
-	player.Camera.WriteTo(msg)
-
-	player.Send(msg)
-
-}
-
 // optimise - to send only changed labels
-func (player *Player) SendLabels() {
-
-	msg := msg.NewMsg(msg.Labels)
-	msg.Write(uint16(len(player.labels)))
-	for _, l := range player.labels {
-		l.WriteTo(msg)
-
-		// msg.WriteUint16(l.index)
-		// msg.WriteByte(l.backgroundColor)
-		// msg.WriteUint16(l.m1.Index)
-		// msg.WriteUint16(l.m2.Index)
-		// msg.WriteByte(l.voff)
-		// msg.WriteString(l.text)
-		//m.WriteFloat32(*l.boundTo)
-
-	}
-	player.Send(msg)
-}
-
-func (player *Player) sendInstancePositions(meshId uint16, positions []float32) {
-
-	msg := msg.NewMsg(msg.PositionInstances)
-
-	instanceCount := uint16((len(positions) - 1) / 3)
-	msg.Write(meshId, uint16(0), instanceCount, byte(0), positions)
-
-	player.Send(msg)
-
-}
-
-func (player *Player) sendMasses(masses []*mass.Mass, withDetail bool) {
-
-	msg := mass.MassesAsMsg(masses, withDetail, player.selectedMasses)
-
-	player.Send(msg)
-
-}
-
-func (player *Player) sendClear() {
-	msg := msg.NewMsg(msg.Clear)
-	player.Send(msg)
-}
 
 func (player *Player) velocity() float32 {
 
@@ -566,7 +477,7 @@ func (player *Player) sendTelemetry() {
 
 }
 
-func (player *Player) sendVectors(masses []*mass.Mass) {
+func (player *Player) Vectors(masses []*mass.Mass) *msg.Msg {
 
 	//send the mass index, vector and color - show lift at the wingtips (althoug it is actually shared between the three verts)
 
@@ -600,7 +511,7 @@ func (player *Player) sendVectors(masses []*mass.Mass) {
 		m.WriteVectorsTo(msg, red, blue, orange, magenta)
 	}
 
-	player.Send(msg)
+	return msg
 
 }
 
@@ -719,7 +630,7 @@ func (player *Player) MoveCamera(masses []*mass.Mass) {
 
 }
 
-func New(globalPlayers map[string]*Player, id uint32, name string, gameId string, socket *websocket.Conn, gridOrigin *vec.V3) *Player {
+func New(globalPlayers map[string]*Player, id uint32, name string, gameId uint32, socket *websocket.Conn, gridOrigin *vec.V3) *Player {
 
 	gridX := vec.NewVec3(1, 0, 0)
 	gridY := vec.NewVec3(0, 0, 1) //this is a bit confusing but the 2d grid is initialised on the word xz plane
@@ -737,7 +648,7 @@ func New(globalPlayers map[string]*Player, id uint32, name string, gameId string
 		currentThing: nil,
 		mode:         editing,
 
-		Socket:         socket,
+		//Socket:         socket,
 		Grid:           grid.New(gridOrigin, gridX, gridY),
 		cursor:         vec.NewVec2(0, 0),
 		grab:           nil,
@@ -788,12 +699,12 @@ func NewFromMsg(players map[string]*Player, m *msg.Msg, gameId string, things []
 	return p
 }
 
-func (player *Player) WriteTo(msg msg.Msg) {
+func (player *Player) WriteTo(msg *msg.Msg) {
 	msg.Write(player.Id, //unique player ID (Uint32)
 		player.Name,          //curent player name (may change)
-		player.vehicle.index) //thing index of their current vehicle
+		player.vehicle.Index) //thing index of their current vehicle
 	player.Camera.WriteTo(msg)
-	binary.Grid.WriteTo(msg)
+	player.Grid.WriteTo(msg)
 
 }
 
@@ -831,21 +742,6 @@ func PlayersFromBuff(buff *bytes.Buffer, gameId string, things []*thing.Thing) m
 	}
 
 	return players
-}
-
-func (player *Player) sendBytes(msg []byte) {
-
-	if player.Socket == nil {
-		log.Logit(player.Name + "player socket is disconnected")
-		return
-	}
-
-	player.mtx.Lock()         //<<---MUTEX
-	defer player.mtx.Unlock() //deferred unlock
-	messageType := websocket.BinaryMessage
-
-	//logit("sent", len(msg), " binary bytes")
-	player.Socket.WriteMessage(messageType, msg) //write the message (and return any error)
 }
 
 // func (player *Player) send(msg *reply) { //this is fo JSON message s- Dperecated
@@ -889,7 +785,7 @@ func (player *Player) Tidy(masses []*mass.Mass, things []*thing.Thing) {
 	}
 }
 
-func (player *Player) ProcessStructuredMsg(isRunning *bool, masses []*mass.Mass, things []*thing.Thing, msg *jsonmsg.Msg, ws *websocket.Conn, sounds []*sound.Sound, players []*Player) {
+func (player *Player) ProcessStructuredMsg(viewer *viewer.Viewer, isRunning *bool, masses []*mass.Mass, things []*thing.Thing, msg *jsonmsg.Msg, ws *websocket.Conn, sounds []*sound.Sound, players []*Player) {
 
 	//var fpn string //firstPlayer *Player
 
@@ -915,34 +811,22 @@ func (player *Player) ProcessStructuredMsg(isRunning *bool, masses []*mass.Mass,
 			dy = 0
 		}
 
-	case "step":
-		//<-player.waitChannel //see stepworlds fo rthe sending end which releases this
-
-	case "drive":
-
-		// if strings.HasPrefix(player.name, "control-") {
-		// 	player = state.players[strings.TrimPrefix(player.name, "control-")]
-		// }
-		// player.leftDrive = msg.Payload[0]  //no need to echo them back - local versions are used for knobs only
-		// player.rightDrive = msg.Payload[1] //no need to echo them back - local versions are used for knobs only
-		// player.thrust = msg.Payload[2]
-
 	case "mw": //mousewheel
 
 		//player.Camera.Position.y += msg.Payload[0] * -0.01 //up and down
 
-		player.Camera.Position.AddIn(player.Grid.Normal().Multiply(msg.Payload[0] * -0.005))
+		viewer.Camera.Position.AddIn(player.Grid.Normal().Multiply(msg.Payload[0] * -0.005))
 		player.zOff += msg.Payload[0] * -0.005
 
 		player.processMouseMove(*isRunning, masses, things)
-		player.SendCamera()
+		viewer.SendCamera()
 
 	case "mm": //mouse move
 
 		player.movedSinceMouseDown = true
 
 		player.buttons = byte(msg.Payload[0])
-		player.Camera.FarPos = vec.NewVec3(msg.Payload[1], msg.Payload[2], msg.Payload[3])
+		viewer.Camera.FarPos = vec.NewVec3(msg.Payload[1], msg.Payload[2], msg.Payload[3])
 		player.cursor.X = msg.Payload[4]
 		player.cursor.Y = msg.Payload[5]
 
@@ -952,7 +836,7 @@ func (player *Player) ProcessStructuredMsg(isRunning *bool, masses []*mass.Mass,
 
 		if player.buttons == 2 && player.movedSinceMouseDown == false {
 
-			player.sendVectors() //send the new vectors
+			viewer.SendVectors() //send the new vectors
 
 			if player.highlit.mass != nil {
 
@@ -1081,13 +965,11 @@ func (player *Player) ProcessStructuredMsg(isRunning *bool, masses []*mass.Mass,
 
 		k := msg.Key
 		kl := strings.ToLower(k)
-
 		player.keys[k] = true
 
 		log.Logit("key down", k)
 		shift := msg.Payload[0]
 		ctrl := msg.Payload[1]
-		//alt := pl["alt"].(bool)
 
 		if shift > 0 {
 			prop = "scale"
@@ -1098,68 +980,58 @@ func (player *Player) ProcessStructuredMsg(isRunning *bool, masses []*mass.Mass,
 			step = .1
 		}
 
-		if k == "ArrowLeft" {
+		switch k {
+		case "ArrowLeft":
 			dx = -step
 			if *isRunning {
 				player.controls[input.StickX] -= 0.05
 			}
-
-		} else if k == "ArrowRight" {
+		case "ArrowRight":
 			dx = +step
 			if *isRunning {
 				player.controls[input.StickX] += 0.05
 			}
 
-		} else if k == "ArrowUp" {
+		case "ArrowUp":
 			if *isRunning {
 				player.controls[input.StickY] += 0.05
 			}
 
 			dy = +step
-		} else if k == "ArrowDown" {
+		case "ArrowDown":
 			if *isRunning {
 				player.controls[input.StickY] -= 0.05
 			}
 
 			dy = -step //see the end of the if block for where the transform is send if dx or dy are set
-		} else if kl == "t" {
+
+		}
+
+		switch kl {
+		case "t":
 			if player.currentThing == nil {
 				player.currentThing = things[0]
 			}
 			player.setMode(adding)
-		} else if kl == "y" {
+		case "y":
 			player.SnapMasses(things)
 			player.Tidy(masses, things)
 			player.sendClear()
 			log.Logit("tidy")
 			player.sendMasses(masses, true)
 			player.sendThings(things)
-		} else if kl == "-" {
+		case "-":
 			player.controls[input.Throttle] -= 0.05
-		} else if kl == "+" {
+		case "+":
 			player.controls[input.Throttle] += 0.05
-		} else if kl == "b" {
+		case "b":
+			//grow a bush
 
-			// pens := make([]*vec3, 100)
-
-			// count := int(0)
-			// p.landTri.probe(p.camera.Position, p.camera.Farpos, pens, &count)
-
-			// nearestPen := NewVec3(0, 0, 0)
-			// sd := float64(1000000.0)
-			// for _, pen := range pens {
-			// 	if pen != nil {
-			// 		if p.camera.Position.distanceFrom(pen) < sd {
-			// 			nearestPen = pen
-			// 		}
-			// 	}
-			// }
-
-			// //grow a tree, offset it, and send it to player
-
-		} else if kl == "e" {
+		case "e":
 			player.setMode(editing)
-		} else if player.keys["Control"] && kl == "d" { //deselect all
+		}
+
+		if player.keys["Control"] && kl == "d" { //deselect all
 			//deselect all masses
 			player.selectedMasses = make(map[*mass.Mass]bool)
 			player.sendMasses(masses, true)
@@ -1272,7 +1144,7 @@ func (player *Player) ProcessStructuredMsg(isRunning *bool, masses []*mass.Mass,
 		} else if k == "Escape" {
 			if player.mode == stretching {
 				player.springCursor.R = 0
-				player.sendMasses([]*mass.Mass{player.springCursor}, true)
+				viewer.SendMasses([]*mass.Mass{player.springCursor}, true)
 				masses = masses[:len(masses)-1] //delete the last mass
 				player.currentThing.DeleteLastSpring()
 				player.sendThings([]*thing.Thing{player.currentThing}) //one less spring
@@ -1283,7 +1155,7 @@ func (player *Player) ProcessStructuredMsg(isRunning *bool, masses []*mass.Mass,
 				}
 
 				s := slices.Collect(maps.Keys(player.selectedMasses))
-				player.sendMasses(s, false)
+				viewer.sendMasses(s, false)
 				player.setMode(editing)
 			} else if player.mode == props {
 				player.boundValues = make(map[string]*float64, 0)
@@ -1349,15 +1221,14 @@ func (player *Player) ProcessStructuredMsg(isRunning *bool, masses []*mass.Mass,
 			} else {
 				player.sendMessage("Select one mass, and higlight another when setting axes", "error")
 			}
-		} else if kl == "l" {
+		} else if kl == "l" { //flip the lift direction of the highlit mass (wing)
 
 			player.SnapMasses(things)
 			if player.highlit.mass != nil {
 				player.highlit.mass.Flip = !player.highlit.mass.Flip
 				player.vehicle.SetVelocity(aero.TestFlight)
-				player.state.FlyMasses()   //*pretend* we are flying at 20ms
-				player.sendVectors(masses) //does a fake flyMasses()
-				player.SendLabels()
+				player.state.FlyMasses() //*pretend* we are flying at 20ms
+				viewer.SendLabels(player.labels)
 			}
 		} else if kl == "i" { //turin on AoA labels on wings, and brake force on brake masses, extension on spring actuators
 			player.labels = make([]*label.Label, 0)
@@ -1415,7 +1286,7 @@ func (player *Player) ProcessStructuredMsg(isRunning *bool, masses []*mass.Mass,
 				ct.MeshScale.X += dx
 				ct.MeshScale.Y += dy
 			}
-			// - may be required in future (aliging tex/mesh/masses) p.sendThings([]*thing.Thing{ct}) //will need to send the offset, rotation and scale of the mesh/skin
+			viewer.sendThings([]*thing.Thing{ct}) //will need to send the offset, rotation and scale of the mesh/skin
 		}
 	}
 }
@@ -1429,17 +1300,6 @@ func (player *Player) FollowVehicleWithCamera() {
 
 func (player *Player) GetCamera() *cam.Camera {
 	return player.Camera
-}
-
-func (player *Player) sendThings(things []*thing.Thing) {
-
-	msg := msg.NewMsg(msg.Things, uint32(len(things))) //placeholder for number of things
-
-	for _, thing := range things {
-		thing.WriteTo(msg)
-	}
-	player.Send(msg)
-
 }
 
 func (player *Player) SnapMasses(things []*thing.Thing) {

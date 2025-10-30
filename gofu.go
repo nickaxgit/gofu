@@ -126,8 +126,8 @@ func main() {
 
 }
 
-// shit name - should be 'join' (or somesuch)
-func gameTraffic(w http.ResponseWriter, r *http.Request) {
+
+func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) {
 
 	// upgrade this connection to a WebSocket
 	ws, err := upgrader.Upgrade(w, r, nil)
@@ -175,7 +175,7 @@ func gameTraffic(w http.ResponseWriter, r *http.Request) {
 			} else {
 
 				player.InMtx.Lock()
-				server.Games[player.GameId].ProcessBinaryMsg(m, player)
+				server.Games[player.GameId].ProcessBinaryMsg(m, player,server.Games)
 				//player.ProcessBinaryMsg(m)
 				player.InMtx.Unlock()
 
@@ -202,7 +202,7 @@ func customHeaders(fs http.Handler) http.HandlerFunc {
 		// return if you do not want the FileServer handle a specific request
 
 		if strings.HasSuffix(r.RequestURI, "/gi") {
-			gameTraffic(w, r)
+			upgradeToWebSocketAndListenForeverw, r)
 			return
 		}
 

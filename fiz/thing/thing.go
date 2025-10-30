@@ -21,12 +21,14 @@ type Thing struct {
 	//a thing is really a collection of Springs (which never intersect)
 	//to which we pin an image
 	//state    *game.State // a reference back to the game/state it belongs to
-	Index        uint32
-	Om           *mass.Mass //origin mass
-	Fm           *mass.Mass //forward mass (defines z axis)
-	Rm           *mass.Mass // right mass (deinfes x axis)
-	Springs      []*spring.Spring
-	faces        []*poly.ConvexPoly //face
+	Index   uint32
+	Om      *mass.Mass //origin mass
+	Fm      *mass.Mass //forward mass (defines z axis)
+	Rm      *mass.Mass // right mass (deinfes x axis)
+	Springs []*spring.Spring
+	faces   []*poly.ConvexPoly     //face
+	cameras map[string]*cam.Camera //Additional *initial* (named) position, direction and up in vehicle space
+
 	meshName     string
 	MeshOffset   *vec.V3
 	MeshScale    *vec.V3
@@ -37,9 +39,27 @@ type Thing struct {
 	Engines []*engine.Engine //multiple engines
 }
 
+func (t *Thing) FindCam(cam *cam.Camera, pov string) {
+
+	povCam, present := t.cameras[pov]
+	if present {
+		cam = povCam
+	} else {
+		log.Logit("thing", t.meshName, "has no camera for ", pov)
+	}
+
+}
+
 func New(things []*Thing, meshName string, numEngines int) *Thing {
 
-	t := &Thing{Index: uint32(len(things)), meshName: meshName, MeshScale: vec.NewVec3(1, 1, 1), MeshOffset: vec.NewVec3(0, 0, 0), Springs: []*spring.Spring{}, faces: []*poly.ConvexPoly{}, Visibility: 1, MeshRotation: vec.NewVec3(0, math.Pi*2, 0)}
+	t := &Thing{Index: uint32(len(things)),
+		meshName:  meshName,
+		MeshScale: vec.NewVec3(1, 1, 1), MeshOffset: vec.NewVec3(0, 0, 0), MeshRotation: vec.NewVec3(0, math.Pi*2, 0),
+		Springs:    []*spring.Spring{},
+		faces:      []*poly.ConvexPoly{},
+		Visibility: 1,
+		cameras:    make(map[string]*cam.Camera),
+	}
 	things = append(things, t)
 
 	//moment of inertia of a disc is 1/2 m * r^2

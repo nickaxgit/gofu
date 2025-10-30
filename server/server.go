@@ -6,6 +6,8 @@ import (
 	"github.com/nickax/gofu/game"
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/game/player"
+	"github.com/nickax/gofu/plant"
+	"github.com/nickax/gofu/viewer"
 
 	"github.com/nickax/gofu/jsonmsg"
 	"github.com/nickax/gofu/log"
@@ -106,9 +108,38 @@ func ProcessCreateJoinOrControl(m *msg.Msg, ws *websocket.Conn) error {
 		if player.Id != playerId {
 			return errors.New("Player ID does not match name")
 		}
-		player.Socket = ws //Bind the websocket to the player (as early as we can)
 
-		game.NewGame(Games, player) //will make a game with a new ID and add the player to it
+		viewer := player.AddViewer("pilot", ws) //add a viewer, and place them on this socket
+
+		//will make a game with a new ID and add the player to it
+		gm := game.NewGame(Games)
+
+		gm.SetRunway(vec.NewVec3(0, 0, 20), vec.NewVec3(1000, 0, 1000), 40)
+
+		gm.Fire.Ignite(vec.NewVec3(10, 0, -1000)) //note the Y position has no effect
+
+		aircraft := Load("wip26")
+		vehicle := game.MergeThing(aircraft.things[0], aircraft.masses)
+		aircraft = nil //gc (eventually)
+		player.SetVehicle(vehicle)
+
+		//this block should by done by/for the viewer
+		//will plough the runway and set the start and end heights
+		msgs := gm.MakeLand(viewer.Camera.Position, viewer.Camera.Direction)
+		viewer.Send(msgs...) //send the land
+		gridOrigin := vec.NewVec3(0, 0, 0)
+		viewer.Send(plant.GrowTree().ToMsg(200)) //prep for 200 instance meshed trees (there will be many more billboarded)
+		viewer.Send(player.Grid.AsMsg())
+
+		cg, weight := t.CentreOfMass()
+
+		log.Logit("aircraft weighs", weight)
+		t.Translate(gridOrigin.Sub(cg).Add(vec.NewVec3(0, 10, 0)))
+
+		viewer.Start(gameId, game.masses, game.things)
+		creator.SendControlPin()
+
+		log.Logit("Game created", game.GameId)
 
 		return nil
 
