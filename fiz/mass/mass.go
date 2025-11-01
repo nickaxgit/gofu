@@ -51,6 +51,44 @@ type Mass struct {
 
 }
 
+func VectorsAsMsg(masses []*Mass) *msg.Msg {
+
+	//send the mass index, vector and color - show lift at the wingtips (althoug it is actually shared between the three verts)
+
+	msg := msg.NewMsg(msg.Vectors)
+
+	orange := uint8(6)
+	blue := uint8(1)
+	red := uint8(4)
+
+	magenta := uint8(5)
+
+	//NEED PAUSED
+
+	numVecs := 0
+	for _, m := range masses {
+		numVecs++
+		if m.Axle != nil {
+			numVecs++
+		}
+		if m.lift != nil {
+			numVecs++
+			if m.Axle != nil {
+				numVecs++
+			}
+		}
+	}
+
+	msg.Write(uint16(numVecs)) //number of vectors
+
+	for _, m := range masses {
+		m.WriteVectorsTo(msg, red, blue, orange, magenta)
+	}
+
+	return msg
+
+}
+
 func (m *Mass) Contains(p *vec.V3) bool {
 	return m.P.DistanceFrom(p) <= m.R
 }

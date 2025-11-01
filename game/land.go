@@ -13,7 +13,7 @@ import (
 	"github.com/nickax/gofu/vec"
 )
 
-func (s *State) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
+func (game *State) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
 
 	//TODO only reposition/resend trees in new positions (most trees do not need resending)
 	//need to do trees after waterlines so we don't get trees underwater
@@ -38,18 +38,18 @@ func (s *State) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3) [
 
 }
 
-func (s *State) MakeLand(camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
+func (game *State) MakeLand(camPos *vec.V3, camDir *vec.V3) (groundPosition *vec.V3, GroundTri *terrain.Tri, messages []*msg.Msg) {
 
 	msgs := []*msg.Msg{}
 
-	land := terrain.NewTriMesh("land", 65000, s.landSize, s.kinks, s.landHeight)
+	land := terrain.NewTriMesh("land", 65000, game.landSize, game.kinks, game.landHeight)
 	ts := time.Now()
 	up := vec.Up
 
 	//note - runway is projected onto y=0 up to here
 
-	rs := s.runwayStart
-	re := s.runwayEnd
+	rs := game.runwayStart
+	re := game.runwayEnd
 	rs.Y = 0
 	re.Y = 0
 
@@ -94,17 +94,18 @@ func (s *State) MakeLand(camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
 
 	//patch convert and send
 
-	s.runwayStart, _ = land.Root.VprobeLand(s.runwayStart)
-	s.runwayEnd.SetY(s.runwayStart.GetY()) //keep the runway level with the start point
+	groundPosition, groundTriangle := land.Root.VprobeLand(camPos)
+	game.runwayStart, _ = land.Root.VprobeLand(game.runwayStart)
+	game.runwayEnd.SetY(game.runwayStart.GetY()) //keep the runway level with the start point
 
-	land.Root.Plough(s.runwayStart, s.runwayEnd, s.runwayWidth) //recurse down through and plough a runway
+	land.Root.Plough(game.runwayStart, game.runwayEnd, game.runwayWidth) //recurse down through and plough a runway
 
 	//probe the land at the four corners of the runway and add two triangles
-	cross := s.runwayStart.Sub(s.runwayEnd).Normalise().Cross(up).Multiply(s.runwayWidth / 2)
-	bl := s.runwayStart.Sub(cross)
-	br := s.runwayStart.Add(cross)
-	tl := s.runwayEnd.Sub(cross)
-	tr := s.runwayEnd.Add(cross)
+	cross := game.runwayStart.Sub(game.runwayEnd).Normalise().Cross(up).Multiply(game.runwayWidth / 2)
+	bl := game.runwayStart.Sub(cross)
+	br := game.runwayStart.Add(cross)
+	tl := game.runwayEnd.Sub(cross)
+	tr := game.runwayEnd.Add(cross)
 	//var n *vec3
 	bl, _ = land.Root.VprobeLand(bl) //find the ground surface
 	tl, _ = land.Root.VprobeLand(tl) //find the ground surface
@@ -133,7 +134,7 @@ func (s *State) MakeLand(camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
 	log.Logit("splitting took", time.Since(ts).Milliseconds())
 	//}
 
-	waterlines := []float64{s.landHeight * 0.71, s.landHeight * 0.41, 0.1, -s.landHeight * 0.52}
+	waterlines := []float64{game.landHeight * 0.71, game.landHeight * 0.41, 0.1, -game.landHeight * 0.52}
 
 	//makes end send the water surfaces - one for each waterline
 	msgs = append(msgs, land.FloodAndDrain(waterlines)...)
@@ -151,18 +152,17 @@ func (s *State) MakeLand(camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
 	}
 
 	ts = time.Now()
-	land.Root.Scorch(s.fire) //update the scorched state of non culled leaf triangles
+	land.Root.Scorch(game.fire) //update the scorched state of non culled leaf triangles
 	log.Logit("scorching took", time.Since(ts).Milliseconds(), "ms")
 
-	smallLandMesh := land.Root.ToSimpleMesh(2, land, s.fire, "land", false, isLand)
+	smallLandMesh := land.Root.ToSimpleMesh(2, land, game.fire, "land", false, isLand)
 	log.Logit("converted land mesh in", time.Since(ts).Milliseconds(), "ms")
 	log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
 
-	scorchedLand := land.Root.ToSimpleMesh(56, land, s.fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
-	wireframe := land.Root.ToSimpleMesh(32, land, s.fire, "whiteWires", false, isLand)
+	scorchedLand := land.Root.ToSimpleMesh(56, land, game.fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
+	wireframe := land.Root.ToSimpleMesh(32, land, game.fire, "whiteWires", false, isLand)
 
 	msgs = append(msgs, smallLandMesh.ToMsg(1), scorchedLand.ToMsg(1), wireframe.ToMsg(1)) //send them together - or transient gaps can appear
 
-	return msgs
-
+	return msgs, groundPosition, groundTriangle
 }

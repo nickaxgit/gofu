@@ -9,6 +9,7 @@ import (
 	"github.com/nickax/gofu/jsonmsg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/server"
+	"github.com/nickax/gofu/viewer"
 
 	"github.com/nickax/gofu/vec"
 	//"log"
@@ -126,7 +127,6 @@ func main() {
 
 }
 
-
 func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) {
 
 	// upgrade this connection to a WebSocket
@@ -136,12 +136,8 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 		log.Logit(err)
 	}
 
-	//var state *state //initially nil set inside processMsg
-	//var player *player
-
-	//when a player creates or joins a game - their websocket is hooked up to the player
-	var player *player.Player
-	for { // read in a messages forever on this socket (from this player)
+	var viewer *viewer.Viewer //this is set processing a create/join/control message
+	for {                     // read in a messages forever on this socket (from this player)
 
 		messageType, msgBytes, err := ws.ReadMessage()
 
@@ -150,32 +146,33 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 			break
 		}
 
-		if messageType == websocket.TextMessage {
-			if player != nil {
-				var jsonMessage jsonmsg.Msg
-				err := json.Unmarshal(msgBytes, &jsonMessage)
-				if err != nil {
-					log.Logit(err.Error())
+		if viewer == nil {
+			viewer := viewer.New(nil, 0, "", ws) //temporary viewer to hold the socket
+
+			if messageType == websocket.TextMessage {
+				if viewer != nil {
+					var jsonMessage jsonmsg.Msg
+					err := json.Unmarshal(msgBytes, &jsonMessage)
+					if err != nil {
+						log.Logit(err.Error())
+					}
+
+					player := server.GlobalPlayers[viewer.ViewingPlayerId]
+					server.ProcessStructuredMsg(viewer, player, &jsonMessage, ws)
+				} else {
+					panic(errors.New("viewer is nil in text message processing"))
+
 				}
 
-				server.ProcessStructuredMsg(player, &jsonMessage, ws)
+			} else if messageType == websocket.BinaryMessage {
+				//msgbytes is a slice of bytes
 
-			}
+				m := msg.NewFromBytes(msgBytes)
 
-		} else if messageType == websocket.BinaryMessage {
-			//msgbytes is a slice of bytes
-
-			m := msg.NewFromBytes(msgBytes)
-			if player == nil {
-				error := server.ProcessCreateJoinOrControl(m, ws) //ws is loaded into the player.socket or player.controllerSocket
-				if error != nil {
-					log.Logit("Error processing create/join/control:", error)
-					break
+				if viewer != nil {
+					viewer.InMtx.Lock()
 				}
-			} else {
-
-				player.InMtx.Lock()
-				server.Games[player.GameId].ProcessBinaryMsg(m, player,server.Games)
+				server.Games[player.GameId].ProcessBinaryMsg(m, player, server.Games)
 				//player.ProcessBinaryMsg(m)
 				player.InMtx.Unlock()
 
@@ -202,7 +199,7 @@ func customHeaders(fs http.Handler) http.HandlerFunc {
 		// return if you do not want the FileServer handle a specific request
 
 		if strings.HasSuffix(r.RequestURI, "/gi") {
-			upgradeToWebSocketAndListenForeverw, r)
+			upgradeToWebSocketAndListenForever(w, r)
 			return
 		}
 

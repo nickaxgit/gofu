@@ -13,20 +13,23 @@ type Mixer struct {
 	//value      float64 //normalised input value (-1 to 1)
 	min         float64 //what does "-1" on the stick map to
 	max         float64
-	EngineIndex int
+	EngineIndex int //this is effectively the 'tag' of the engine - so we can bind the same mixers in multiple aircraft
 	//conversion float64 //final scaling/conversion at output (mostly to convert degrees to radians)
 	Actuator actuator.ActuatorEnum //float64 //springActuatorEnum //springs/masses are 'tagged' with this - and 'bound' to the spring/mass herein
 	Spring   *spring.Spring        //springs are like hydraulic cylinders (unles they are engines)
 	Mass     *mass.Mass            //masses are brakes or driven wheels (they must have an axle)
-	Engine   *engine.Engine        //engines are springs (which speficy a direction of thrust)
+	Engine   *engine.Engine        //once bound - this has a value
 	//isBrake  bool //is this a brake (affects mass friction)
 }
 
+// func NewMixer(controlIn input.ControlInput, min float64, max float64, engine *engine.Engine, actuator actuator.ActuatorEnum) *Mixer { //,spring *spring,mass *mass,isBrake bool) *mix {
 func NewMixer(controlIn input.ControlInput, min float64, max float64, engineIndex int, actuator actuator.ActuatorEnum) *Mixer { //,spring *spring,mass *mass,isBrake bool) *mix {
 	return &Mixer{in: controlIn, min: min, max: max, EngineIndex: engineIndex, Actuator: actuator, Spring: nil, Mass: nil}
+	//return &Mixer{in: controlIn, min: min, max: max, Engine:engine, Actuator: actuator, Spring: nil, Mass: nil}
 }
 
 var throw float64 = 0.2 //full throw of a control surface (in metres of actuator extension)
+
 var StandardMixers = []*Mixer{
 
 	NewMixer(input.StickX, -throw, throw, 0, actuator.LeftAileron),
@@ -65,11 +68,12 @@ func (mix *Mixer) ZeroOutputs() {
 	}
 }
 
-func (mixer *Mixer) Mix(controlInputs map[input.ControlInput]float64, engines []*engine.Engine) {
-	if mixer.EngineIndex > -1 { //
+func (mixer *Mixer) Mix(controlInputs map[input.ControlInput]float64) { //}, engines []*engine.Engine) {
+	if mixer.Engine != nil { //EngineIndex > -1 { //
 
-		e := engines[mixer.EngineIndex]
-		e.Throttle(mixer.output(controlInputs))
+		//e := engines[mixer.EngineIndex]
+		//e.Throttle(mixer.output(controlInputs))
+		mixer.Engine.Throttle(mixer.output(controlInputs))
 
 		//thrust is genrated and applied to the engines spring in runEngines()
 

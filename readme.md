@@ -67,7 +67,6 @@ Disentangle mass.selected from the game .. I need to be able to send selections 
 
 Players should reside in global list - they can only be in one game (player.gameId) at once
 
-games do not need to hold a set of players - ony a set of player ID's (or have server.sendToPlayersIn(gameId))
 
 ``
 server
@@ -153,10 +152,12 @@ May need to wait for airspace to be clear at the spawn point - waits of more tha
 Adds a view/spectate/instrument panel/cockpit side window
 
 //records the current camera position and direction 'vehicle space'
-msgAddView
+msgAddViewer
 name=portWindow
 
 save it into the vehicle (thing)
+
+done by a creator.editor - gets saved into the thing
 
 Thing.views.add Name,camera
 
@@ -168,8 +169,6 @@ viewpoint
 struct thing
     viewpoints map[string]*Camera //Additional *initial* (named) position, direction and up in vehicle space
 
-game
-    viewers []*Viewer
 
     There are players, viewers and controllers
     A separation of concerns here allows a player to have many viewers and many controllers
@@ -325,3 +324,139 @@ If you have an Android Phone and Google chrome - you can 'cast' the game (you ar
 
 If you have an Apple iPhone it's easier to start or join a game using the TV's web browser, and then take control of it by scanning the QR code on your TV
 
+
+
+
+
+Timeline:-
+
+by 5th November - Major refactor complete - high speed dynamic terrain
+by 12th November - aircraft loading, flying, multiple viewers and controllers
+by 19th November - alighting, boarding, spawning, persistence - server restarts/upgrades
+by 25th November - collisions, bouyancy, scooping
+by 1st Decemeber - water & fire FX ()
+by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
+
+* UI/Gameplay
+    * Action replay 
+    * Visual Rewind/DoOver (note you can't doOver in a multiplayer game - you would have to rewind time for everyone)
+    * Ground 'tracking' camera (Firebeaters PoV of your drop)
+    * Ground & fire mini/moving maps
+    * Missions, setup/definition, Scoring/completion
+
+    * Music
+* Commms
+    * Audio comms (radio/PTT)
+    * Beeping/deswearing (FFT, stretching, matching (delta F's))
+
+* Marketing
+    * Name/Branding/Domain
+    * Frictionless easy 'drop in' missions
+    * Invites/Colab play
+
+* Controls & display
+    * Flight controls (inputs - blob tracking, controllers)
+    * Touchscreen control
+    * Reverse blob tracking (yoke control - sensor fusion (cameras and accelerometer)
+
+* Realism/simulation
+    * Gear, flaps and control surface animations
+    * (working) Cockpit instruments
+    * Structural failures (overspeed/crashes)
+
+* Landscape
+    * Trees variations and habitats
+    * Pruning and planting
+    * Snow-pack
+    * Flowing/better water
+    * Infrasturcture - roads and buildings
+
+* Editor    
+    * Editor fixes, cleaning and re-work
+    * Skin editing
+
+* Characters
+    
+    * Angle and twist constraints (on springs)
+    * Humans / ragdolls
+    * balancing/walking
+
+* Aircraft
+    * Fire Tractor
+    * Drone
+
+* Server
+    * Security
+    * Performance
+    * Deployment
+    * Persistence/updating
+
+* Membership
+    * Signup 
+    * Payment processing    
+    * Mailing engine
+    * In-game mailing/(off line) messaging
+    * Monetisation - fuel costs money, aircraft cost money - beating/putting out fires earns money
+   
+   
+    possible to play for free - but without a vehicle
+    AT-802F's = 4.8M$
+    CL415 30M$
+    Pivotal "BlackFly" drone 190k$ (base)
+
+    Avgas - $7000 full load (10,000 lbs) for the CL415
+
+    at 1:1000 - it would cost 7 real-world dollars to fill
+    
+    Each (real) USD buys you 1 million game dollars
+
+
+   players $balance is on display 
+
+   $/€/£/AUG - Money - the game operates in grams of gold (approx 100$) - balances can be displayed in any currency at the day market rate - the will fluctuate when displayed in antyhing other than AUG
+   10kg of gold - approx $1M dollars - will cost £1 - which makes a super scooper cost £30
+   A $7,000 fuel load would cost 0.7cents (70 AUG)
+
+
+   XP - Experience points
+   RP - Reputation points (increase with succesful missions, teamwork, co-piloting/spotting, donations, ROK's, decrease with crashes, incomplete missions, 'cowardice', dangerous flying (high G) , quitting, fighting, swearing (you can knock someone reputation by twice what you are prepared to give up - or maybe it's some inverse proportion) ) 
+     
+
+
+A viewer has a player (except prior to) watch 
+It is a lightweight object holding, a camera and a playerId
+
+A game can exist without players - it doesn't (need to) "belong" to anyone
+
+viewer.msgCreateGame  returnd gid
+
+msgCreatePlayer("name") - returns Pid
+
+AddPlayerToGame(gid,pid)
+
+msgWatch(PlayerId)
+
+msgReconnectViewer(viewerId)
+
+
+A viewer is created upon connection - added to the blobal viewrs and its viewer.socket is set to the ws
+It's watchingplayerID is initially -1
+viewers have a watchingPlayerId
+players Have a game id
+The player.viewers and game.players collection have been removed (so player.gameId and viewer.watchingPlayerId are single sources of truth)
+
+all commands come from viewers (not players)
+CreateGame - only creates a game
+A viewer and player must be added
+
+
+
+viewer.msgWatch(pid)
+
+A player should be able to leave a game and join another - it's viewers should follow automatically
+A viewer should be able to change it's watchingPlayer
+A viewer should be able to switch to a different camera (clone a differnt camera in the vehicle)
+
+
+Drop cams .. should appear on the ground - some distance ahead of the vehicle, then track the vehicle
+(parachuting drop cams ?)

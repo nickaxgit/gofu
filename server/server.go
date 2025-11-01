@@ -4,26 +4,15 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/nickax/gofu/fiz/thing"
 	"github.com/nickax/gofu/game"
-	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/game/player"
-	"github.com/nickax/gofu/plant"
+	"github.com/nickax/gofu/global"
 	"github.com/nickax/gofu/viewer"
 
-	"github.com/nickax/gofu/jsonmsg"
-	"github.com/nickax/gofu/log"
-
-	"github.com/nickax/gofu/vec"
-
-	"errors"
 	"sync"
 	"time"
 )
 
-var globalPlayers = map[string]*player.Player{}        //all players in all games game - by id
-var controlTokens = make(map[uint32]*player.Player, 0) //every login adds a random token to here to allow control by another player/device
-var Games = make(map[uint32]*game.State)               //the data of games in progress - by id
-
-var nick = player.New(globalPlayers, 999, "nick", "", nil, vec.NewVec3(0, 0, 0)) //the nick player
+//var nick = player.New(globalPlayers, uint32(999), "nick", 0) //the nick player
 
 func StepWorldsForever() {
 
@@ -32,11 +21,45 @@ func StepWorldsForever() {
 	//every 100 ms step all worlds
 	for range time.Tick(time.Millisecond * 33) { //<<waits here  //30fps
 		//print(".") //<< this is the heartbeat
-		for _, game := range Games {
+		for _, game := range global.Games {
 
-			game.Step(5) //<- this is a physics step - it queues stuff for all players
+			cvs := currentViewers(game) //TODO optimise (cache this)
+			//game.Step(5) //<- this is a physics step - it queues stuff for all players
+			if game.Running {
+				for _, t := range game.Things {
+					t.UpdateTelemetry()
+				}
 
-			game.MoveCameras() //manual movement (keys and mouse)
+				game.Burn()
+
+				msgs := game.MoveAll(5) //<- this is a physics step - it returns a message containing moved masses
+				for _, viewer := range cvs {
+					viewer.Send(msgs) //send the moved masses
+
+					vehicle := viewer.GetVehicle(global.Players)
+					if vehicle != nil {
+						//viewer.Send(mass.Vectors())
+						viewer.SendVectors()
+						viewer.Send(vehicle.GetTelemetry())
+					}
+
+					//viewer.FollowVehicleWithCamera()
+
+					viewer.SendCamera()
+					viewer.SendLabels()
+
+					if viewer.ViewChangedSignificantly() {
+
+						go viewer.GetFlames(game.fire) //update visible flames for this player
+						go func() {
+							msgs := game.makeAndSendLandTo(viewer.Camera.Position, viewer.Camera.Direction) //makes and sends new land (different for every viewer)
+							viewer.Send(msgs...)
+						}()
+					}
+
+					viewer.MoveCamera(game) //move the camera according to input
+				}
+			}
 
 		}
 	}
@@ -45,9 +68,17 @@ func StepWorldsForever() {
 
 }
 
-func ProcessStructuredMsg(player *player.Player, jsonMessage *jsonmsg.Msg, ws *websocket.Conn) {
-	game := Games[player.GameId]
-	game.ProcessStructuredMsg(player, jsonMessage, ws)
+func currentViewers(game *game.State) []*viewer.Viewer {
+	current := []*viewer.Viewer{}
+	for _, v := range global.Viewers {
+		player := v.GetPlayer()
+		if player != nil {
+			if player.Game == game {
+				current = append(current, v)
+			}
+		}
+	}
+	return current
 }
 
 func joinGame(gameId uint32, playerName string, ws *websocket.Conn) *player.Player {
@@ -55,10 +86,13 @@ func joinGame(gameId uint32, playerName string, ws *websocket.Conn) *player.Play
 	g, present := Games[gameId]
 	if !present {
 		//TODO this is very unfinished
-		g = game.Load(gameId)
-		Games[gameId] = state
-		for _, p := range state.players {
-			p.mtx = &sync.Mutex{}
+		g = game.Load(Games, string(gameId)+".bin")
+
+		for _, p := range g.Players {
+			for _, v := range p.Viewers {
+				v.Mtx = &sync.Mutex{}
+				v.InMtx = &sync.Mutex{}
+			}
 		}
 	}
 
@@ -66,6 +100,8 @@ func joinGame(gameId uint32, playerName string, ws *websocket.Conn) *player.Play
 
 	if !present {
 		p = state.AddPlayer(playerId, playerName, state.RandomStartPos(10000), ws)
+	} else {
+		logit("Player already exists:", playerId)
 	}
 
 	p.socket = ws //this is important!
@@ -88,79 +124,44 @@ func joinGame(gameId uint32, playerName string, ws *websocket.Conn) *player.Play
 	return p
 }
 
-func ProcessCreateJoinOrControl(m *msg.Msg, ws *websocket.Conn) error {
+// func ProcessCreateJoinOrControl(m *msg.Msg, ws *websocket.Conn) error {
 
-	var playerId uint32
-	var playerName string
+// 	var playerId uint32
+// 	var playerName string
 
-	if m.MsgType == msg.CreateGame {
+// 	switch m.MsgType {
+// 	case msg.CreateGame:
 
-		m.Read(&playerId, &playerName)
+// 		aircraft = nil //gc (eventually)
 
-		if playerName == "" {
-			return errors.New("playerName cannot be empty for a Create")
-		}
+// 		player.SetVehicle(vehicle)
 
-		player, present := globalPlayers[playerName]
-		if !present {
-			return errors.New("No such player")
-		}
-		if player.Id != playerId {
-			return errors.New("Player ID does not match name")
-		}
+// 		gm.SceneStart(player, viewer) //sends stuff to the viewer
+// 		viewer.SendGameId(gameId)     //game id starts it running
+// 		viewer.SendControlPin()
 
-		viewer := player.AddViewer("pilot", ws) //add a viewer, and place them on this socket
+// 		log.Logit("Game created", game.GameId)
 
-		//will make a game with a new ID and add the player to it
-		gm := game.NewGame(Games)
+// 		return nil
 
-		gm.SetRunway(vec.NewVec3(0, 0, 20), vec.NewVec3(1000, 0, 1000), 40)
+// 	case msg.JoinGame:
 
-		gm.Fire.Ignite(vec.NewVec3(10, 0, -1000)) //note the Y position has no effect
+// 		m.Read(&gameId, &playerId, &playerName)
+// 		joinGame(gameId, playerId, playerName, ws) //returns a player
 
-		aircraft := Load("wip26")
-		vehicle := game.MergeThing(aircraft.things[0], aircraft.masses)
-		aircraft = nil //gc (eventually)
-		player.SetVehicle(vehicle)
+// 	case msg.JoinAsController:
+// 		token := uint32(0)
+// 		msg.Read(m.Buff, token)
+// 		playerToControl := controlTokens[token]
+// 		if playerToControl != nil {
+// 			playerToControl.ControllerSocket = ws
+// 			return playerToControl //return the player to which this token maps
+// 		}
+// 		log.Logit("No pin for token", token)
+// 		return nil
 
-		//this block should by done by/for the viewer
-		//will plough the runway and set the start and end heights
-		msgs := gm.MakeLand(viewer.Camera.Position, viewer.Camera.Direction)
-		viewer.Send(msgs...) //send the land
-		gridOrigin := vec.NewVec3(0, 0, 0)
-		viewer.Send(plant.GrowTree().ToMsg(200)) //prep for 200 instance meshed trees (there will be many more billboarded)
-		viewer.Send(player.Grid.AsMsg())
+// 	default:
+// 		panic("First message was not create, join or control")
+// 	}
 
-		cg, weight := t.CentreOfMass()
-
-		log.Logit("aircraft weighs", weight)
-		t.Translate(gridOrigin.Sub(cg).Add(vec.NewVec3(0, 10, 0)))
-
-		viewer.Start(gameId, game.masses, game.things)
-		creator.SendControlPin()
-
-		log.Logit("Game created", game.GameId)
-
-		return nil
-
-	} else if m.MsgType == msg.JoinGame {
-
-		m.Read(&gameId, &playerId, &playerName)
-		joinGame(gameId, playerId, playerName, ws) //returns a player
-
-	} else if m.MsgType == msg.JoinAsController {
-		token := uint32(0)
-		msg.Read(m.Buff, token)
-		playerToControl := controlTokens[token]
-		if playerToControl != nil {
-			playerToControl.ControllerSocket = ws
-			return playerToControl //return the player to which this token maps
-		}
-		log.Logit("No pin for token", token)
-		return nil
-
-	} else {
-		panic("First message was not create, join or control")
-	}
-
-}
+// }

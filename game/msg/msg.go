@@ -26,7 +26,7 @@ const (
 	Cursor     MsgEnum = 15
 	Message    MsgEnum = 16
 	Vectors    MsgEnum = 17
-	Players    MsgEnum = 18
+	PlayerIds  MsgEnum = 18
 	CreateGame MsgEnum = 19
 	JoinGame   MsgEnum = 20
 	//	msgBoundValues      msgEnum = 21
@@ -49,6 +49,10 @@ const (
 	ClearContextMenu  MsgEnum = 38 //clear the context menu (on the client)
 	Telemetry         MsgEnum = 39 //send telemetry data (to the client)
 	PositionInstances MsgEnum = 40 //send mesh instance positions (to the client) (trees etc)
+	AddPlayerToGame   MsgEnum = 41 //notify clients of a new player in the game
+	WatchPlayer       MsgEnum = 42 //watch a player
+	ReconnectViewer   MsgEnum = 43 //reconnect a viewer
+	Players           MsgEnum = 44 //for serverside persistence/restore of players
 	//msgWater            msgEnum = 40 //send water levels for land vertices
 )
 

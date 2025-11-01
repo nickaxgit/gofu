@@ -11,7 +11,7 @@ import (
 
 type Spring struct {
 	Index       int32
-	restLength  float64 `json:"-"` //length is not needed clientside
+	RestLength  float64 `json:"-"` //length is not needed clientside
 	M1          *mass.Mass
 	M2          *mass.Mass
 	Collideable byte
@@ -23,8 +23,8 @@ type Spring struct {
 }
 
 func (s *Spring) rest() float64 {
-	s.restLength = s.M1.P.DistanceFrom(s.M2.P)
-	return s.restLength
+	s.RestLength = s.M1.P.DistanceFrom(s.M2.P)
+	return s.RestLength
 }
 
 func New(springs []*Spring, m1 *mass.Mass, m2 *mass.Mass, collideable byte, restLength float64, actuatorTag actuator.ActuatorEnum) *Spring {
@@ -38,7 +38,7 @@ func New(springs []*Spring, m1 *mass.Mass, m2 *mass.Mass, collideable byte, rest
 		restLength = m1.P.DistanceFrom(m2.P)
 	}
 
-	s := &Spring{Index: int32(len(springs)), M1: m1, M2: m2, Collideable: collideable, restLength: restLength, ActuatorTag: actuatorTag}
+	s := &Spring{Index: int32(len(springs)), M1: m1, M2: m2, Collideable: collideable, RestLength: restLength, ActuatorTag: actuatorTag}
 
 	springs = append(springs, s)
 	return s
@@ -69,7 +69,7 @@ func (s *Spring) Stretch() {
 		panic(`zero length spring`)
 	}
 
-	err := ((s.restLength + s.Expansion) - currentLength) / currentLength //currentLength //what is the error as a fraction of the current vector
+	err := ((s.RestLength + s.Expansion) - currentLength) / currentLength //currentLength //what is the error as a fraction of the current vector
 
 	if err > -0.0001 && err < 0.0001 {
 		return
@@ -170,7 +170,7 @@ func (spring *Spring) WriteTo(msg *msg.Msg) {
 	if spring.M1.Index == spring.M2.Index {
 		panic("degenerate spring whilst serialising")
 	}
-	msg.Write(spring.M1.Index, spring.M2.Index, spring.Collideable, float32(spring.restLength), byte(spring.ActuatorTag))
+	msg.Write(spring.M1.Index, spring.M2.Index, spring.Collideable, float32(spring.RestLength), byte(spring.ActuatorTag))
 
 }
 
