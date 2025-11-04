@@ -147,21 +147,6 @@ func (vehicle *Thing) StretchSprings() {
 
 }
 
-// For each mixer, set the mixers, mass and engine (output) the the actuator in the vehicle
-func (vehicle *Thing) BindMixers(mixers []*mixer.Mixer) {
-
-	for _, mx := range mixers {
-
-		mx.Spring = vehicle.findSpringActuator(mx.Actuator)
-		mx.Engine.Spring = vehicle.findSpringActuator(mx.Actuator)
-
-		if mx.Spring == nil { //we didnt bind it to a spring - try a mass
-			mx.Mass = vehicle.findMassActuator(mx.Actuator)
-		}
-	}
-
-}
-
 func (vehicle *Thing) DeleteLastSpring() {
 	ss := vehicle.Springs //alias (reference) to things springs
 
@@ -208,7 +193,7 @@ func (vechicle *Thing) Right() *vec.V3 {
 	return r.Sub(o).Normalise()
 }
 
-func (vehicle *Thing) findMassActuator(act actuator.ActuatorEnum) *mass.Mass {
+func (vehicle *Thing) FindMassActuator(act actuator.ActuatorEnum) *mass.Mass {
 	for _, s := range vehicle.Springs {
 		if s.M1.IsActuator(act) {
 			return s.M1
@@ -222,7 +207,7 @@ func (vehicle *Thing) findMassActuator(act actuator.ActuatorEnum) *mass.Mass {
 	return nil
 }
 
-func (vehicle *Thing) findSpringActuator(act actuator.ActuatorEnum) *spring.Spring {
+func (vehicle *Thing) FindSpringActuator(act actuator.ActuatorEnum) *spring.Spring {
 	for _, s := range vehicle.Springs {
 		if s.ActuatorTag > 0 {
 			if s.ActuatorTag == act {
@@ -438,11 +423,14 @@ func (vehicle *Thing) PushAway(m *mass.Mass) bool {
 
 	for _, face := range vehicle.faces {
 
-		pen := face.penetration(m.p, m.r)
-		if pen > 0 && pen < 1 { //we're on the wrong side
+		pen := face.Penetration(m.P, m.R)
+		if pen > 1 {
+			log.Logit("deep penetration of thing", vehicle.meshName, "by mass", m.Index, "pen", pen)
+		}
+		if pen > 0 { //we're on the wrong side
 
 			//m.lastThingTouched = thing
-			m.P.SubIn(face.plane.normal.multiply(pen)) //TODO  CONSIDER EDGES PROPERLY
+			m.P.SubIn(face.Plane.GetNormal().Multiply(pen)) //TODO  CONSIDER EDGES PROPERLY
 			penetrated = true
 
 		}

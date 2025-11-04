@@ -13,7 +13,7 @@ import (
 	"github.com/nickax/gofu/vec"
 )
 
-func (game *State) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
+func (game *Game) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
 
 	//TODO only reposition/resend trees in new positions (most trees do not need resending)
 	//need to do trees after waterlines so we don't get trees underwater
@@ -38,7 +38,7 @@ func (game *State) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3
 
 }
 
-func (game *State) MakeLand(camPos *vec.V3, camDir *vec.V3) (groundPosition *vec.V3, GroundTri *terrain.Tri, messages []*msg.Msg) {
+func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3) (groundPosition *vec.V3, GroundTri *terrain.Tri, messages []*msg.Msg) {
 
 	msgs := []*msg.Msg{}
 

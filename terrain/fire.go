@@ -15,7 +15,7 @@ func (fm *TriMesh) Ignite(firePos *vec.V3) {
 	result := fm.Root.splitUntil(fm, firePos, 10)
 	if result != nil { // are we on the map ?
 		if len(result.children) > 0 {
-			log.Logit("Igniting a non-leaf triangle at depth", result.depth)
+			log.Logit("Igniting a non-leaf triangle at depth", result.Depth)
 		}
 		if result.fireInfo == nil {
 			result.fireInfo = &fireInfo{}
@@ -54,13 +54,13 @@ func (tri *Tri) GetFlames(lt *Tri, fm *TriMesh, intoMesh *mesh.SimpleMesh, cam *
 
 		if tri.fireInfo.landDepth < 10 { //sampling at level 12 is 'good enough' for flame base
 			p, t := lt.VprobeLand(tri.centre) //TODO - do once and cache - also normal (for slope)
-			if t.depth < 8 {
+			if t.Depth < 8 {
 				return 0
 			} //it's either very far away, or behind the camera
 
-			if t.depth > tri.fireInfo.landDepth {
+			if t.Depth > tri.fireInfo.landDepth {
 				tri.fireInfo.y = p.Y //we have a better observation (of the land height) - update the flame base height
-				tri.normal = t.normal
+				tri.Normal = t.Normal
 			}
 			if t.IsUnderwater(0) {
 				tri.fireInfo.flames = -1 //extinguish the flame
@@ -116,7 +116,7 @@ func (tri *Tri) splitUntil(fm *TriMesh, firePos *vec.V3, maxDepth int) *Tri {
 	//recursively split triangles until the firePos is contained in a triangle at maxDepth
 
 	if tri.contains2D(firePos) {
-		if tri.depth == maxDepth {
+		if tri.Depth == maxDepth {
 			return tri
 		}
 

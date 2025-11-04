@@ -32,11 +32,11 @@ type vert struct {
 
 type Tri struct {
 	parent     *Tri
-	depth      int
+	Depth      int
 	vi         []uint32
 	children   []*Tri
 	mesh       *TriMesh //a reference to the mesh this tri is part of (that the vi's point into v's of)
-	normal     *vec.V3
+	Normal     *vec.V3
 	Scorched   bool //note this is not part of the fireInfo - it's a cache of which land triangles are burned out
 	cull       bool
 	yMin       float64
@@ -216,7 +216,7 @@ func (tri *Tri) find(p *vec.V3) *Tri {
 }
 
 func (tri *Tri) addChild(vi ...uint32) *Tri {
-	child := newTri(tri, tri.mesh, tri.depth+1, vi...) //t.mesh.makeTri(t.depth+1, fi, a, b, c)
+	child := newTri(tri, tri.mesh, tri.Depth+1, vi...) //t.mesh.makeTri(t.depth+1, fi, a, b, c)
 	tri.children = append(tri.children, child)
 	return child
 }
@@ -240,7 +240,7 @@ func (tri *Tri) FetchTrees(depth int, positions []float32, bbm *mesh.SimpleMesh,
 	tcs := mesh.NewTcs(0, 1, 1, 0)
 
 	treeTop := vec.NewVec3(0, 0, 0) //
-	if tri.depth == depth {
+	if tri.Depth == depth {
 		if !tri.scorchedAt(mid) && !tri.IsUnderwater(1) {
 
 			toTree := mid.Sub(camPos).Normalise()
@@ -266,7 +266,7 @@ func (tri *Tri) FetchTrees(depth int, positions []float32, bbm *mesh.SimpleMesh,
 				}
 			} else { //it's a faraway tree - only place it if the ground slopes towards the camera
 				if dotProd > .25 { //trees generally in front of the camera}
-					if toTree.Dot(tri.normal) < 0 { //if the triangle slopes towards camera
+					if toTree.Dot(tri.Normal) < 0 { //if the triangle slopes towards camera
 						bbm.Billboard(mid, up, camPos, 20, 20, 20, 4, tcs) //billboard tree
 					}
 
@@ -350,7 +350,7 @@ func (tri *Tri) removeFromTouches() {
 
 func (tri *Tri) facesTowards(direction *vec.V3) bool {
 	//the extra -.1 is to account for traingles facing away at less than half the camera vertical FOV
-	return tri.normal.Dot(direction) < -.1 //is the traingle forward facing ? (relative to the camera)
+	return tri.Normal.Dot(direction) < -.1 //is the traingle forward facing ? (relative to the camera)
 
 }
 
@@ -476,7 +476,7 @@ func (tri *Tri) SplitIfNeeded(camPos *vec.V3, camDir *vec.V3, fov float64) {
 	//   / \  / \
 	//  /___\/___\
 	// 2     4    1
-	if tri.depth >= len(tri.mesh.kinks) {
+	if tri.Depth >= len(tri.mesh.kinks) {
 		return
 	}
 
@@ -486,7 +486,7 @@ func (tri *Tri) SplitIfNeeded(camPos *vec.V3, camDir *vec.V3, fov float64) {
 	//if t.facesTowards(focus.sub(pos)) { //is the traingle forward facing ? (relative to the camera)
 
 	inFov := !tri.allVertsLeftOrRightOfFov(camPos, camDir, fov)
-	if tri.depth < 5 || inFov { //high numbers here gives a narrow field of view getting split
+	if tri.Depth < 5 || inFov { //high numbers here gives a narrow field of view getting split
 		//if t.normal.dot(camDir) < -0.1 { //is the traingle forward facing ? (relative to the camera)
 		//if t.normal.dot((t.centre().sub(pos)).normalise()) < 0.3 { //lower number here cull more backfacing tris
 
@@ -496,7 +496,7 @@ func (tri *Tri) SplitIfNeeded(camPos *vec.V3, camDir *vec.V3, fov float64) {
 
 		dp := camDir.Dot(tri.centre.Sub(camPos).Normalise())
 		//at a value of 1 (area per unit distance), a notional 100 square metre square, would require splitting when it was 10 metres away
-		if apud > 8-(dp*4) || tri.depth < 5 { //.001 is a about 1cm triangles at the horizon
+		if apud > 8-(dp*4) || tri.Depth < 5 { //.001 is a about 1cm triangles at the horizon
 
 			//log.Logit("splitting", t.depth, apud, dist, t.area())
 			tri.split()
@@ -513,7 +513,7 @@ func (tri *Tri) SplitIfNeeded(camPos *vec.V3, camDir *vec.V3, fov float64) {
 
 	//}
 
-	if len(tri.children) == 0 && tri.depth > 5 && tri.normal.Dot((tri.centre.Sub(camPos)).Normalise()) > 0.2 {
+	if len(tri.children) == 0 && tri.Depth > 5 && tri.Normal.Dot((tri.centre.Sub(camPos)).Normalise()) > 0.2 {
 		//t.cull = true
 		//final triangle is backfacing - cull it
 	}
@@ -524,7 +524,7 @@ func (tri *Tri) SplitIfNeeded(camPos *vec.V3, camDir *vec.V3, fov float64) {
 
 func (tri *Tri) splitDownTo(level int) {
 
-	if tri.depth < level {
+	if tri.Depth < level {
 		tri.split()
 		for _, c := range tri.children {
 			c.splitDownTo(level) //recurse
@@ -563,7 +563,7 @@ func (tri *Tri) split() {
 		//	kink := (t.mesh.height/(float64(t.depth*t.depth)+1) - 1) * .5 //maximum kink in this edge
 		//kink := (t.mesh.height/(float64(t.depth*5)+1) - 1) * .5 //maximum kink in this edge
 		//kink := -t.mesh.height / math.Pow(2, float64(t.depth))
-		kink := tri.mesh.kinks[tri.depth] * tri.mesh.height //maximum kink in this edge
+		kink := tri.mesh.kinks[tri.Depth] * tri.mesh.height //maximum kink in this edge
 
 		m := tri.mesh
 		v0 := tri.vi[0]
@@ -578,9 +578,9 @@ func (tri *Tri) split() {
 		rn2 := rnGen.NormFloat64()
 		rn3 := rnGen.NormFloat64()
 
-		v3 := m.splitEdge(v0, v1, rn1*kink, tri.depth)
-		v4 := m.splitEdge(v1, v2, rn2*kink, tri.depth)
-		v5 := m.splitEdge(v2, v0, rn3*kink, tri.depth)
+		v3 := m.splitEdge(v0, v1, rn1*kink, tri.Depth)
+		v4 := m.splitEdge(v1, v2, rn2*kink, tri.Depth)
+		v5 := m.splitEdge(v2, v0, rn3*kink, tri.Depth)
 
 		tri.removeFromTouches() //the list of tirangles touching a vertex is used for normal calculation
 
@@ -732,7 +732,7 @@ func (tri *Tri) calcNormal() *vec.V3 {
 		panic("normal is not unit length")
 	}
 
-	tri.normal = n2
+	tri.Normal = n2
 	return n2
 }
 
@@ -758,7 +758,7 @@ func newTri(parent *Tri, m *TriMesh, depth int, vi ...uint32) *Tri {
 	}
 
 	//t := Tri{depth: depth, vi: vi, children: []*Tri{}, mesh: m, faceIndex: fi}
-	t := Tri{parent: parent, depth: depth, vi: vi, children: []*Tri{},
+	t := Tri{parent: parent, Depth: depth, vi: vi, children: []*Tri{},
 		mesh: m, yMin: math.MaxFloat64, yMax: -math.MaxFloat64,
 		prismFaces: []*poly.ConvexPoly{nil, nil, nil, nil, nil, nil},
 	}

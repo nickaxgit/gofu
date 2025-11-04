@@ -1,8 +1,6 @@
 package ray
 
 import (
-	"github.com/nickax/gofu/fiz/mass"
-	"github.com/nickax/gofu/fiz/spring"
 	"github.com/nickax/gofu/vec"
 )
 
@@ -42,45 +40,9 @@ func (ray *Ray) PointAt(p *vec.V3) {
 	ray.direction.SubInto(ray.direction, ray.Origin)
 }
 
-func (ray *Ray) ClosestMass(masses []*mass.Mass, exclude *mass.Mass) (m *mass.Mass, distance float64) {
-
-	closestDistance := float64(1000)
-	var closestMass *mass.Mass = nil
-
-	for _, m := range masses {
-		if m == exclude {
-			continue
-		} //skip the excluded mass
-		d := m.P.DistanceFromLine(ray.Origin, ray.End)
-		if d < m.R && d <= closestDistance {
-			closestDistance = d
-			closestMass = m
-		}
-	}
-
-	return closestMass, closestDistance
-}
-
-func (ray *Ray) ClosestSpring(springs []*spring.Spring) (*spring.Spring, float64) {
-
-	closestDistance := float64(1000)
-	var closestSpring *spring.Spring = nil
-
-	for _, s := range springs {
-		d := ray.distanceFromLineSegment(s.M1.P, s.M2.P)
-		if d < closestDistance {
-			closestDistance = d
-			closestSpring = s
-		}
-	}
-
-	return closestSpring, closestDistance
-
-}
-
 // distanceFromLineSegment calculates the shortest distance from the ray to the line segment ab
 // TODO - TEST
-func (ray *Ray) distanceFromLineSegment(a, b *vec.V3) float64 {
+func (ray *Ray) DistanceFromLineSegment(a, b *vec.V3) float64 {
 
 	ab := b.Sub(a)
 	ac := ray.Origin.Sub(a)

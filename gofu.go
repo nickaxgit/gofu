@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/game/player"
+	"github.com/nickax/gofu/global"
 	"github.com/nickax/gofu/jsonmsg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/server"
-	"github.com/nickax/gofu/viewer"
+	vwr "github.com/nickax/gofu/viewer"
 
 	"github.com/nickax/gofu/vec"
 	//"log"
@@ -37,13 +38,24 @@ var upgrader = websocket.Upgrader{
 
 func homePage(w http.ResponseWriter, _ *http.Request) {
 	log.Logit("homePage called")
-	fmt.Fprintf(w, "<h1>Dozer game server</h1>")
-	for i, g := range server.Games {
-		fmt.Fprintf(w, "<p>Game %s has %d players", i, len(g.Players))
-		for _, p := range g.Players {
-			fmt.Fprintf(w, "<p>Player %s", p.Name)
+	fmt.Fprintf(w, "<h1>Game server</h1>")
+	for _, v := range global.Viewers {
+		if v.ws != nil {
+			if v.Player == nil {
+				fmt.Fprintf(w, "<p>Viewer %d (%v) has no player", v.Name, v.Id)
+				continue
+			}
+			fmt.Fprintf(w, "<p>Viewer %d (%v) watches player %d (%q)", v.Name, v.Id, v.Player.Name, v.Player.Id)
 		}
+
 	}
+}
+
+func ValueOr[T any](p *T, def T) T {
+	if p == nil {
+		return def
+	}
+	return *p
 }
 
 // func reset(w http.ResponseWriter, _r *http.Request) {
@@ -105,7 +117,7 @@ func main() {
 	//obq = make(map[string]*qHolder)
 
 	//see customHeaders
-	http.HandleFunc("/gi", gameTraffic)
+	http.HandleFunc("/gi", upgradeToWebSocketAndListenForever)
 	//http.HandleFunc("/home", homePage)
 	//http.Handle("/", fs)
 
@@ -136,8 +148,8 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 		log.Logit(err)
 	}
 
-	var viewer *viewer.Viewer //this is set processing a create/join/control message
-	for {                     // read in a messages forever on this socket (from this player)
+	var viewer *vwr.Viewer //this is set processing a create/join/control message
+	for {                  // read in a messages forever on this socket (from this player)
 
 		messageType, msgBytes, err := ws.ReadMessage()
 
@@ -147,47 +159,37 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 		}
 
 		if viewer == nil {
-			viewer := viewer.New(nil, 0, "", ws) //temporary viewer to hold the socket
+			viewer = vwr.New(global.Viewers, -1, nil, ws)
+		}
 
-			if messageType == websocket.TextMessage {
-				if viewer != nil {
-					var jsonMessage jsonmsg.Msg
-					err := json.Unmarshal(msgBytes, &jsonMessage)
-					if err != nil {
-						log.Logit(err.Error())
-					}
+		if messageType == websocket.TextMessage {
 
-					player := server.GlobalPlayers[viewer.ViewingPlayerId]
-					server.ProcessStructuredMsg(viewer, player, &jsonMessage, ws)
-				} else {
-					panic(errors.New("viewer is nil in text message processing"))
+			var jsonMessage jsonmsg.Msg
+			err := json.Unmarshal(msgBytes, &jsonMessage)
+			if err != nil {
+				log.Logit(err.Error())
+			}
 
-				}
+			viewer.ProcessStructuredMsg(&jsonMessage)
 
-			} else if messageType == websocket.BinaryMessage {
-				//msgbytes is a slice of bytes
+		} else if messageType == websocket.BinaryMessage {
+			//msgbytes is a slice of bytes
 
-				m := msg.NewFromBytes(msgBytes)
+			m := msg.NewFromBytes(msgBytes)
 
-				if viewer != nil {
-					viewer.InMtx.Lock()
-				}
-				server.Games[player.GameId].ProcessBinaryMsg(m, player, server.Games)
-				//player.ProcessBinaryMsg(m)
-				player.InMtx.Unlock()
+			if viewer != nil {
+				viewer.InMtx.Lock()
 
 			}
+			viewer.ProcessBinaryMsg(m, global.Games, global.Players, global.Viewers)
+			//player.ProcessBinaryMsg(m)
+			viewer.InMtx.Unlock()
 
 		}
 
 	}
-	ws.Close()
-	if ws == player.Socket {
-		player.Socket = nil
-	}
-	if ws == player.ControllerSocket {
-		player.ControllerSocket = nil
-	}
+
+	viewer.ReleaseWebSocket()
 
 	log.Logit("socket error/ended for", player.Name)
 }

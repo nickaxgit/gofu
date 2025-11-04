@@ -10,11 +10,11 @@ import (
 
 type ConvexPoly struct {
 	p     []*vec.V3
-	plane *plane.Plane
+	Plane *plane.Plane
 }
 
-func (poly *ConvexPoly) penetration(p *vec.V3, r float64) float64 {
-	dist := poly.plane.DistanceFrom(p) //.. negative means its penetrated
+func (poly *ConvexPoly) Penetration(p *vec.V3, r float64) float64 {
+	dist := poly.Plane.DistanceFrom(p) //.. negative means its penetrated
 	if dist < r {
 		return poly.fromEdge(p, r)
 	}
@@ -45,8 +45,8 @@ func (poly *ConvexPoly) fromEdge(p *vec.V3, r float64) float64 {
 		a := poly.p[mi]
 		b := poly.p[(mi+1)%verts]
 
-		p := poly.plane.ClosestPointOnPlane(a)
-		d := p.SignedDistanceFromLineSegment(a, b, poly.plane.GetNormal())
+		p := poly.Plane.ClosestPointOnPlane(a)
+		d := p.SignedDistanceFromLineSegment(a, b, poly.Plane.GetNormal())
 
 		if d > 0 && d < smallestOutDist {
 			smallestOutDist = d
@@ -75,11 +75,11 @@ func (poly *ConvexPoly) AddPointAt(x, y, z float64) {
 func (poly *ConvexPoly) AddPoint(p *vec.V3) {
 	poly.p = append(poly.p, p)
 	if len(poly.p) == 3 {
-		poly.plane = plane.NewFromPoints(poly.p[0], poly.p[1], poly.p[2])
+		poly.Plane = plane.NewFromPoints(poly.p[0], poly.p[1], poly.p[2])
 	}
 	if len(poly.p) > 3 {
 		cp := poly.p[len(poly.p)-1].Sub(poly.p[len(poly.p)-2]).Cross(poly.p[0].Sub(poly.p[len(poly.p)-2])).Normalise()
-		if cp.Dot(poly.plane.GetNormal()) < .999 {
+		if cp.Dot(poly.Plane.GetNormal()) < .999 {
 			panic("warning: convexPoly point added that makes polygon non-convex, or is not coplanar")
 		}
 	}
@@ -88,7 +88,7 @@ func (poly *ConvexPoly) AddPoint(p *vec.V3) {
 // probe the convey poly with the ray - *mutates* the ray.intersect
 func (poly *ConvexPoly) Probe(ray *ray.Ray) bool {
 
-	if poly.plane.ProbeLine(ray) {
+	if poly.Plane.ProbeLine(ray) {
 		if poly.Contains(ray.GetIntersect()) {
 			return true
 		}
@@ -98,7 +98,7 @@ func (poly *ConvexPoly) Probe(ray *ray.Ray) bool {
 
 func (poly *ConvexPoly) Contains(p *vec.V3) bool {
 
-	d := poly.plane.DistanceFrom(p) //expensive TODO remove eventually
+	d := poly.Plane.DistanceFrom(p) //expensive TODO remove eventually
 	if d > 0.00001 || d < -0.00001 {
 		panic("point not coplanar with polygon" + strconv.FormatFloat(d, 'f', 6, 64))
 	}
@@ -106,7 +106,7 @@ func (poly *ConvexPoly) Contains(p *vec.V3) bool {
 	pointCount := len(poly.p)
 	pcp := 0.0
 
-	n := poly.plane.GetNormal()
+	n := poly.Plane.GetNormal()
 
 	for i, vertex := range poly.p {
 		if p.Equals(vertex) {

@@ -18,8 +18,8 @@ type Sound struct {
 	length    time.Duration
 }
 
-// NewSound creates a new sound and adds it to the sounds slice, returning the sound created
-func NewSound(sounds []*Sound, name string, position *vec.V3, volume float32, loop bool, playAfter *Sound, durationSeconds int) *Sound {
+// New creates a new sound and adds it to the sounds slice, returning the sound created
+func New(sounds []*Sound, name string, position *vec.V3, volume float32, loop bool, playAfter *Sound, durationSeconds int) *Sound {
 
 	handle := nextFreeSlotIn(sounds)
 
@@ -48,6 +48,7 @@ func nextFreeSlotIn(sounds []*Sound) uint16 {
 
 }
 
-func (s *Sound) AsMsg() *msg.Msg {
-	return msg.NewMsg(msg.Sound, s.name, s.position, s.volume, s.loop, s.playAfter)
+func (s *Sound) WriteInto(activity *msg.Msg) {
+	activity.Write(msg.Sound, s.name, s.position, s.volume, s.loop, s.playAfter)
+	//return msg.NewMsg(msg.Sound, s.name, s.position, s.volume, s.loop, s.playAfter)
 }

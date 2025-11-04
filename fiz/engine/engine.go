@@ -14,6 +14,7 @@ type Engine struct {
 	index byte //for telemetry display
 	name  string
 	//vehicle            *Thing
+	started            bool
 	rpm                float64 //multiple engines
 	kw                 float64 //current fuel burn/power output (kw) (per engine)
 	kwMax              float64 //max fuel burn/power output (kw) (per engine)
@@ -31,30 +32,40 @@ type Engine struct {
 }
 
 func New(engines []*Engine, name string, index byte, kwMax float64, propRadius float64, propTotalBladeArea float64, pitch float64, moi float64, spring *spring.Spring) *Engine {
-	e := &Engine{name: name, index: index, kwMax: kwMax, propRadius: propRadius, propTotalBladeArea: propTotalBladeArea, pitch: pitch, moi: moi, Spring: spring, rpm: 0, lastRpmSent: 0}
+	e := &Engine{name: name, index: index, kwMax: kwMax, propRadius: propRadius, propTotalBladeArea: propTotalBladeArea, pitch: pitch, moi: moi, Spring: spring, rpm: 0, lastRpmSent: 0, started: false}
 	engines = append(engines, e)
 	return e
 }
 
-func (engine *Engine) Start(sounds []*sound.Sound) []*msg.Msg {
+func (engine *Engine) GetRPM() float64 {
+
+	return engine.rpm
+}
+
+func (engine *Engine) IsStarted() bool {
+	return engine.started
+}
+
+func (engine *Engine) Start(sounds []*sound.Sound, activity *msg.Msg) {
 	log.Logit("starting engine", engine.name)
+	engine.started = true
 	engine.rpm = 100
 	position := engine.Spring.M1.P //where will the sound come from
-	startToIdle := sound.NewSound(sounds, "startToIdle", position, 0.5, false, nil, 50)
-	idleUp := sound.NewSound(sounds, "idleUp", position, 0.5, false, startToIdle, 100)
-	engineLoop := sound.NewSound(sounds, "engineLoop", position, 0.5, true, idleUp, 0)
+	startToIdle := sound.New(sounds, "startToIdle", position, 0.5, false, nil, 50)
+	idleUp := sound.New(sounds, "idleUp", position, 0.5, false, startToIdle, 100)
+	engineLoop := sound.New(sounds, "engineLoop", position, 0.5, true, idleUp, 0)
 
-	return []*msg.Msg{startToIdle.AsMsg(), idleUp.AsMsg(), engineLoop.AsMsg()}
+	startToIdle.WriteInto(activity)
+	idleUp.WriteInto(activity)
+	engineLoop.WriteInto(activity)
 
 }
 
-func (engine *Engine) RpmAsMsg() *msg.Msg {
+func (engine *Engine) writePitchInto(activity *msg.Msg) {
 
-	msg := msg.NewMsg(msg.Detune)
-	msg.Write(uint16(engine.soundHandle), int16(engine.rpm-1000)) //detune is in cents - can be negative
-	msg.Write(byte(engine.index), uint16(engine.rpm))
-
-	return msg
+	activity.Write(msg.Detune)
+	activity.Write(uint16(engine.soundHandle), int16(engine.rpm-1000)) //detune is in cents - can be negative
+	activity.Write(byte(engine.index), uint16(engine.rpm))
 
 }
 
@@ -63,10 +74,9 @@ func (engine *Engine) Throttle(throttle float64) {
 	engine.kw = engine.kwMax * throttle //this is KW - ree Run()
 }
 
-func (engine *Engine) Run() (detuneMsgs []*msg.Msg) {
-	msgs := []*msg.Msg{}
+func (engine *Engine) Run(activity *msg.Msg) {
 
-	if engine.rpm > 0 { //is the engine started/running
+	if engine.started { //is the engine started/running
 		av := engine.rpm / 60 * 2 * math.Pi //radians per second
 		torque := engine.kw * 1000 / av     //watts to torque (Nm)
 		av += torque / (engine.moi * 100)   //divide by the time slice (100 cycles per second)
@@ -92,7 +102,7 @@ func (engine *Engine) Run() (detuneMsgs []*msg.Msg) {
 
 		if engine.rpm > engine.lastRpmSent+10 || engine.rpm < engine.lastRpmSent-10 {
 			//send sound/detune
-			msgs = append(msgs, engine.RpmAsMsg())
+			engine.writePitchInto(activity)
 		}
 
 		svn := engine.Spring.M1.P.Sub(engine.Spring.M2.P).Normalise()
@@ -103,7 +113,5 @@ func (engine *Engine) Run() (detuneMsgs []*msg.Msg) {
 		engine.Spring.M1.P.AddIn(mv)
 		engine.Spring.M2.P.AddIn(mv)
 	}
-
-	return msgs //return the detune (audio pitch bend) message
 
 }

@@ -5,6 +5,7 @@ import (
 	"github.com/nickax/gofu/game/actuator"
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/log"
+	"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/vec"
 	//"github.com/nickax/gofu/ray"
 )
@@ -186,3 +187,20 @@ func (spring *Spring) WriteTo(msg *msg.Msg) {
 // 	return (u >= 0 && u <= 1 && v >= 0 && v <= 1)
 
 // }
+
+func ClosestSpringToRay(springs []*Spring, ray *ray.Ray) (*Spring, float64) {
+
+	closestDistance := float64(1000)
+	var closestSpring *Spring = nil
+
+	for _, s := range springs {
+		d := ray.DistanceFromLineSegment(s.M1.P, s.M2.P)
+		if d < closestDistance {
+			closestDistance = d
+			closestSpring = s
+		}
+	}
+
+	return closestSpring, closestDistance
+
+}

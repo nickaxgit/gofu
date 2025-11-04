@@ -2,12 +2,14 @@ package viewer
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"math"
 	"math/rand"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/gorilla/websocket"
@@ -23,20 +25,26 @@ import (
 	"github.com/nickax/gofu/game/label"
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/game/player"
-	//"github.com/nickax/gofu/global"
+
 	"github.com/nickax/gofu/jsonmsg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/mesh"
+	"github.com/nickax/gofu/next"
 	"github.com/nickax/gofu/ray"
 
+	"github.com/nickax/gofu/fiz/mixer"
+	"github.com/nickax/gofu/mutex"
 	"github.com/nickax/gofu/terrain"
 	"github.com/nickax/gofu/vec"
 )
 
 type Viewer struct {
-	ws *websocket.Conn
+	Id        int32
+	Name      string
+	token     string          //used to authenticate a device
+	WebSocket *websocket.Conn //if this is nil, they are diconnected
 	//viewingPlayerId int32
-	player  *player.Player
+	Player  *player.Player
 	pov     string      //point of pilot, copilot, instruments, overhead panel, satellite etc
 	Camera  *cam.Camera //initially a clone of viewPoint(within the vehicle) - Ongoing, additional position direction and up in vehicle space (our head swivel/slew)
 	lastCam *cam.Camera //where were we positioned/looking when we last sent an update
@@ -73,8 +81,11 @@ type Viewer struct {
 	boundValues         map[string]*float64 //boundValue //these form a popup dialog box (mass properties)
 	movedSinceMouseDown bool
 	labels              []*label.Label
-	follow              bool //whether the camera follows the players vehicle
-	controls            map[input.ControlInput]float64
+	follow              bool                           //whether the camera follows the players vehicle
+	controls            map[input.ControlInput]float64 //an array fon control channel inputs
+	//each mixer (of the player) adds a contribution to to one mass (e.g. an aileron)
+	mixers []*mixer.Mixer //scales the output of a control (channles 1-7) from (-1 to +1) to a mass/spring - see updateActuators()
+
 }
 
 type ModeEnum string
@@ -98,11 +109,12 @@ type highlitType struct {
 }
 
 func (viewer *Viewer) GetPlayer() *player.Player {
-	return viewer.player
+	return viewer.Player
 }
 
 // New viewers are initially created watching noone - the socket is bound (so we can respond)
-func New(viewers []*Viewer, player *player.Player, ws *websocket.Conn) *Viewer {
+// id is either a known viewer id and correct token, OR -1 which will create a viewer/device and send ID/token back
+func New(viewers map[uint32]*Viewer, id int32, player *player.Player, ws *websocket.Conn) *Viewer {
 	//pov string, ws *websocket.Conn, gridOrigin *vec.V3, controls map[input.ControlInput]float64) *Viewer {
 
 	gridOrigin := vec.NewVec3(0, 0, 0)
@@ -111,11 +123,13 @@ func New(viewers []*Viewer, player *player.Player, ws *websocket.Conn) *Viewer {
 
 	v := &Viewer{
 		//viewingPlayerId: -1,
-		player:  player, //can be nil at the very begining -
-		ws:      ws,
-		pov:     "none",
-		Camera:  cam.New(vec.NewVec3(0, 0, 0), vec.NewVec3(1, 0, 0), vec.NewVec3(0, 1, 0)), //default camera if none found
-		gridPos: vec.NewVec3(0, 0, 0),
+		Id:        id,
+		Player:    player, //can be nil at the very begining -
+		token:     fmt.Sprintf("%06d", rand.Int31n(999999)),
+		WebSocket: ws,
+		pov:       "none",
+		Camera:    cam.New(vec.NewVec3(0, 0, 0), vec.NewVec3(1, 0, 0), vec.NewVec3(0, 1, 0)), //default camera if none found
+		gridPos:   vec.NewVec3(0, 0, 0),
 
 		highlit: highlitType{nil, nil, nil},
 		//springStart:    nil,
@@ -131,6 +145,7 @@ func New(viewers []*Viewer, player *player.Player, ws *websocket.Conn) *Viewer {
 		boundValues:    make(map[string]*float64, 0),
 		mtx:            &sync.Mutex{},
 		InMtx:          &sync.Mutex{},
+		mixers:         mixer.StandardMixers,
 	}
 
 	//create and set control inputs for all 'channels'
@@ -138,7 +153,11 @@ func New(viewers []*Viewer, player *player.Player, ws *websocket.Conn) *Viewer {
 		v.controls[input.ControlInput(i)] = 0
 	}
 
-	viewers = append(viewers, v)
+	if v.Id > -1 {
+		mutex.Viewers.Lock()
+		viewers[uint32(v.Id)] = v
+		mutex.Viewers.Unlock()
+	}
 	return v
 }
 
@@ -166,9 +185,18 @@ func (viewer *Viewer) GetFlames(fire *terrain.TriMesh) {
 
 	tcs := mesh.NewTcs(0, 1, 1, 0)                    //texture atlas coordinates
 	flameMesh := mesh.New(201, "flame", 10000, 30000) //10k faces, 30k verts
+
+	//these are no in game.lands
 	fire.Root.GetFlames(viewer.landTri, fire, flameMesh, viewer.Camera, tcs)
 
 	viewer.Send(flameMesh.ToMsg(1))
+
+}
+
+func (viewer *Viewer) MakeAndSendLand() {
+
+	_, _, msgs := viewer.Player.Game.MakeLand(viewer.Camera.Position, viewer.Camera.Direction)
+	viewer.Send(msgs...)
 
 }
 
@@ -176,12 +204,15 @@ func (viewer *Viewer) SendCamera() {
 
 	msg := msg.NewMsg(msg.Camera)
 	viewer.Camera.WriteTo(msg)
-
 	viewer.Send(msg)
 
 }
 
-func (viewer *Viewer) processMouseMove(game *game.State) { //isRunning bool, masses []*mass.Mass, things []*thing.Thing) {
+func (viewer *Viewer) GetLandRoot() *terrain.Tri {
+	return viewer.landTri
+}
+
+func (viewer *Viewer) processMouseMove(game *game.Game) { //isRunning bool, masses []*mass.Mass, things []*thing.Thing) {
 
 	if game.Running == false {
 
@@ -217,7 +248,8 @@ func (viewer *Viewer) processMouseMove(game *game.State) { //isRunning bool, mas
 
 			if viewer.buttons == 0 {
 				pickRay := ray.New(viewer.Camera.Position, viewer.Camera.FarPos)
-				cm, _ := pickRay.ClosestMass(game.Masses, viewer.springCursor) //state.ClosestMassToRay(viewer.Camera.Position, viewer.Camera.FarPos, viewer.springCursor)
+				//cm, _ := pickRay.ClosestMass(game.Masses, viewer.springCursor) //state.ClosestMassToRay(viewer.Camera.Position, viewer.Camera.FarPos, viewer.springCursor)
+				cm, _ := mass.ClosestMassToRay(game.Masses, viewer.springCursor, pickRay) //state.ClosestMassToRay(viewer.Camera.Position, viewer.Camera.FarPos, viewer.springCursor)
 
 				if cm != viewer.highlit.mass {
 					viewer.highlit.mass = cm
@@ -232,7 +264,9 @@ func (viewer *Viewer) processMouseMove(game *game.State) { //isRunning bool, mas
 
 			closest := math.MaxFloat64
 			for _, thing := range game.Things {
-				spring, d := pickRay.ClosestSpring(thing.Springs)
+				//spring, d := pickRay.ClosestSpring(thing.Springs)
+				spring, d := spring.ClosestSpringToRay(thing.Springs, pickRay)
+
 				if d < closest {
 					viewer.highlit.thing = thing
 					viewer.highlit.spring = spring
@@ -264,7 +298,7 @@ func (viewer *Viewer) processMouseMove(game *game.State) { //isRunning bool, mas
 
 func (viewer *Viewer) sendBytes(msg []byte) {
 
-	if viewer.ws == nil {
+	if viewer.WebSocket == nil {
 		log.Logit(viewer.pov + " viewer socket is disconnected")
 		return
 	}
@@ -274,7 +308,7 @@ func (viewer *Viewer) sendBytes(msg []byte) {
 	messageType := websocket.BinaryMessage
 
 	//logit("sent", len(msg), " binary bytes")
-	viewer.ws.WriteMessage(messageType, msg) //write the message (and return any error)
+	viewer.WebSocket.WriteMessage(messageType, msg) //write the message (and return any error)
 }
 
 func (viewer *Viewer) ViewChangedSignificantly() bool {
@@ -377,7 +411,7 @@ func (viewer *Viewer) sendCentreOfMass(t *thing.Thing) {
 
 }
 
-func (viewer *Viewer) moveSelected(game *game.State) {
+func (viewer *Viewer) moveSelected(game *game.Game) {
 	moveDelta := viewer.spacePos.Sub(viewer.moveStart)
 
 	//add any movement normal to the grid to the delta
@@ -486,7 +520,7 @@ func (viewer *Viewer) recordMassPositions(masses []*mass.Mass) {
 }
 
 // MoveCamera moves the camera (and any selected masses) based on key presses
-func (viewer *Viewer) MoveCamera(game *game.State) {
+func (viewer *Viewer) MoveCamera(game *game.Game) {
 
 	dir := vec.NewVec3(0, 0, 0)
 
@@ -570,7 +604,7 @@ func (viewer *Viewer) checkHighlitMass() bool {
 // }
 
 // Tidy Remove masses not attached to a spring
-func (viewer *Viewer) Tidy(game *game.State) {
+func (viewer *Viewer) Tidy(game *game.Game) {
 
 	thingList := thing.ThingList(game.Things) //allows us to define methods on a slice of things
 	for {
@@ -591,8 +625,13 @@ func (viewer *Viewer) Tidy(game *game.State) {
 	}
 }
 
-// isRunning *bool, masses []*mass.Mass, things []*thing.Thing, msg *jsonmsg.Msg, ws *websocket.Conn, sounds []*sound.Sound, viewers []*Viewer) {
-func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.State, msg *jsonmsg.Msg) {
+// Processes keystrokes etc.
+// Returns a compound message to be broadcast to all viewers of the game (engine startup sounds)
+func (viewer *Viewer) ProcessStructuredMsg(ibm *jsonmsg.Msg) *msg.Msg {
+
+	game := viewer.Player.Game
+
+	activity := msg.Empty()
 
 	//var fpn string //firstviewer *Viewer
 
@@ -602,12 +641,12 @@ func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.S
 
 	//logit(msg.Cmd)
 
-	switch msg.Cmd {
+	switch ibm.Cmd {
 	case "keyUp":
 		//a key was released
-		viewer.keys[msg.Key] = false
+		viewer.keys[ibm.Key] = false
 
-		switch msg.Key {
+		switch ibm.Key {
 		case "ArrowLeft", "ArrowRight":
 			dx = 0
 		case "ArrowUp", "ArrowDown":
@@ -618,8 +657,8 @@ func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.S
 
 		//viewer.Camera.Position.y += msg.Payload[0] * -0.01 //up and down
 
-		viewer.Camera.Position.AddIn(viewer.Grid.Normal().Multiply(msg.Payload[0] * -0.005))
-		viewer.zOff += msg.Payload[0] * -0.005
+		viewer.Camera.Position.AddIn(viewer.Grid.Normal().Multiply(ibm.Payload[0] * -0.005))
+		viewer.zOff += ibm.Payload[0] * -0.005
 
 		viewer.processMouseMove(game) //*isRunning, masses, things)
 		viewer.SendCamera()
@@ -628,10 +667,10 @@ func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.S
 
 		viewer.movedSinceMouseDown = true
 
-		viewer.buttons = byte(msg.Payload[0])
-		viewer.Camera.FarPos = vec.NewVec3(msg.Payload[1], msg.Payload[2], msg.Payload[3])
-		viewer.cursor.X = msg.Payload[4]
-		viewer.cursor.Y = msg.Payload[5]
+		viewer.buttons = byte(ibm.Payload[0])
+		viewer.Camera.FarPos = vec.NewVec3(ibm.Payload[1], ibm.Payload[2], ibm.Payload[3])
+		viewer.cursor.X = ibm.Payload[4]
+		viewer.cursor.Y = ibm.Payload[5]
 
 		viewer.processMouseMove(game) //*isRunning, masses, things)
 
@@ -666,11 +705,11 @@ func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.S
 			}
 		}
 
-		viewer.buttons = byte(msg.Payload[0])
+		viewer.buttons = byte(ibm.Payload[0])
 
 	case "md":
 
-		viewer.buttons = byte(msg.Payload[0])
+		viewer.buttons = byte(ibm.Payload[0])
 
 		viewer.movedSinceMouseDown = false
 
@@ -766,13 +805,13 @@ func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.S
 
 	case "keyDown":
 
-		k := msg.Key
+		k := ibm.Key
 		kl := strings.ToLower(k)
 		viewer.keys[k] = true
 
 		log.Logit("key down", k)
-		shift := msg.Payload[0]
-		ctrl := msg.Payload[1]
+		shift := ibm.Payload[0]
+		ctrl := ibm.Payload[1]
 
 		if shift > 0 {
 			prop = "scale"
@@ -852,10 +891,10 @@ func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.S
 		} else if k == "1" {
 			//start port engine
 
-			viewer.startEngine(0, game, globalViewers)
+			viewer.startEngine(0, game, activity)
 		} else if k == "2" {
 			//start starboard engine
-			viewer.startEngine(1, game, globalViewers)
+			viewer.startEngine(1, game, activity)
 
 		} else if kl == "o" {
 
@@ -971,14 +1010,8 @@ func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.S
 				//pressing escape to run
 				viewer.SnapMasses(game.Things)
 				viewer.sendThings(game.Things)
-				//p.vehicle = p.currentThing
 
-				//viewer.sendToPeers(game.Masses)
-				viewer.player.GetVehicle().BindMixers(viewer.player.Mixers)
-				//p.vehicle.setVelocity(testFlight)
-
-				//p.state.setVelocity(NewVec3(0, 0, 1/float64(30*5)*50)) //100mph
-				//p.labelLiftingMasses()
+				viewer.BindMixers(viewer.Player.GetVehicle())
 
 				game.Running = !game.Running
 				log.Logit("running", game.Running)
@@ -1031,12 +1064,12 @@ func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.S
 			}
 		} else if kl == "l" { //flip the lift direction of the highlit mass (wing)
 
-			viewer.SnapMasses(things)
+			viewer.SnapMasses(game.Things)
 			if viewer.highlit.mass != nil {
 				viewer.highlit.mass.Flip = !viewer.highlit.mass.Flip
 				viewer.currentThing.SetVelocity(aero.TestFlight)
 				game.FlyMasses() //*pretend* we are flying at 20ms
-				viewer.SendLabels(viewer.labels)
+				viewer.SendLabels()
 			}
 		} else if kl == "i" { //turin on AoA labels on wings, and brake force on brake masses, extension on spring actuators
 			viewer.labels = make([]*label.Label, 0)
@@ -1076,9 +1109,9 @@ func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.S
 					viewer.highlit.mass.R = 0
 					viewer.sendMasses([]*mass.Mass{viewer.highlit.mass}, true)
 
-					viewer.highlit.mass.Delete(masses) //less than straightforward
-					viewer.sendMasses(masses, true)
-					viewer.sendThings(things)
+					viewer.highlit.mass.Delete(game.Masses) //less than straightforward
+					viewer.sendMasses(game.Masses, true)
+					viewer.sendThings(game.Things)
 				}
 			}
 		}
@@ -1097,9 +1130,11 @@ func (viewer *Viewer) ProcessStructuredMsg(globalViewers []*Viewer, game *game.S
 			viewer.sendThings([]*thing.Thing{ct}) //will need to send the offset, rotation and scale of the mesh/skin
 		}
 	}
+
+	return activity
 }
 
-func (viewer *Viewer) SendVectors(game *game.State) {
+func (viewer *Viewer) SendVectors(game *game.Game) {
 	viewer.Send(mass.VectorsAsMsg(game.Masses)) //send the new vectors
 }
 
@@ -1135,14 +1170,14 @@ func (viewer *Viewer) makeNextSpring(masses []*mass.Mass) {
 
 }
 
-// SendToPeers sends messages (masses, vectors etc) to other viewers in the same game
-func (viewer *Viewer) sendToPeers(globalViewers []*Viewer, msgs ...*msg.Msg) {
-	for _, peer := range globalViewers {
-		if peer.player.Game == viewer.player.Game && peer != viewer {
-			peer.Send(msgs...)
-		}
-	}
-}
+// // SendToPeers sends messages (masses, vectors etc) to other viewers in the same game
+// func (viewer *Viewer) sendToPeers(globalViewers []*Viewer, msgs ...*msg.Msg) {
+// 	for _, peer := range globalViewers {
+// 		if peer.Player.Game == viewer.Player.Game && peer != viewer {
+// 			peer.Send(msgs...)
+// 		}
+// 	}
+// }
 
 func (viewer *Viewer) bindValue(key string, valuePointer *float64, min float64, max float64, step float64, labelSet byte) {
 
@@ -1154,9 +1189,24 @@ func (viewer *Viewer) bindValue(key string, valuePointer *float64, min float64, 
 
 }
 
-func (viewer *Viewer) ProcessBinaryMsg(ibm *msg.Msg, gm *game.State, games map[uint32]*game.State) error {
+func (viewer *Viewer) ReleaseWebSocket() {
+	viewer.WebSocket = nil
+}
 
-	if viewer.player == nil &&
+func (viewer *Viewer) ProcessBinaryMsg(ibm *msg.Msg,
+	globalGames map[uint32]*game.Game,
+	globalPlayers map[uint32]*player.Player,
+	globalViewers map[uint32]*Viewer,
+) error {
+
+	//  gm *game.State,
+	//  games map[uint32]*game.State,
+	//  players map[uint32]*player.Player)
+	//  error {
+
+	myGame := viewer.Player.Game
+
+	if viewer.Player == nil &&
 		ibm.MsgType != msg.CreatePlayer &&
 		ibm.MsgType != msg.SignIn &&
 		ibm.MsgType != msg.CreateGame {
@@ -1165,9 +1215,41 @@ func (viewer *Viewer) ProcessBinaryMsg(ibm *msg.Msg, gm *game.State, games map[u
 
 	switch ibm.MsgType {
 
+	case msg.ConnectViewer: //sends a viewer id
+		viewerId := int32(0)
+		vTok := ""
+		ibm.Read(&viewerId, vTok)
+
+		if viewerId == -1 {
+			// a new unknown device - create a new viewer,
+			v := New(globalViewers, int32(next.Id("viewer")), nil, viewer.WebSocket)
+			idMsg := msg.NewMsg(msg.DeviceId, v.Id, v.token)
+			v.Send(idMsg) //send the id and token to the viewer - they are connected - sign in/up/or watch is next
+
+		} else {
+			//we're reconnecting an existing viewer
+			mutex.Viewers.RLock()
+			v, present := globalViewers[uint32(viewerId)]
+			mutex.Viewers.RUnlock()
+
+			time.Sleep(1000) //don't provide a response instanltly - to make brute forcing harder
+			if !present {
+				viewer.WebSocket.Close()
+				return errors.New("No such viewer to reconnect")
+			}
+			if v.token != vTok {
+				viewer.WebSocket.Close()
+				return errors.New(fmt.Sprintf("Viewer token does not match got %q, want %q", vTok, v.token))
+			}
+			//it's a valid token and known viewer
+			viewer = v //important !
+		}
+
 	case msg.CreatePlayer:
-	case msg.SignIn:
-	case msg.CreateGame:
+		player.New(globalPlayers, next.Id("player"), "", nil)
+
+	case msg.SignIn: //signs a player in (so that they can manage devices)
+	case msg.CreateGame: //creates a game, adds the player and a viewer to it
 
 		playerId := uint32(0)
 		playerName := ""
@@ -1177,7 +1259,7 @@ func (viewer *Viewer) ProcessBinaryMsg(ibm *msg.Msg, gm *game.State, games map[u
 			return errors.New("playerName cannot be empty for a Create")
 		}
 
-		player, present := globalPlayers[playerId]
+		player, present := players[playerId]
 		if !present {
 			return errors.New("No such player")
 		}
@@ -1185,8 +1267,8 @@ func (viewer *Viewer) ProcessBinaryMsg(ibm *msg.Msg, gm *game.State, games map[u
 			return errors.New("Player ID does not match name")
 		}
 
-		//will make a ng with a new ID and add the player to it
-		ng := game.NewGame(games)
+		//will make a new game with a new ID and add the player to it
+		ng := game.New(games)
 
 		runwayPos := vec.NewVec3(0, 0, 0)
 		runwayVec := vec.NewVec3(1000, 0, 1000)
@@ -1198,13 +1280,20 @@ func (viewer *Viewer) ProcessBinaryMsg(ibm *msg.Msg, gm *game.State, games map[u
 		landPos, _, msgs := ng.MakeLand(runwayPos, runwayVec.Normalise())
 		viewer.Send(msgs...) //send the land
 
-		aircraftScene := game.Load(nil, "wip26")
-		aircraft := aircraftScene.Things[0] //assume first thing is the aircraft
+		log.Logit("Runway land made between", landPos, "and", landPos.Add(runwayVec))
 
-		cg, weight := aircraft.CentreOfMass()
-		log.Logit("aircraft weighs", weight)
-		aircraft.Translate(landPos.Sub(cg).Add(vec.NewVec3(0, 10, 0)))
-		ng.MergeThing(aircraft, aircraft.masses)
+		player.Game = ng
+		viewer.Player = player
+
+		viewer.StartIn(ng)
+
+		// aircraftScene := game.Load(nil, "wip26")
+		// aircraft := aircraftScene.Things[0] //assume first thing is the aircraft
+
+		// cg, weight := aircraft.CentreOfMass()
+		// log.Logit("aircraft weighs", weight)
+		// aircraft.Translate(landPos.Sub(cg).Add(vec.NewVec3(0, 10, 0)))
+		// ng.MergeThing(aircraft, aircraft.masses)
 
 	case msg.AddPlayerToGame:
 		pid := uint32(0)
@@ -1212,14 +1301,13 @@ func (viewer *Viewer) ProcessBinaryMsg(ibm *msg.Msg, gm *game.State, games map[u
 		ibm.Read(&pid, &gid)
 		globalPlayers[pid].Game = globalGames[gid]
 
-	case msg.CreateViewer: //aka "watch"
-	case msg.ReconnectViewer: //sends a viewer id
 	case msg.JoinAsController:
 
 	case msg.ValueChange:
-		key := msg.GenericRead[string](ibm.Buff)
-		value := msg.GenericRead[float64](ibm.Buff)
-		viewer.SetBoundValue(key, value, gm.masses, gm.things)
+		key := ""
+		value := float64(0)
+		ibm.Read(&key, &value)
+		viewer.SetBoundValue(key, value, myGame.Masses, myGame.Things)
 
 	case msg.Load:
 
@@ -1227,19 +1315,19 @@ func (viewer *Viewer) ProcessBinaryMsg(ibm *msg.Msg, gm *game.State, games map[u
 		ibm.Read(&filename)
 
 		//the old game is not destroyed - a new game is created and I am started in it
-		oGid := gm.GameId
-		gm = game.Load(games, filename) //replace the game (globals - as the game is a pointer)
+		oGid := myGame.Id
+		gm := game.Load(globalGames, filename) //replace the game (globals - as the game is a pointer)
 
-		gm.GameId = oGid
+		gm.Id = oGid
 
 		gm.FlyMasses() //once to get lift vectors
 
 		//put me (and my connected socket, camera and grid)into the game i just loaded
 		//gm.Players = append(gm.Players, player)
 
-		viewer.Start(gm.GameId, gm.masses, gm.things, make(map[*mass.Mass]bool), player.Grid) //empty selected masses
+		viewer.Start(gm.Id, gm.masses, gm.things, make(map[*mass.Mass]bool), player.Grid) //empty selected masses
 
-		log.Logit("Game loaded", gm.GameId)
+		log.Logit("Game loaded", gm.Id)
 
 	case msg.Save:
 		filename := ""
@@ -1268,30 +1356,43 @@ func (viewer *Viewer) ProcessBinaryMsg(ibm *msg.Msg, gm *game.State, games map[u
 
 }
 
-func (viewer *Viewer) updateActuators() {
+func (viewer *Viewer) startIn(game *game.Game) {
+	//state.send(nil, &reply{Cmd: "playerJoined", Payload: player})    //tell everyone about the new player
+	viewer.SendCamera()                  //send the camera position
+	viewer.sendMasses(game.Masses, true) //send all the masses
+	viewer.sendThings(game.Things)
+	viewer.SendLabelSets()
 
+	viewer.sendGameId() //game id starts it running
+
+	controlTokens[p] = p.sendControlPin() //send a PIN to them so they can take control from another device
+}
+
+func (viewer *Viewer) updateActuators() {
+	//note that the mixer contains the bound actuators (springs/masses/engines)
+	//  so need no knowledge of the vehicle
 	for _, mix := range viewer.mixers {
 		mix.ZeroOutputs()
 	}
 
 	for _, mixer := range viewer.mixers {
-		mixer.Mix(viewer.controls, viewer.player.vehicle.Engines)
+		mixer.Mix(viewer.controls) //add in defelctions
 	}
 }
 
 func (viewer *Viewer) GetVehicle(players map[uint32]*player.Player) *thing.Thing {
-	if viewer.player == nil {
+	if viewer.Player == nil {
 		return nil
 	}
-	return viewer.player.GetVehicle()
+	return viewer.Player.GetVehicle()
 
 }
 
-func (viewer *Viewer) startEngine(index int, game *game.State, globalViewers []*Viewer) string {
-	if viewer.player == nil {
+func (viewer *Viewer) startEngine(index int, game *game.Game, activity *msg.Msg) string {
+	if viewer.Player == nil {
 		return "Not viewing a player"
 	}
-	vehicle := viewer.player.GetVehicle()
+	vehicle := viewer.Player.GetVehicle()
 	if vehicle == nil {
 		return ("Player is not in a vehicle")
 	}
@@ -1300,9 +1401,7 @@ func (viewer *Viewer) startEngine(index int, game *game.State, globalViewers []*
 		return ("No such engine")
 	}
 
-	startUpSounds := vehicle.Engines[index].Start(game.Sounds)
-
-	viewer.sendToPeers(globalViewers, startUpSounds...)
+	vehicle.Engines[index].Start(game.Sounds, activity)
 
 }
 
@@ -1328,6 +1427,21 @@ func (viewer *Viewer) SetControlInputsFromBlob(blobId byte, x float64, y float64
 
 	default:
 		log.Logit("warning - unhandled blob id ", blobId)
+	}
+
+}
+
+func (viewer *Viewer) BindMixers(vehicle *thing.Thing) {
+	// For each mixer, set the mixers, mass and engine (output) the the actuator in the vehicle
+
+	for _, mx := range viewer.mixers {
+
+		mx.Spring = vehicle.FindSpringActuator(mx.Actuator)
+		mx.Engine.Spring = vehicle.FindSpringActuator(mx.Actuator)
+
+		if mx.Spring == nil { //we didnt bind it to a spring - try a mass
+			mx.Mass = vehicle.FindMassActuator(mx.Actuator)
+		}
 	}
 
 }

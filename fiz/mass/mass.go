@@ -5,6 +5,8 @@ import (
 	"github.com/nickax/gofu/game/aero"
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/log"
+	"github.com/nickax/gofu/ray"
+	"github.com/nickax/gofu/terrain"
 	"github.com/nickax/gofu/vec"
 	"math"
 )
@@ -16,8 +18,8 @@ import (
 //when a mass overlaps a spring - the mass is 'owned' by the spring
 
 type Mass struct {
-	Index int32
-	//Thing       *thingThing
+	Index       int32
+	ThingIndex  uint32 //not persisted - set (from springs) after loading
 	P           *vec.V3
 	transformOf *Mass
 	R           float64
@@ -382,6 +384,48 @@ func (m *Mass) RegenFromMaster(transform func(p *vec.V3) *vec.V3) {
 // b.P.subIn(resolve.multiply((1 - ratio) * share))
 //}
 
+func (m *Mass) ResolvePenetration(depth float64, impact *vec.V3, surface *terrain.Tri) {
+	v := m.P.Sub(m.Op)
+	vr := v.Reflect(surface.Normal)
+
+	if depth > 0.1 {
+		log.Logit("deep penetration", v.Length()*30, "m/s")
+	}
+
+	m.P.Y = impact.Y + m.R
+
+	vr = vr.Sub(surface.Normal.Multiply(vr.Dot(surface.Normal) * .8)) //kill 80% of the vertical velocity (20% bounce)
+
+	if m.Axle != nil {
+		axle := m.Axle.P.Sub(m.P).Normalise()
+		vr = vr.Sub(axle.Multiply(vr.Dot(axle) * .85)) //.95)) //kill (95% of the) sideways velocity of the wheel
+		vr = vr.Multiply(0.95)                         //some wheel friciton
+
+		m.Fixed = false
+		if m.Brake > .01 {
+			maxBrakeForce := 0.03                 //metres per cycle
+			brakeForce := m.Brake * maxBrakeForce //brake force in metres per cycle
+			vrl := vr.Length()
+			if vrl > brakeForce {
+				vr.SubIn(vr.Normalise().Multiply(brakeForce)) //some wheel friciton
+			} else {
+				//vr = NewVec3(0, 0, 0) //vr.multiply(-0.001) //dead stop
+				//m.fixed = true
+				//we have enough brake force - the brakes are holding
+				m.P.X = m.Op.X
+				m.P.Z = m.Op.Z
+
+				return
+			}
+		}
+
+	} else { //not a wheel
+		//vr = vr.multiply(.8) //kill 80% of the velocity
+	}
+
+	m.Op = m.P.Sub(vr)
+}
+
 func (m *Mass) WriteVectorsTo(msg *msg.Msg, red byte, blue byte, orange byte, magenta byte) {
 
 	//velocity vector
@@ -490,4 +534,23 @@ func MassesAsMsg(masses []*Mass, withDetail bool, playerSelected map[*Mass]bool)
 
 	return msg
 
+}
+
+func ClosestMassToRay(masses []*Mass, exclude *Mass, ray *ray.Ray) (m *Mass, distance float64) {
+
+	closestDistance := float64(1000)
+	var closestMass *Mass = nil
+
+	for _, m := range masses {
+		if m == exclude {
+			continue
+		} //skip the excluded mass
+		d := m.P.DistanceFromLine(ray.Origin, ray.End)
+		if d < m.R && d <= closestDistance {
+			closestDistance = d
+			closestMass = m
+		}
+	}
+
+	return closestMass, closestDistance
 }

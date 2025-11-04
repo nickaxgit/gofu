@@ -68,11 +68,9 @@ func (mix *Mixer) ZeroOutputs() {
 	}
 }
 
-func (mixer *Mixer) Mix(controlInputs map[input.ControlInput]float64) { //}, engines []*engine.Engine) {
+func (mixer *Mixer) Mix(controlInputs map[input.ControlInput]float64) {
 	if mixer.Engine != nil { //EngineIndex > -1 { //
 
-		//e := engines[mixer.EngineIndex]
-		//e.Throttle(mixer.output(controlInputs))
 		mixer.Engine.Throttle(mixer.output(controlInputs))
 
 		//thrust is genrated and applied to the engines spring in runEngines()

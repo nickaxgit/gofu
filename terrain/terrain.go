@@ -1,11 +1,10 @@
 package terrain
 
 import (
-	"math"
-
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/vec"
+	"math"
 )
 
 type TriMesh struct {
@@ -61,7 +60,7 @@ func (m *TriMesh) getNormals(asWater bool) []float32 {
 			//usually 6 0- can be 5 - or even 3 at edges and 1 in conrners
 			for t := range v.touches { //for every face this vertex touches
 				if len(t.children) == 0 { //ony include bottom level traingles in the normal calculation
-					v.n.AddIn(t.normal)
+					v.n.AddIn(t.Normal)
 				}
 			}
 

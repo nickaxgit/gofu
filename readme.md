@@ -381,9 +381,18 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
     * Humans / ragdolls
     * balancing/walking
 
-* Aircraft
-    * Fire Tractor
-    * Drone
+* Vehilces/tools
+    * CL415
+    * Fire Tractor (AT8F)
+    * Drone (blackfly/quadcopter)
+    * Rescue heli
+    * Dozer
+    * JCB/Minidigger/giant digger) (think of a cool mission)
+    * Komatsu XT465L-5 (400k$)  feller buncher (https://www.youtube.com/watch?v=z3pOMI1nSoo) https://www.komatsuforest.com/-/media/komatsu-forest/images/komatsu-forest-na/brochure-files/fpsb1040-00_xt430-5-xt445l-5-xt465l-5_en.pdf?la=en
+    * Chainsaw
+    * Fire beater
+    * Rake Hoe (McLeod ?)
+    * Parachute (Ram air 7 cell ?)
 
 * Server
     * Security
@@ -419,7 +428,7 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
 
 
    XP - Experience points
-   RP - Reputation points (increase with succesful missions, teamwork, co-piloting/spotting, donations, ROK's, decrease with crashes, incomplete missions, 'cowardice', dangerous flying (high G) , quitting, fighting, swearing (you can knock someone reputation by twice what you are prepared to give up - or maybe it's some inverse proportion) ) 
+   RP - Reputation points (increase with succesful missions, area extinguished, teamwork, co-piloting/spotting, donations, RAK's, decrease with crashes, incomplete missions, 'cowardice', dangerous flying (high G) , quitting, fighting, swearing (you can knock someone reputation by twice what you are prepared to give up - or maybe it's some inverse proportion) ) 
      
 
 
@@ -439,7 +448,7 @@ msgWatch(PlayerId)
 msgReconnectViewer(viewerId)
 
 
-A viewer is created upon connection - added to the blobal viewrs and its viewer.socket is set to the ws
+A viewer is created upon connection - added to the global viewers and its viewer.socket is set to the ws
 It's watchingplayerID is initially -1
 viewers have a watchingPlayerId
 players Have a game id
@@ -460,3 +469,107 @@ A viewer should be able to switch to a different camera (clone a differnt camera
 
 Drop cams .. should appear on the ground - some distance ahead of the vehicle, then track the vehicle
 (parachuting drop cams ?)
+
+
+
+
+
+Sign up
+    email
+    password
+    player name
+
+
+
+Sign In
+
+    email (or playername)
+    password    (forgot password)
+
+Welcome
+
+    Hi Nick - PID:19277
+
+    Your devices:-
+
+    * This device
+
+ Account sign in 
+ |Type     |Name                 |status |Action    |
+ |---------|---------------------|-------|----------|
+ |Unknown\/|This device [edit]   |Active |[sign out]|
+ |DeskTop  |                     |Off    |[sign out]|
+ |laptop   |Work laptop          |Active |[sign out]|
+
+ note a device token (for a viewer/controller) is a different thing from an account/device management token (stores the players login)
+ 
+ 
+
+ Devices (viewers/controllers)
+ id   |type     |Role                 |Camera       |Status | Action   | label| 
+ -----|---------|---------------------|-------------|-------|----------|------|
+ A9G8 |TV       |Forward view         |Forward      |Active |[forget]  |
+ 4F74 |Desktop  |Forward camera       |Forward      |Off    |[forget]  |
+ 4FG8 |Ipad     |Flight Yoke          |None         |Active |[forget]  [configure] |
+ 2832 |iPhone   |Moving map           |             |Off    |[forget]  |  
+ 10W8 |laptop   |Cockpit window       |Pilot right  |       |[forget]  |Lenovo
+ 0T72 |laptop   |Cockpit window       |Pilot left   |       |[forget]  |
+ FSUS |Android  |Rudder pedals        |none         |off    |[forget]  |Samsung galaxy
+ 8JQW |Choose\/ |Choose \/            |choose     \/|waiting|[forget]  |[...]  
+[Add a device]
+
+XXXXX
+XXXXX
+XXXXX
+
+Scan the QR code with the device to connect it
+Or go to https://fire.com/ad/8JQW
+
+Fill in the type, role and Choose a vehicel camera for the new device
+
+
+Notes:-
+Any device (viewer/controller) that has a valid token will auto-connect
+Most devices (viewers) don't need to "sign in" per se - they just (re)connect
+You can sign in to your player account on any device/browser to manage devices.
+You can remove a device regardless of it being connected (it's token will be invalidated server side)
+"Add a device" will prompt for a name, role and camera - and generate a serverside auth token and display it as a QR code/Url/4 digit code - entering that on the device will save it as a cookie - and submit it - the token keys a PID, upon 'connection'  (the viewer has its .Player set)
+You can add a device, and as you choose the camera - the view on that device should change (live)
+
+
+
+
+Sign Out  (Of device management/player account) deletes local cookie
+    Are you sure (you probably don't need to - you can have/leave multiple devices signed into your) account
+    We recommend you have an email set if you are goinf to sign out - for easy password recovery.
+
+
+		//player id must exist player name must match
+		//a player can be signed in on (have valid auth tokens) on many devices
+		//devices (viewers/controllers) attach to a player and are issues an auth token
+		//When signed in - player sees a list of devices that are authed
+		//A player can be signed in, and not in any game
+		//A can player join a (one) game
+		//Additional devices can join as viewers/controllers
+		//if he joins a *different* game on a second device - the players game id is changed - all viewers now view the player in the new game 
+		//Any vehicle is left unpiloted (unless under dual control) - warn if airbourne
+		//A player owns an aircraft, and can use it in any game until it is destroyed
+		//If the player survives (say) a crash landing, he can board another aircraft (from his stable) - he might be in for a long walk home
+		//A player can request control of an aircraft they don't own (from its owner)
+		//A player can have many viewers
+		//A player can only ride one vehicle  at a time
+		//Many viewers can control a players vehicle
+
+
+
+Each vehicle can be used until it is destroyed in a game
+If you crash/land out, you can radio for another of your vehiciles to be autopiloted to your location
+Owning a rescue drone or helicopter becomes pretty imporant.
+Or you can hike to the nearest lake for a floatplane recovery.
+You *can* be rescued by another player and returned to base
+
+You can die in a game - primarily by smoke inhalation/heat stroke - nothing too graphic - or by fatal air crash.
+Ejecting/parachuting out is an option.
+
+Staying alive for the duration of a game, until the fire is out yeilds a big (XP) bonus (proportional to your contribution/time spent)
+The 'fallen' in a game should be given a gravestone high on the scorched ground - they can continue to observe the game - but they fall silent - possibly you view as an "angel" - maybe you can still have some influence .. direct the wind or something 'ethereal' (the wind always blows away from angels)

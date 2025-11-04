@@ -49,11 +49,16 @@ const (
 	ClearContextMenu  MsgEnum = 38 //clear the context menu (on the client)
 	Telemetry         MsgEnum = 39 //send telemetry data (to the client)
 	PositionInstances MsgEnum = 40 //send mesh instance positions (to the client) (trees etc)
-	AddPlayerToGame   MsgEnum = 41 //notify clients of a new player in the game
-	WatchPlayer       MsgEnum = 42 //watch a player
-	ReconnectViewer   MsgEnum = 43 //reconnect a viewer
-	Players           MsgEnum = 44 //for serverside persistence/restore of players
-	//msgWater            msgEnum = 40 //send water levels for land vertices
+
+	ConnectViewer   MsgEnum = 41 //(re)connects a viewer, an id of -1 will create a new viewer
+	CreatePlayer    MsgEnum = 42 //create a new player (sign up)
+	SignIn          MsgEnum = 46 //Sign in a player (to manage devices/choose games)
+	AddPlayerToGame MsgEnum = 43 //Set a players game
+	WatchPlayer     MsgEnum = 44 //Watch a player (set a viewers player)
+	DeviceId        MsgEnum = 45 //sends a device id (and token) to the client
+
+	Players MsgEnum = 47 //for serverside persistence/restore of players
+
 )
 
 // func (m MsgEnum) WriteTo(buff *bytes.Buffer) {
@@ -91,24 +96,24 @@ func writeString(buff *bytes.Buffer, s string) {
 
 }
 
-func GenericRead[T CanHandle](buff *bytes.Buffer) T {
-	var value T
-	switch any(value).(type) {
-	case string:
-		value = any(readString(buff)).(T) //this is tricky - cast it to any, then typecast it to T
-	case *vec.V3:
-		value = any(readVec3(buff)).(T)
+// func GenericRead[T CanHandle](buff *bytes.Buffer) T {
+// 	var value T
+// 	switch any(value).(type) {
+// 	case string:
+// 		value = any(readString(buff)).(T) //this is tricky - cast it to any, then typecast it to T
+// 	case *vec.V3:
+// 		value = any(readVec3(buff)).(T)
 
-	case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32:
-		error := binary.Read(buff, le, &value)
-		if error != nil {
-			panic(error)
-		}
-	default:
-		panic("unsupported type " + fmt.Sprintf("%T", value) + " in GenericRead")
-	}
-	return value
-}
+// 	case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32:
+// 		error := binary.Read(buff, le, &value)
+// 		if error != nil {
+// 			panic(error)
+// 		}
+// 	default:
+// 		panic("unsupported type " + fmt.Sprintf("%T", value) + " in GenericRead")
+// 	}
+// 	return value
+// }
 
 func readVec3(buff *bytes.Buffer) *vec.V3 {
 	p := vec.NewVec3(0, 0, 0)
@@ -205,6 +210,9 @@ func GenericWrite[T CanHandle](buff *bytes.Buffer, v T) {
 	}
 }
 
+func Empty() *Msg {
+	return &Msg{Buff: new(bytes.Buffer)}
+}
 func NewMsg(hdr MsgEnum, values ...any) *Msg {
 	buff := new(bytes.Buffer)
 	binary.Write(buff, le, byte(hdr)) //the type conversion is unnecessary but makes it clear we are writing a byte
