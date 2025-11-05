@@ -48,7 +48,7 @@ func nextFreeSlotIn(sounds []*Sound) uint16 {
 
 }
 
-func (s *Sound) WriteInto(activity *msg.Msg) {
-	activity.Write(msg.Sound, s.name, s.position, s.volume, s.loop, s.playAfter)
+func (s *Sound) WriteInto(response *msg.Msg) {
+	response.Write(msg.Sound, s.name, s.position, s.volume, s.loop, s.playAfter)
 	//return msg.NewMsg(msg.Sound, s.name, s.position, s.volume, s.loop, s.playAfter)
 }

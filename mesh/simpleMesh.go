@@ -158,9 +158,8 @@ func (sm *SimpleMesh) AddFace(v1, v2, v3 uint16) {
 
 }
 
-func (sm *SimpleMesh) ToMsg(maxInstances uint16) *msg.Msg {
-
-	msg := msg.NewMsg(msg.Mesh, sm.id,
+func (sm *SimpleMesh) WriteTo(message *msg.Msg, maxInstances int16) {
+	message.Write(msg.Mesh, sm.id,
 		uint32(len(sm.p)/3),  //number of vertices
 		uint32(len(sm.fi)/3), //number of faces
 		sm.pad,
@@ -171,7 +170,12 @@ func (sm *SimpleMesh) ToMsg(maxInstances uint16) *msg.Msg {
 		sm.materialName,
 		maxInstances,
 	)
-
-	return msg
-
 }
+
+// func (sm *SimpleMesh) ToMsg(maxInstances uint16) *msg.Msg {
+
+// 	msg := msg.NewMsg(msg.Mesh, sm.id,
+
+// 	return msg
+
+// }

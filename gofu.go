@@ -4,13 +4,13 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	dev "github.com/nickax/gofu/device"
+	"github.com/nickax/gofu/errorplus"
 	"github.com/nickax/gofu/game/msg"
-	"github.com/nickax/gofu/game/player"
 	"github.com/nickax/gofu/global"
 	"github.com/nickax/gofu/jsonmsg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/server"
-	vwr "github.com/nickax/gofu/viewer"
 
 	"github.com/nickax/gofu/vec"
 	//"log"
@@ -39,13 +39,13 @@ var upgrader = websocket.Upgrader{
 func homePage(w http.ResponseWriter, _ *http.Request) {
 	log.Logit("homePage called")
 	fmt.Fprintf(w, "<h1>Game server</h1>")
-	for _, v := range global.Viewers {
-		if v.ws != nil {
+	for _, v := range global.Devices {
+		if v.WebSocket != nil {
 			if v.Player == nil {
-				fmt.Fprintf(w, "<p>Viewer %d (%v) has no player", v.Name, v.Id)
+				fmt.Fprintf(w, "<p>Viewer %v (%v) has no player", v.Name, v.Id)
 				continue
 			}
-			fmt.Fprintf(w, "<p>Viewer %d (%v) watches player %d (%q)", v.Name, v.Id, v.Player.Name, v.Player.Id)
+			fmt.Fprintf(w, "<p>Viewer %v (%v) watches player %v (%v)", v.Name, v.Id, v.Player.Name, v.Player.Id)
 		}
 
 	}
@@ -148,20 +148,23 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 		log.Logit(err)
 	}
 
-	var viewer *vwr.Viewer //this is set processing a create/join/control message
+	var device *dev.Device //this is set processing a create/join/control message
 	for {                  // read in a messages forever on this socket (from this player)
 
+		var evt *errorplus.Event = nil
 		messageType, msgBytes, err := ws.ReadMessage()
 
 		if err != nil {
-			log.Logit("Error reading message from websocket: " + err.Error())
+			evt = errorplus.New(err, errorplus.Info, "Websocket read error")
+			errorplus.Log(evt)
 			break
 		}
 
-		if viewer == nil {
-			viewer = vwr.New(global.Viewers, -1, nil, ws)
+		if device == nil {
+			device = dev.New(global.Devices, -1, nil, ws)
 		}
 
+		response := msg.Empty()
 		if messageType == websocket.TextMessage {
 
 			var jsonMessage jsonmsg.Msg
@@ -170,28 +173,48 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 				log.Logit(err.Error())
 			}
 
-			viewer.ProcessStructuredMsg(&jsonMessage)
+			evt = device.ProcessStructuredMsg(&jsonMessage, response)
 
 		} else if messageType == websocket.BinaryMessage {
 			//msgbytes is a slice of bytes
 
 			m := msg.NewFromBytes(msgBytes)
 
-			if viewer != nil {
-				viewer.InMtx.Lock()
-
+			if device != nil {
+				device.InMtx.Lock()
 			}
-			viewer.ProcessBinaryMsg(m, global.Games, global.Players, global.Viewers)
-			//player.ProcessBinaryMsg(m)
-			viewer.InMtx.Unlock()
 
+			evt = device.ProcessBinaryMsg(m, global.Games, global.Players, global.Devices)
+
+			device.InMtx.Unlock()
+
+		}
+
+		if evt != nil {
+			did := device.Id
+			pid := int32(-1)
+			gid := int32(-1)
+			vid := int32(-1)
+			velocity := (*vec.V3)(nil)
+			if device.Player != nil {
+				pid = int32(device.Player.Id)
+				if device.Player.Game != nil {
+					gid = int32(device.Player.Game.Id)
+				}
+				if device.Player.GetVehicle() != nil {
+					vid = int32(device.Player.GetVehicle().AssetId)
+					velocity = device.Player.GetVehicle().Om.GetVelocity()
+				}
+			}
+			evt.AddContext(gid, pid, did, vid, velocity)
+			errorplus.Log(evt)
 		}
 
 	}
 
-	viewer.ReleaseWebSocket()
+	device.ReleaseWebSocket()
 
-	log.Logit("socket error/ended for", player.Name)
+	//log.Logit("socket error/ended for", player.Name)
 }
 
 func customHeaders(fs http.Handler) http.HandlerFunc {

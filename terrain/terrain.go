@@ -247,9 +247,9 @@ func (m *TriMesh) getPositions(asWater bool) []float32 {
 
 }
 
-func (land *TriMesh) FloodAndDrain(waterlines []float64) []*msg.Msg {
+// FloodAndDrain - adds the water surface meshes (to the msg)
+func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg) {
 
-	msgs := []*msg.Msg{}
 	land.Root.shoreLines(waterlines) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
 
 	for i, wl := range waterlines {
@@ -279,10 +279,10 @@ func (land *TriMesh) FloodAndDrain(waterlines []float64) []*msg.Msg {
 		funcIsUnderwater := func(t *Tri) bool { return t.IsUnderwater(.1) }
 		waterMesh := land.Root.ToSimpleMesh(uint16(4+i), land, nil, "water", true, funcIsUnderwater)
 
-		msgs = append(msgs, waterMesh.ToMsg(1))
+		waterMesh.WriteTo(response, 1)
 
 	}
-	return msgs
+
 }
 
 func (tri *Tri) shoreLines(levels []float64) {

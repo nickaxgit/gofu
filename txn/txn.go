@@ -1,7 +1,5 @@
 package txn
 
-import "vendor/golang.org/x/net/idna"
-
 type Txn struct {
 	id           uint32
 	fromPlayerId uint32
@@ -13,6 +11,7 @@ type Txn struct {
 	timeStamp    int64
 }
 
+//golobal assest (vehicles for sale etc)
 type Asset struct {
 	id          int32
 	name        string
@@ -21,10 +20,10 @@ type Asset struct {
 	price       uint32
 }
 
-type possesion struct {
+type Possesion struct {
 	//playerdId int32
 	assetId          *Asset
-	Name             string //defaults to/overrises asset.name
+	Name             string //defaults to/overrides asset.name
 	destroyedInGames []uint32
 	TxnId            uint32 //purchase price,  date
 }

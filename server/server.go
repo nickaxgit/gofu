@@ -3,9 +3,10 @@ package server
 import (
 	"github.com/nickax/gofu/game"
 
+	"github.com/nickax/gofu/device"
+	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/global"
 	"github.com/nickax/gofu/terrain"
-	"github.com/nickax/gofu/viewer"
 
 	"time"
 )
@@ -31,9 +32,9 @@ func StepWorldsForever() {
 
 				game.Burn()
 
-				activity := game.MoveAll(5, lands) //<- this is a physics step - it returns a message containing moved masses
+				response := game.MoveAll(5, lands) //<- this is a physics step - it returns a message containing moved masses
 				for _, viewer := range cvs {
-					viewer.Send(activity) //send the moved masses (and engine sounds)
+					viewer.Send(response) //send the moved masses (and engine sounds)
 
 					vehicle := viewer.GetVehicle(global.Players)
 					if vehicle != nil {
@@ -49,10 +50,15 @@ func StepWorldsForever() {
 
 					if viewer.ViewChangedSignificantly() {
 
-						go viewer.GetFlames(game.GetFire()) //update visible flames for this player
 						go func() {
-							viewer.MakeAndSendLand() //makes and sends new land (different for every viewer)
-							//viewer.Send(msgs...)
+							message := msg.Empty()
+							viewer.GetFlames(game.GetFire(), message) //update visible flames for this player
+							viewer.Send(message)
+						}()
+						go func() {
+							message := msg.Empty()
+							game.MakeLand(viewer.Camera.Position, viewer.Camera.Direction, message)
+							viewer.Send(message)
 						}()
 					}
 
@@ -67,10 +73,10 @@ func StepWorldsForever() {
 
 }
 
-func currentViewers(game *game.Game) (viewers []*viewer.Viewer, landRoots []*terrain.Tri) {
-	current := []*viewer.Viewer{}
+func currentViewers(game *game.Game) (viewers []*device.Device, landRoots []*terrain.Tri) {
+	current := []*device.Device{}
 	lands := []*terrain.Tri{}
-	for _, v := range global.Viewers {
+	for _, v := range global.Devices {
 		player := v.GetPlayer()
 		if player != nil {
 			if player.Game == game {

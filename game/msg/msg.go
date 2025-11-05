@@ -77,7 +77,7 @@ func NewFromBuff(buff *bytes.Buffer, expectedType MsgEnum) *Msg {
 	msgType := byte(0)
 	read(buff, &msgType)
 	if msgType != byte(expectedType) {
-		panic("Msg type mismatch: expected " + fmt.Sprintf("%d", expectedType) + " got " + fmt.Sprintf("%d", msgType))
+		panic(fmt.Sprintf("Msg type mismatch: expected %v got %v", expectedType, msgType))
 	}
 	return &Msg{MsgType: MsgEnum(msgType), Buff: buff}
 }
@@ -195,20 +195,20 @@ func read(buff *bytes.Buffer, into ...any) {
 	}
 }
 
-func GenericWrite[T CanHandle](buff *bytes.Buffer, v T) {
+// func GenericWrite[T CanHandle](buff *bytes.Buffer, v T) {
 
-	switch any(v).(type) {
-	case string:
-		writeString(buff, any(v).(string))
-	case vec.V3:
-		writeVec3(buff, any(v).(*vec.V3))
-	case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32:
-		binary.Write(buff, le, v)
-		//buff.Write(any(v).([]byte))
-	default:
-		panic("unsupported type " + fmt.Sprintf("%T", v) + " in GenericWrite")
-	}
-}
+// 	switch any(v).(type) {
+// 	case string:
+// 		writeString(buff, any(v).(string))
+// 	case vec.V3:
+// 		writeVec3(buff, any(v).(*vec.V3))
+// 	case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32:
+// 		binary.Write(buff, le, v)
+// 		//buff.Write(any(v).([]byte))
+// 	default:
+// 		panic("unsupported type " + fmt.Sprintf("%T", v) + " in GenericWrite")
+// 	}
+// }
 
 func Empty() *Msg {
 	return &Msg{Buff: new(bytes.Buffer)}

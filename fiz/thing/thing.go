@@ -9,7 +9,7 @@ import (
 
 	"github.com/nickax/gofu/fiz/engine"
 	"github.com/nickax/gofu/fiz/mass"
-	"github.com/nickax/gofu/fiz/mixer"
+
 	"github.com/nickax/gofu/fiz/spring"
 	"github.com/nickax/gofu/game/msg"
 
@@ -26,6 +26,8 @@ type Thing struct {
 	//to which we pin an image
 	//state    *game.State // a reference back to the game/state it belongs to
 	Index   uint32
+	Name    string
+	AssetId uint32
 	Om      *mass.Mass //origin mass
 	Fm      *mass.Mass //forward mass (defines z axis)
 	Rm      *mass.Mass // right mass (deinfes x axis)
@@ -97,22 +99,21 @@ func (vehicle *Thing) AddSpring(m1 *mass.Mass, m2 *mass.Mass, restLength float64
 	s := spring.New(vehicle.Springs, m1, m2, collideable, restLength, actuatorTag)
 	return s
 }
-func (vehicle *Thing) FindCam(cam *cam.Camera, pov string) bool {
+func (vehicle *Thing) FindCam(pov string) *cam.Camera {
 
 	povCam, present := vehicle.cameras[pov]
 	if present {
-		cam = povCam
-		return true
+		return povCam
 	}
 
 	log.Logit("thing", vehicle.meshName, "has no camera for ", pov)
-	return false
+	return nil
 
 }
 
-func New(things []*Thing, meshName string, numEngines int) *Thing {
+func New(index uint32, meshName string, numEngines int) *Thing {
 
-	t := &Thing{Index: uint32(len(things)),
+	t := &Thing{Index: index,
 		meshName:  meshName,
 		MeshScale: vec.NewVec3(1, 1, 1), MeshOffset: vec.NewVec3(0, 0, 0), MeshRotation: vec.NewVec3(0, math.Pi*2, 0),
 		Springs:        []*spring.Spring{},
@@ -120,7 +121,6 @@ func New(things []*Thing, meshName string, numEngines int) *Thing {
 		MeshVisibility: 1,
 		cameras:        make(map[string]*cam.Camera),
 	}
-	things = append(things, t)
 
 	//moment of inertia of a disc is 1/2 m * r^2
 	bladeMass := 30.0
@@ -132,7 +132,9 @@ func New(things []*Thing, meshName string, numEngines int) *Thing {
 	t.Engines = make([]*engine.Engine, numEngines)
 
 	for i := 0; i < numEngines; i++ {
-		engine.New(t.Engines, "No "+fmt.Sprint(i+1), byte(i), 1775, propRadius, propChord*propRadius*blades, 10.0, moi, nil)
+
+		ne := engine.New("No "+fmt.Sprint(i+1), byte(i), 1775, propRadius, propChord*propRadius*blades, 10.0, moi, nil)
+		t.Engines = append(t.Engines, ne)
 	}
 
 	return t
@@ -273,7 +275,7 @@ func ThingsFromMsg(m *msg.Msg, masses []*mass.Mass) []*Thing {
 
 	for i := 0; i < int(numThings); i++ {
 		//create a new thing from the byte buffer, add it to the things slice (indexing it upon creation)
-		NewFromMsg(things, m, masses)
+		things = append(things, NewFromMsg(m, masses))
 	}
 
 	return things
@@ -452,7 +454,7 @@ func (vehicle *Thing) climbRate() float32 {
 
 }
 
-func NewFromMsg(things []*Thing, m *msg.Msg, masses []*mass.Mass) *Thing {
+func NewFromMsg(m *msg.Msg, masses []*mass.Mass) *Thing {
 
 	idx := int32(0)
 	m.Read(&idx)
@@ -460,7 +462,7 @@ func NewFromMsg(things []*Thing, m *msg.Msg, masses []*mass.Mass) *Thing {
 	meshName := ""
 	m.Read(&meshName)
 
-	thing := New(things, meshName, 2)
+	thing := New(uint32(idx), meshName, 2)
 
 	om, fm, rm := int32(0), int32(0), int32(0) //origin, forward and right masses
 	m.Read(&thing.MeshOffset, &thing.MeshScale, &thing.MeshRotation, &om, &fm, &rm, &thing.MeshVisibility)

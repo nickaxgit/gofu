@@ -31,10 +31,9 @@ type Engine struct {
 	Spring        *spring.Spring
 }
 
-func New(engines []*Engine, name string, index byte, kwMax float64, propRadius float64, propTotalBladeArea float64, pitch float64, moi float64, spring *spring.Spring) *Engine {
-	e := &Engine{name: name, index: index, kwMax: kwMax, propRadius: propRadius, propTotalBladeArea: propTotalBladeArea, pitch: pitch, moi: moi, Spring: spring, rpm: 0, lastRpmSent: 0, started: false}
-	engines = append(engines, e)
-	return e
+func New(name string, index byte, kwMax float64, propRadius float64, propTotalBladeArea float64, pitch float64, moi float64, spring *spring.Spring) *Engine {
+	return &Engine{name: name, index: index, kwMax: kwMax, propRadius: propRadius, propTotalBladeArea: propTotalBladeArea, pitch: pitch, moi: moi, Spring: spring, rpm: 0, lastRpmSent: 0, started: false}
+
 }
 
 func (engine *Engine) GetRPM() float64 {
@@ -46,7 +45,7 @@ func (engine *Engine) IsStarted() bool {
 	return engine.started
 }
 
-func (engine *Engine) Start(sounds []*sound.Sound, activity *msg.Msg) {
+func (engine *Engine) Start(sounds []*sound.Sound, response *msg.Msg) {
 	log.Logit("starting engine", engine.name)
 	engine.started = true
 	engine.rpm = 100
@@ -55,17 +54,17 @@ func (engine *Engine) Start(sounds []*sound.Sound, activity *msg.Msg) {
 	idleUp := sound.New(sounds, "idleUp", position, 0.5, false, startToIdle, 100)
 	engineLoop := sound.New(sounds, "engineLoop", position, 0.5, true, idleUp, 0)
 
-	startToIdle.WriteInto(activity)
-	idleUp.WriteInto(activity)
-	engineLoop.WriteInto(activity)
+	startToIdle.WriteInto(response)
+	idleUp.WriteInto(response)
+	engineLoop.WriteInto(response)
 
 }
 
-func (engine *Engine) writePitchInto(activity *msg.Msg) {
+func (engine *Engine) writePitchInto(response *msg.Msg) {
 
-	activity.Write(msg.Detune)
-	activity.Write(uint16(engine.soundHandle), int16(engine.rpm-1000)) //detune is in cents - can be negative
-	activity.Write(byte(engine.index), uint16(engine.rpm))
+	response.Write(msg.Detune)
+	response.Write(uint16(engine.soundHandle), int16(engine.rpm-1000)) //detune is in cents - can be negative
+	response.Write(byte(engine.index), uint16(engine.rpm))
 
 }
 

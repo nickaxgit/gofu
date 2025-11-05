@@ -16,7 +16,7 @@ import (
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/mutex"
 
-	//game does not know about viewers or players (viewers and players know about the game)
+	//game does not know about devices or players (devices and players know about the game)
 	//"github.com/nickax/gofu/game/player"
 	//"github.com/nickax/gofu/viewer"
 

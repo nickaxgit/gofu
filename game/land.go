@@ -13,11 +13,11 @@ import (
 	"github.com/nickax/gofu/vec"
 )
 
-func (game *Game) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3) []*msg.Msg {
+func (game *Game) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3, message *msg.Msg) {
 
 	//TODO only reposition/resend trees in new positions (most trees do not need resending)
 	//need to do trees after waterlines so we don't get trees underwater
-	msgs := []*msg.Msg{}
+
 	treePositions := make([]float32, 100000) // a slice of zero length, and a CAPACITY of 100000 ///3000 xyz floats = 1000 trees
 
 	hidden := 0
@@ -26,21 +26,20 @@ func (game *Game) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3)
 	ray := ray.New(camPos, vec.NoWhereSpecial) //set up *one* ray for firing at the treetops (reuse it!)
 
 	root.FetchTrees(10, treePositions, treeBillboards, camPos, camDir, ray, &hidden)
-	nearTreesMsg := msg.NewMsg(msg.PositionInstances)
-	//nearTreesMsg.WriteUint16(uint16(len(treePositions) / 3))
-	msg.GenericWrite(nearTreesMsg.Buff, uint16(len(treePositions)/3))
-	msg.GenericWrite[[]float32](nearTreesMsg.Buff, treePositions)
 
-	msgs = append(msgs, nearTreesMsg)
-	msgs = append(msgs, treeBillboards.ToMsg(1))
+	//near trees (mesh intances)
+	message.Write(msg.PositionInstances,
+		uint16(len(treePositions)/3), //number on instances (near trees)
+		treePositions,                //Slice of XYZ float32's
+	)
 
-	return msgs
+	//far trees (billboards)
+	treeBillboards.WriteTo(message, 1)
 
 }
 
-func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3) (groundPosition *vec.V3, GroundTri *terrain.Tri, messages []*msg.Msg) {
-
-	msgs := []*msg.Msg{}
+// Makeland - generates lands,scorched land, water and trees for the given camera position and direction (into Message)
+func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3, message *msg.Msg) (groundPosition *vec.V3, GroundTri *terrain.Tri) {
 
 	land := terrain.NewTriMesh("land", 65000, game.landSize, game.kinks, game.landHeight)
 	ts := time.Now()
@@ -52,9 +51,6 @@ func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3) (groundPosition *vec.
 	re := game.runwayEnd
 	rs.Y = 0
 	re.Y = 0
-
-	//just an even split - no proximity to focus
-	//t.splitDownTo(splits) //approx 131k verts
 
 	log.Logit(land.VertCount(), " verts")
 
@@ -112,10 +108,6 @@ func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3) (groundPosition *vec.
 	br, _ = land.Root.VprobeLand(br) //find the ground surface
 	tr, _ = land.Root.VprobeLand(tr) //find the ground surface
 
-	//if tl.y != br.y || n.y != 1 {
-	//		log.Logit("runway is not level")
-	//	}
-
 	bl.Y += 0.05
 	tl.Y += 0.05
 	br.Y += 0.05
@@ -137,9 +129,9 @@ func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3) (groundPosition *vec.
 	waterlines := []float64{game.landHeight * 0.71, game.landHeight * 0.41, 0.1, -game.landHeight * 0.52}
 
 	//makes end send the water surfaces - one for each waterline
-	msgs = append(msgs, land.FloodAndDrain(waterlines)...)
+	land.FloodAndDrain(waterlines, message)
 
-	msgs = append(msgs, runwayMesh.ToMsg(1))
+	runwayMesh.WriteTo(message, 1)
 
 	isLand := func(t *terrain.Tri) bool {
 		if t.IsUnderwater(.1) {
@@ -162,7 +154,9 @@ func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3) (groundPosition *vec.
 	scorchedLand := land.Root.ToSimpleMesh(56, land, game.fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
 	wireframe := land.Root.ToSimpleMesh(32, land, game.fire, "whiteWires", false, isLand)
 
-	msgs = append(msgs, smallLandMesh.ToMsg(1), scorchedLand.ToMsg(1), wireframe.ToMsg(1)) //send them together - or transient gaps can appear
+	smallLandMesh.WriteTo(message, 1)
+	scorchedLand.WriteTo(message, 1)
+	wireframe.WriteTo(message, 1)
 
-	return msgs, groundPosition, groundTriangle
+	return groundPosition, groundTriangle
 }

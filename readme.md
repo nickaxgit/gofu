@@ -170,14 +170,14 @@ struct thing
     viewpoints map[string]*Camera //Additional *initial* (named) position, direction and up in vehicle space
 
 
-    There are players, viewers and controllers
+    There are players, and devices - some of which are controllers, some of which view, some do both
     A separation of concerns here allows a player to have many viewers and many controllers
 
     Game
         []players
             []viewers
 
-struct Viewer
+struct Device
     ws Websocket
     *player  (to get vehicle)
     viewpoint string
@@ -186,22 +186,20 @@ struct Viewer
 
 If a player has no vehicle - the world is their vehicle and all normal rules apply 
 (you are moving/rotating the camera in vehicle space)
-Boarding a vehicle - sets the camera offset and rotation to that initially specified in the view
+Boarding a vehicle - sets the camera offset and rotation to that initially specified in the device
 and the vehicle translation/roatation is (always) added to the camera when it is sent
 
 
 You don't need an account, or permission to view
-Multiple viewers of the same cameras are allowed (spectators might all want the pilot seat)
-Each viewer has an additional camera offset (position and direction)
+Multiple devices can view from the same initial camera position are allowed (spectators might all want the pilot seat)
+Each device has an additional camera offset (position and direction)
 
  - allows you hop in as co-pilot
 /join?pid=4524&view=copilot&invite=fdfs (cookie determines player - absent, creates new player) 
 
 sends a joinAsConstroller(token) message over a socket - then streams blob positions
 
-
 each player has a collection of invites - they can be revoked
-
 
 You are joining the existing players vehicle (in an unoccupied 'seat'), 
 
@@ -348,6 +346,7 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
 * Commms
     * Audio comms (radio/PTT)
     * Beeping/deswearing (FFT, stretching, matching (delta F's))
+    * Dugan mixing (open mic) ?
 
 * Marketing
     * Name/Branding/Domain
@@ -380,6 +379,7 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
     * Angle and twist constraints (on springs)
     * Humans / ragdolls
     * balancing/walking
+    * torque drivers (for diggers)
 
 * Vehilces/tools
     * CL415
@@ -395,10 +395,12 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
     * Parachute (Ram air 7 cell ?)
 
 * Server
-    * Security
+    * Security (player and device tokens)
     * Performance
     * Deployment
-    * Persistence/updating
+    * Concurrency
+    * Persistence/updating (new releases)
+    * Erorr and event logging (and viewer)
 
 * Membership
     * Signup 
@@ -407,6 +409,13 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
     * In-game mailing/(off line) messaging
     * Monetisation - fuel costs money, aircraft cost money - beating/putting out fires earns money
    
+* Virtual currency and 'shop'
+    * Bank accounts and transaction, balances, reversals
+    * Deposits (paypal etc)
+    * Assets - things you can buy
+    * Possessions - instances of assets you own (via a transaction,or have owned)
+    * Destruction (damage/wear)- possesion.destroyedInGames[]
+    * 2nd hand vehicle sales (?) pros and cons
    
     possible to play for free - but without a vehicle
     AT-802F's = 4.8M$
@@ -445,7 +454,7 @@ AddPlayerToGame(gid,pid)
 
 msgWatch(PlayerId)
 
-msgReconnectViewer(viewerId)
+msgReconnect(viewerId, token) -1 for unknown
 
 
 A viewer is created upon connection - added to the global viewers and its viewer.socket is set to the ws

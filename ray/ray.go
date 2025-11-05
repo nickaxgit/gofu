@@ -8,14 +8,14 @@ type Ray struct {
 	Origin    *vec.V3
 	End       *vec.V3
 	direction *vec.V3 //NOT normalised (end-origin)
-	intersect *vec.V3 //scratchpad /probe result
+	Intersect *vec.V3 //scratchpad /probe result
 }
 
 func (ray *Ray) GetIntersect() *vec.V3 {
-	if ray.intersect == nil {
+	if ray.Intersect == nil {
 		panic("ray.intersect is nil - did you forget to probe the ray first?")
 	}
-	return ray.intersect
+	return ray.Intersect
 }
 
 func New(origin, end *vec.V3) *Ray {
@@ -24,7 +24,7 @@ func New(origin, end *vec.V3) *Ray {
 	}
 	direction := end.Sub(origin)
 
-	return &Ray{Origin: origin, End: end, direction: direction, intersect: nil}
+	return &Ray{Origin: origin, End: end, direction: direction, Intersect: nil}
 }
 
 // GetDirection returns the (not normalised) direction vector of the ray (end - origin)
