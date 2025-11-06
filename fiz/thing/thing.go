@@ -228,19 +228,6 @@ func (vehicle *Thing) SetVelocity(v *vec.V3) {
 	}
 }
 
-// find the closest point on any face in the thing to the point p
-func (vehicle *Thing) distanceFrom(p *vec.V3) float64 {
-	bestDist := 1000000.0
-	// for _, f := range thing.faces {
-	// 	d := p.distanceFromFace(f) //f.distanceFrom(m, p, false)
-	// 	if d < bestDist {
-	// 		bestDist = d
-	// 	}
-	// }
-	return bestDist
-
-}
-
 func (vehicle *Thing) Translate(v *vec.V3) {
 	for _, s := range vehicle.Springs {
 		s.Translate(v)

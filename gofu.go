@@ -28,8 +28,6 @@ var globalOrigin = vec.NewVec3(0, 0, 0)
 var le = binary.LittleEndian
 var ntm = 0.000000001 //newtons to metres of movement per substep
 
-var accountsByGuid map[string]*account
-
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -41,11 +39,11 @@ func homePage(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "<h1>Game server</h1>")
 	for _, v := range global.Devices {
 		if v.WebSocket != nil {
-			if v.Player == nil {
+			if v.ViewingPlayer == nil {
 				fmt.Fprintf(w, "<p>Viewer %v (%v) has no player", v.Name, v.Id)
 				continue
 			}
-			fmt.Fprintf(w, "<p>Viewer %v (%v) watches player %v (%v)", v.Name, v.Id, v.Player.Name, v.Player.Id)
+			fmt.Fprintf(w, "<p>Viewer %v (%v) watches player %v (%v)", v.Name, v.Id, v.ViewingPlayer.Name, v.ViewingPlayer.Id)
 		}
 
 	}
@@ -108,11 +106,9 @@ func ValueOr[T any](p *T, def T) T {
 func main() {
 	port := "127.0.0.1:8081" //":443" //":8081"
 	log.Logit("Gofu server - listening on " + port)
-	fs := http.FileServer(http.Dir("../dozer"))
+	fs := http.FileServer(http.Dir("../dozer")) //the typescript app/front end is in here
 
 	//important!
-
-	accountsByGuid = make(map[string]*account)
 
 	//obq = make(map[string]*qHolder)
 
@@ -148,8 +144,9 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 		log.Logit(err)
 	}
 
-	var device *dev.Device //this is set processing a create/join/control message
-	for {                  // read in a messages forever on this socket (from this player)
+	//initial anonymous/unknown device
+	var device *dev.Device = dev.New(global.Devices, -1, nil, ws)
+	for { // read in a messages forever on this socket (from this player)
 
 		var evt *errorplus.Event = nil
 		messageType, msgBytes, err := ws.ReadMessage()
@@ -160,22 +157,11 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 			break
 		}
 
-		if device == nil {
-			device = dev.New(global.Devices, -1, nil, ws)
-		}
-
 		response := msg.Empty()
-		if messageType == websocket.TextMessage {
 
-			var jsonMessage jsonmsg.Msg
-			err := json.Unmarshal(msgBytes, &jsonMessage)
-			if err != nil {
-				log.Logit(err.Error())
-			}
+		switch messageType {
+		case websocket.BinaryMessage:
 
-			evt = device.ProcessStructuredMsg(&jsonMessage, response)
-
-		} else if messageType == websocket.BinaryMessage {
 			//msgbytes is a slice of bytes
 
 			m := msg.NewFromBytes(msgBytes)
@@ -184,10 +170,22 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 				device.InMtx.Lock()
 			}
 
-			evt = device.ProcessBinaryMsg(m, global.Games, global.Players, global.Devices)
+			//beware this (potentially) reassigns the device (from an anonymous -1) device to a kno
+			evt, device = device.ProcessBinaryMsg(m, global.Games, global.Players, global.Devices)
 
 			device.InMtx.Unlock()
 
+		case websocket.TextMessage:
+
+			var jsonMessage jsonmsg.Msg
+			err := json.Unmarshal(msgBytes, &jsonMessage)
+			if err != nil {
+				log.Logit(err.Error())
+			}
+
+			evt = device.ProcessStructuredMsg(&jsonMessage, response)
+		default:
+			log.Logit("Unknown message type:", messageType)
 		}
 
 		if evt != nil {
@@ -196,14 +194,14 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 			gid := int32(-1)
 			vid := int32(-1)
 			velocity := (*vec.V3)(nil)
-			if device.Player != nil {
-				pid = int32(device.Player.Id)
-				if device.Player.Game != nil {
-					gid = int32(device.Player.Game.Id)
+			if device.ViewingPlayer != nil {
+				pid = int32(device.ViewingPlayer.Id)
+				if device.ViewingPlayer.Game != nil {
+					gid = int32(device.ViewingPlayer.Game.Id)
 				}
-				if device.Player.GetVehicle() != nil {
-					vid = int32(device.Player.GetVehicle().AssetId)
-					velocity = device.Player.GetVehicle().Om.GetVelocity()
+				if device.ViewingPlayer.GetVehicle() != nil {
+					vid = int32(device.ViewingPlayer.GetVehicle().AssetId)
+					velocity = device.ViewingPlayer.GetVehicle().Om.GetVelocity()
 				}
 			}
 			evt.AddContext(gid, pid, did, vid, velocity)

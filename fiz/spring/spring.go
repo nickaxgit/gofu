@@ -23,10 +23,10 @@ type Spring struct {
 
 }
 
-func (s *Spring) rest() float64 {
-	s.RestLength = s.M1.P.DistanceFrom(s.M2.P)
-	return s.RestLength
-}
+// func (s *Spring) rest() float64 {
+// 	s.RestLength = s.M1.P.DistanceFrom(s.M2.P)
+// 	return s.RestLength
+// }
 
 func New(springs []*Spring, m1 *mass.Mass, m2 *mass.Mass, collideable byte, restLength float64, actuatorTag actuator.ActuatorEnum) *Spring {
 	//set rest length at constrcution

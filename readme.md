@@ -10,6 +10,8 @@ Drag, lift and thrust are modelled, and these forces accelerate masses which are
 
 The game can be played (viewed) on one device and controlled with another - so you can (for example) play on your Internet enabled wide-screen TV (in it's web browser) whilst flying the plane with your mobile phone (using it's touchscreen, camera,accelerometers and Lidar - to gain spatial and orientation input - to use it as a realistic flight yoke)
 
+Multiple devices can watch the same player/vehice, from multiple angles - allowing spectate functionality - but also multi screen (multi-device) cockpits - with side windows instrument panels. 
+
 It is also possible to use your dektop webcam to optically track the position of physical flight controllers (joysticks, pedals, yokes, throttles etc) - allowing you to use 'homebrewed' cockpits - you can fly the plane with a wooden spoon if you like (although you will need to attach a brighly coloured sticky dot). The more adeventurous could 3D print realistic controller parts and rig up hydruallic actuators and LED indicators (made from disposable medical syringes, coloured fluids, and cheap clear plastic tubing) - your webcam can then track a single panel where (switched) LEDs and Hydraulic indicators are clustered - the webcam then picks up these as control inputs.
 
 The choice of a thin, browser based client - means game loading is almost instant and it can run at high frame rates on very low end devices - not requiring expensive 3D cards.
@@ -341,7 +343,6 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
     * Ground 'tracking' camera (Firebeaters PoV of your drop)
     * Ground & fire mini/moving maps
     * Missions, setup/definition, Scoring/completion
-
     * Music
 * Commms
     * Audio comms (radio/PTT)
@@ -357,6 +358,11 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
     * Flight controls (inputs - blob tracking, controllers)
     * Touchscreen control
     * Reverse blob tracking (yoke control - sensor fusion (cameras and accelerometer)
+
+* Client
+    * Stripdown (things, springs, coins, footprints, tracks, props, players)
+    * Left with masses, localMeshes and vectors
+    * Reinstate/add control sticks (touch)
 
 * Realism/simulation
     * Gear, flaps and control surface animations
@@ -378,8 +384,8 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
     
     * Angle and twist constraints (on springs)
     * Humans / ragdolls
-    * balancing/walking
-    * torque drivers (for diggers)
+    * Balancing / walking
+    * Torque drivers (for diggers)
 
 * Vehilces/tools
     * CL415
@@ -396,11 +402,14 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
 
 * Server
     * Security (player and device tokens)
+    * Abuse - ip logging, ASN lookup, rate limiting curl https://ipinfo.io/8.8.8.8/json
     * Performance
     * Deployment
     * Concurrency
     * Persistence/updating (new releases)
-    * Erorr and event logging (and viewer)
+    * Error and event logging (and viewer)
+    * Entropy encoding (mesh vert deltas)
+    * Compression - gorilla - websocket.Upgrader{enableCompression}
 
 * Membership
     * Signup 
@@ -503,7 +512,7 @@ Welcome
 
     * This device
 
- Account sign in 
+ Account sign inss
  |Type     |Name                 |status |Action    |
  |---------|---------------------|-------|----------|
  |Unknown\/|This device [edit]   |Active |[sign out]|
@@ -514,18 +523,23 @@ Welcome
  
  
 
- Devices (viewers/controllers)
- id   |type     |Role                 |Camera       |Status | Action   | label| 
- -----|---------|---------------------|-------------|-------|----------|------|
- A9G8 |TV       |Forward view         |Forward      |Active |[forget]  |
- 4F74 |Desktop  |Forward camera       |Forward      |Off    |[forget]  |
- 4FG8 |Ipad     |Flight Yoke          |None         |Active |[forget]  [configure] |
- 2832 |iPhone   |Moving map           |             |Off    |[forget]  |  
- 10W8 |laptop   |Cockpit window       |Pilot right  |       |[forget]  |Lenovo
- 0T72 |laptop   |Cockpit window       |Pilot left   |       |[forget]  |
- FSUS |Android  |Rudder pedals        |none         |off    |[forget]  |Samsung galaxy
+ Veiwing Devices 
+ id   |Name     |Controls  |Point of View        |Look         |Status | Action   | label| 
+ -----|---------           |---------------------|-------------|-------|----------|------|
+ A9G8 |TV           None   |Pilot                |forward      |Active |[forget]  |
+ 4F74 |Desktop  |   all    |Front External       |forward      |Off    |[forget]  |
+ 4FG8 |iPad     |   all    |Pilot                |instruments  |Active |[forget]  [configure] |
+ 2832 |iPhone   |   Some   |Pilot           |                  |Off    |[forget]  |  
+ 10W8 |laptop   |   some   |pilot                |right        |        [forget]  |Lenovo
+ 0T72 |laptop   |   some   |pilot                |Pilot left   |       |[forget]  |
+ FSUS |Android  |   some   |none                 |none         |Active |[forget]  [configure] |
+
  8JQW |Choose\/ |Choose \/            |choose     \/|waiting|[forget]  |[...]  
-[Add a device]
+[Add new device] (encodes PID)
+
+Controllers      Role
+ 4FG8 |Ipad     |Flight yoke          |Active |[forget]  [configure] |
+ 
 
 XXXXX
 XXXXX
@@ -555,12 +569,12 @@ Sign Out  (Of device management/player account) deletes local cookie
 
 		//player id must exist player name must match
 		//a player can be signed in on (have valid auth tokens) on many devices
-		//devices (viewers/controllers) attach to a player and are issues an auth token
+		//devices (viewers/controllers) attach to a player and are issued an auth token
 		//When signed in - player sees a list of devices that are authed
 		//A player can be signed in, and not in any game
-		//A can player join a (one) game
+		//A can player join any (one) game
 		//Additional devices can join as viewers/controllers
-		//if he joins a *different* game on a second device - the players game id is changed - all viewers now view the player in the new game 
+		//If he joins a *different* game on a second device - the players game id is changed - all viewers now view the player in the new game 
 		//Any vehicle is left unpiloted (unless under dual control) - warn if airbourne
 		//A player owns an aircraft, and can use it in any game until it is destroyed
 		//If the player survives (say) a crash landing, he can board another aircraft (from his stable) - he might be in for a long walk home

@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/nickax/gofu/vec"
 	"reflect"
+
+	"github.com/nickax/gofu/vec"
 )
 
 type CanHandle interface {
@@ -50,14 +51,16 @@ const (
 	Telemetry         MsgEnum = 39 //send telemetry data (to the client)
 	PositionInstances MsgEnum = 40 //send mesh instance positions (to the client) (trees etc)
 
-	ConnectViewer   MsgEnum = 41 //(re)connects a viewer, an id of -1 will create a new viewer
+	ConnectDevice   MsgEnum = 41 //(re)connects a viewer/controller device, an id of -1 will create a new device
 	CreatePlayer    MsgEnum = 42 //create a new player (sign up)
 	SignIn          MsgEnum = 46 //Sign in a player (to manage devices/choose games)
 	AddPlayerToGame MsgEnum = 43 //Set a players game
 	WatchPlayer     MsgEnum = 44 //Watch a player (set a viewers player)
 	DeviceId        MsgEnum = 45 //sends a device id (and token) to the client
+	PlayerId        MsgEnum = 46 //sends a player id (and token) to the client
 
-	Players MsgEnum = 47 //for serverside persistence/restore of players
+	Players    MsgEnum = 47 //for serverside persistence/restore of players
+	ReplaceDiv MsgEnum = 48 //replace a div on the client side
 
 )
 
@@ -155,7 +158,7 @@ func write(buff *bytes.Buffer, values ...any) {
 			writeVec3(buff, any(v).(*vec.V3))
 		case vec.V2:
 			writeVec2(buff, any(v).(*vec.V2))
-		case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32:
+		case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32, MsgEnum:
 			error := binary.Write(buff, le, v)
 			if error != nil {
 				panic(error)
