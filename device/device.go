@@ -35,12 +35,13 @@ import (
 
 	"github.com/nickax/gofu/fiz/mixer"
 	"github.com/nickax/gofu/mutex"
+	"github.com/nickax/gofu/persist"
 	"github.com/nickax/gofu/terrain"
 	"github.com/nickax/gofu/vec"
 )
 
 type Device struct {
-	Id        int32
+	Id        uint32
 	Name      string
 	token     string          //used to authenticate a device
 	WebSocket *websocket.Conn //if this is nil, they are disconnected
@@ -50,7 +51,7 @@ type Device struct {
 	isIndependent     bool           //this device has its own camera (otherwise it sees exaclty what the player sees)
 	primaryControls   *player.Player //this is set to a target player when permission is granted, and set back to the owner if it is revoked, expires, or the controller leaves
 	secondaryControls *player.Player //this is set to a target player when permission is granted, and set back to the owner if it is revoked, expires, or the controller leaves
-	Owner             *player.Player
+	owner             *player.Player
 	pov               string      //point of pilot, copilot, instruments, overhead panel, satellite etc
 	Camera            *cam.Camera //initially a clone of viewPoint(within the vehicle) - Ongoing, additional position direction and up in vehicle space (our head swivel/slew)
 	lastCam           *cam.Camera //where were we positioned/looking when we last sent an update
@@ -94,6 +95,83 @@ type Device struct {
 
 }
 
+// New id is either a known device id and correct token, OR -1
+// which will create a device add it to the map - send ID/token back
+func New(devices map[uint32]*Device, id uint32, name string,
+	owner *player.Player, viewing *player.Player,
+	primaryControls *player.Player, secondaryControls *player.Player,
+	ws *websocket.Conn) *Device {
+	//pov string, ws *websocket.Conn, gridOrigin *vec.V3, controls map[input.ControlInput]float64) *Viewer {
+
+	gridOrigin := vec.NewVec3(0, 0, 0)
+	gridX := vec.NewVec3(1, 0, 0)
+	gridY := vec.NewVec3(0, 0, 1) //this is a bit confusing but the 2d grid is initialised on the word xz plane
+
+	device := &Device{
+		//viewingPlayerId: -1,
+		Id:                id,
+		Name:              name,
+		owner:             owner,
+		ViewingPlayer:     viewing, //can be nil at the very begining -
+		primaryControls:   primaryControls,
+		secondaryControls: secondaryControls,
+		token:             fmt.Sprintf("%06d", rand.Int31n(999999)),
+		WebSocket:         ws,
+		pov:               "none",
+		Camera:            cam.New(vec.NewVec3(0, 0, 0), vec.NewVec3(1, 0, 0), vec.NewVec3(0, 1, 0)), //default camera if none found
+		gridPos:           vec.NewVec3(0, 0, 0),
+
+		highlit: highlitType{nil, nil, nil},
+		//springStart:    nil,
+		currentThing: nil,
+		mode:         editing,
+
+		//Socket:         socket,
+		Grid:           grid.New(gridOrigin, gridX, gridY),
+		cursor:         vec.NewVec2(0, 0),
+		grab:           nil,
+		keys:           make(map[string]bool),     //which keys are pressed
+		selectedMasses: make(map[*mass.Mass]bool), //which masses are selected, values are the order in which they were selected
+		boundValues:    make(map[string]*float64, 0),
+		controls:       make(map[input.ControlInput]float64),
+		mtx:            &sync.Mutex{},
+		InMtx:          &sync.Mutex{},
+		mixers:         mixer.StandardMixers,
+	}
+
+	//create and set control inputs for all 'channels'
+	for i := range input.InLabels {
+		device.controls[input.ControlInput(i)] = 0
+	}
+
+	mutex.Devices.Lock()
+	devices[uint32(device.Id)] = device
+	mutex.Devices.Unlock()
+
+	return device
+}
+
+func (device *Device) Persist() *errorplus.Event {
+
+	deviceMsg := msg.NewMsg(msg.P_Device)
+	device.WriteTo(deviceMsg)
+	return persist.Append("repo.bin", deviceMsg)
+}
+
+func NewFromMsg(m *msg.Msg, devices map[uint32]*Device, players map[uint32]*player.Player) *Device {
+
+	did, name, token, oid, vpid, pcid, scid, ii, pov := uint32(0), "", "", uint32(0), uint32(0), uint32(0), uint32(0), true, ""
+	m.Read(&did, &name, &token, &oid, &vpid, &pcid, &scid, &ii, &pov)
+	return New(devices, did, name, players[oid], players[vpid], players[pcid], players[scid], nil)
+
+}
+
+func (d *Device) WriteTo(m *msg.Msg) {
+	m.Write(d.Id, d.Name, d.token, d.owner.Id, d.ViewingPlayer.Id,
+		d.primaryControls.Id, d.secondaryControls.Id, d.isIndependent,
+		d.pov)
+}
+
 type ModeEnum string
 
 const (
@@ -123,56 +201,6 @@ func (device *Device) Status() string {
 		return "Connected"
 	}
 	return "Disconnected"
-}
-
-// New id is either a known viewer id and correct token, OR -1
-// which will create a viewer/device add it to the map - send ID/token back
-func New(viewers map[uint32]*Device, id int32, player *player.Player, ws *websocket.Conn) *Device {
-	//pov string, ws *websocket.Conn, gridOrigin *vec.V3, controls map[input.ControlInput]float64) *Viewer {
-
-	gridOrigin := vec.NewVec3(0, 0, 0)
-	gridX := vec.NewVec3(1, 0, 0)
-	gridY := vec.NewVec3(0, 0, 1) //this is a bit confusing but the 2d grid is initialised on the word xz plane
-
-	v := &Device{
-		//viewingPlayerId: -1,
-		Id:            id,
-		ViewingPlayer: player, //can be nil at the very begining -
-		token:         fmt.Sprintf("%06d", rand.Int31n(999999)),
-		WebSocket:     ws,
-		pov:           "none",
-		Camera:        cam.New(vec.NewVec3(0, 0, 0), vec.NewVec3(1, 0, 0), vec.NewVec3(0, 1, 0)), //default camera if none found
-		gridPos:       vec.NewVec3(0, 0, 0),
-
-		highlit: highlitType{nil, nil, nil},
-		//springStart:    nil,
-		currentThing: nil,
-		mode:         editing,
-
-		//Socket:         socket,
-		Grid:           grid.New(gridOrigin, gridX, gridY),
-		cursor:         vec.NewVec2(0, 0),
-		grab:           nil,
-		keys:           make(map[string]bool),     //which keys are pressed
-		selectedMasses: make(map[*mass.Mass]bool), //which masses are selected, values are the order in which they were selected
-		boundValues:    make(map[string]*float64, 0),
-		controls:       make(map[input.ControlInput]float64),
-		mtx:            &sync.Mutex{},
-		InMtx:          &sync.Mutex{},
-		mixers:         mixer.StandardMixers,
-	}
-
-	//create and set control inputs for all 'channels'
-	for i := range input.InLabels {
-		v.controls[input.ControlInput(i)] = 0
-	}
-
-	if v.Id > -1 {
-		mutex.Devices.Lock()
-		viewers[uint32(v.Id)] = v
-		mutex.Devices.Unlock()
-	}
-	return v
 }
 
 // Watch a players vehicle from a given pov (defined within that vehicle)
@@ -254,8 +282,8 @@ func (device *Device) processMouseMove(game *game.Game) { //isRunning bool, mass
 
 			if device.buttons == 0 {
 				pickRay := ray.New(device.Camera.Position, device.Camera.FarPos)
-				//cm, _ := pickRay.ClosestMass(game.Masses, viewer.springCursor) //state.ClosestMassToRay(viewer.Camera.Position, viewer.Camera.FarPos, viewer.springCursor)
-				cm, _ := mass.ClosestMassToRay(game.Masses, device.springCursor, pickRay) //state.ClosestMassToRay(viewer.Camera.Position, viewer.Camera.FarPos, viewer.springCursor)
+
+				cm, _ := mass.ClosestMassToRay(game.Masses, device.springCursor, pickRay)
 
 				if cm != device.highlit.mass {
 					device.highlit.mass = cm
@@ -512,9 +540,9 @@ func (device *Device) sendHighlit() {
 
 func (device *Device) Notify(text string, severity string) {
 
-	msg := msg.NewMsg(msg.Message, text, severity)
+	msg := msg.NewMsg(msg.Notify, text, severity)
 	device.Send(msg)
-	log.Logit(msg, severity)
+	log.Logit(text, severity)
 
 }
 
@@ -582,32 +610,12 @@ func (device *Device) setMode(mode ModeEnum) {
 
 func (device *Device) checkHighlitMass() bool {
 	if device.highlit.mass == nil {
-		device.Notify("Highlight a mass and press the key", "error")
+		device.Notify("Highlight a mass and press the key", "red")
 		return false
 	}
 	return true
 
 }
-
-// func (viewer *Viewer) send(msg *reply) { //this is fo JSON message s- Dperecated
-
-// 	if viewer.Socket != nil {
-// 		viewer.mtx.Lock()         //<<---MUTEX
-// 		defer viewer.mtx.Unlock() //deferred unlock
-// 		messageType := websocket.TextMessage
-
-// 		bytes, err := json.Marshal(msg)
-// 		if err != nil {
-// 			logit(err.Error())
-// 			return
-// 		}
-
-// 		viewer.Socket.WriteMessage(messageType, bytes) //write the message (and return any error)
-// 	} else {
-// 		logit("viewer socket is disco'd")
-// 	}
-
-// }
 
 // Tidy Remove masses not attached to a spring
 func (device *Device) Tidy(game *game.Game) {
@@ -635,6 +643,23 @@ func (device *Device) Tidy(game *game.Game) {
 // Returns a compound message to be broadcast to all devices viewing the game (engine startup sounds)
 func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *errorplus.Event {
 
+	if device == nil {
+		return nil
+	}
+	if device.ViewingPlayer == nil {
+		return nil
+	}
+	if device.ViewingPlayer.Game == nil {
+		return nil
+	}
+
+	if device == nil {
+		return errorplus.New(nil, errorplus.Warn, "structuredmessage (probably a keystroke) from disconnected device "+ibm.Cmd)
+	}
+	if device.ViewingPlayer == nil {
+		return errorplus.New(nil,
+			errorplus.Warn, "device has no viewing player: "+ibm.Cmd)
+	}
 	game := device.ViewingPlayer.Game
 
 	dx, dy := float64(0), float64(0) //used for sliding skins
@@ -656,8 +681,6 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 		}
 
 	case "mw": //mousewheel
-
-		//viewer.Camera.Position.y += msg.Payload[0] * -0.01 //up and down
 
 		device.Camera.Position.AddIn(device.Grid.Normal().Multiply(ibm.Payload[0] * -0.005))
 		device.zOff += ibm.Payload[0] * -0.005
@@ -755,23 +778,23 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 				device.SendCursor()
 			}
 
-			if device.mode == startMove {
-
+			switch device.mode {
+			case startMove:
 				device.setMode(moving)
-
-			} else if device.mode == moving {
+			case moving:
 				device.setMode(editing)
-			} else if device.mode == grabbingMesh {
+			case grabbingMesh:
+
 				device.meshGrab = device.spacePos.Clone()
 				device.setMode(offsettingMesh)
-			} else if device.mode == offsettingMesh {
+			case offsettingMesh:
 				delta := device.spacePos.Sub(device.meshGrab)
 				//delta.x *= -1 //UGLY - but the scenes x axis is inverted
 				device.currentThing.MeshOffset.AddIn(delta)
 				device.sendThings([]*thing.Thing{device.currentThing})
 				device.setMode(editing)
 
-			} else if device.mode == adding {
+			case adding:
 				//we will make the spring between the highlit mass and a new mass
 				//if there is no highlit mass, then we add one
 				//on mouseup - we will collapse the new mass into any we are on top op
@@ -780,7 +803,7 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 
 				device.setMode(stretching)
 
-			} else if device.mode == stretching {
+			case stretching:
 
 				if device.highlit.mass != nil {
 					log.Logit("substituting mass")
@@ -798,7 +821,8 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 				}
 
 				device.makeNextSpring(game.Masses)
-
+			default:
+				return errorplus.New(nil, errorplus.Error, "Unknown mode on mouse down: "+string(device.mode))
 			}
 
 		}
@@ -1048,20 +1072,20 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 						device.SendVectors(game)
 					}
 
-					device.Notify("Wing root defined", "info")
+					device.Notify("Wing root defined", "green")
 				} else if k == "x" {
 					if selectedMass.Axle == device.highlit.mass {
 						selectedMass.Axle = nil //remove the axle
-						device.Notify("Axle removed", "info")
+						device.Notify("Axle removed", "green")
 					} else {
 						selectedMass.Axle = device.highlit.mass
-						device.Notify("Axis/Axle defined", "info")
+						device.Notify("Axis/Axle defined", "green")
 					}
 				}
 				device.sendMasses([]*mass.Mass{selectedMass}, true)
 
 			} else {
-				device.Notify("Select one mass, and higlight another when setting axes", "error")
+				device.Notify("Select one mass, and higlight another when setting axes", "red")
 			}
 		} else if kl == "l" { //flip the lift direction of the highlit mass (wing)
 
@@ -1202,6 +1226,66 @@ func redact(s string) string {
 	return string(r)
 }
 
+func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nobody *player.Player, ws *websocket.Conn) (*Device, *errorplus.Event) {
+
+	if ibm.MsgType != msg.ConnectDevice {
+		return nil, errorplus.New(nil, errorplus.Error, fmt.Sprintf("First message must be connectdevice was %T %v", ibm.MsgType, ibm.MsgType)) //connects an existing or new device (viewer/controller)
+	}
+
+	deviceId := uint32(0)
+	vTok := ""
+	ibm.Read(&deviceId, &vTok)
+
+	if deviceId == 0 {
+		// a new unknown device - create a new device,
+		return makeNewDevice(globalDevices, ws, nobody)
+
+	} else {
+		//we're reconnecting an existing device
+		mutex.Devices.RLock()
+		d, present := globalDevices[uint32(deviceId)]
+		mutex.Devices.RUnlock()
+
+		time.Sleep(time.Millisecond * 500) //don't provide a response instanltly - to make brute forcing harder
+		if !present {
+			//device.WebSocket.Close()
+			remade, _ := makeNewDevice(globalDevices, ws, nobody)
+
+			return remade, errorplus.New(nil, errorplus.Warn, fmt.Sprintf("No such device (%v) to reconnect.. remade as %v", deviceId, remade.Id))
+		}
+		if d.token != vTok {
+			d.WebSocket = ws
+			d.Notify("Device token mismatch on reconnect", "red")
+			d.ReleaseWebSocket()
+			return nil, errorplus.New(nil, errorplus.Warn, fmt.Sprintf("Device token does not match got %v, want %v", redact(vTok), redact(d.token)))
+		}
+		//it's a valid token and known viewer
+		d.WebSocket = ws
+		d.Notify("Reconnected OK", "green")
+		return d, nil
+	}
+}
+
+func makeNewDevice(globalDevices map[uint32]*Device, ws *websocket.Conn, nobody *player.Player) (*Device, *errorplus.Event) {
+
+	ndid := next.Id("device")
+	_, present := globalDevices[ndid]
+	if present {
+		return nil, errorplus.New(nil, errorplus.Error, fmt.Sprintf("Generated next device ID %v already present", ndid))
+	}
+
+	newDevice := New(globalDevices, ndid, "Name me!", nobody, nobody, nobody, nobody, ws)
+	err := newDevice.Persist()
+	if err != nil {
+		return newDevice, err
+	}
+
+	idMsg := msg.NewMsg(msg.DeviceId, newDevice.Id, newDevice.token)
+	newDevice.Send(idMsg) //send the device id and token to the viewer - they are connected - sign in/up/or watch is next
+	newDevice.Notify("Connected as new device", "green")
+	return newDevice, nil
+}
+
 func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.Game, globalPlayers map[uint32]*player.Player, globalDevices map[uint32]*Device) (*errorplus.Event, *Device) {
 
 	var myGame *game.Game = nil
@@ -1209,64 +1293,65 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 		myGame = device.ViewingPlayer.Game
 	}
 
-	if device.ViewingPlayer == nil &&
-		ibm.MsgType != msg.CreatePlayer &&
-		ibm.MsgType != msg.SignIn {
-		return errorplus.New(nil, errorplus.Warn, "A viewer must create a player or sign in first"), device
+	if device.Id == 0 && ibm.MsgType != msg.ConnectDevice {
+		return errorplus.New(nil, errorplus.Warn, fmt.Sprintf("Device must connect first, anonymous/nobody device tried to send %T %v", ibm.MsgType, ibm.MsgType)), device
+	}
+
+	if device.ViewingPlayer == nil && !ibm.IsOneOf(msg.CreatePlayer, msg.SignIn, msg.ConnectDevice) {
+		return errorplus.New(nil, errorplus.Warn, "A viewer must connectcreate a player or sign in first"), device
 
 	}
 
 	switch ibm.MsgType {
 
-	case msg.ConnectDevice: //connects an existing or new device (viewer/controller)
-		deviceId := int32(0)
-		vTok := ""
-		ibm.Read(&deviceId, vTok)
-
-		if deviceId == -1 {
-			// a new unknown device - create a new viewer,
-			v := New(globalDevices, int32(next.Id("viewer")), nil, device.WebSocket)
-			idMsg := msg.NewMsg(msg.DeviceId, v.Id, v.token)
-			v.Send(idMsg) //send the id and token to the viewer - they are connected - sign in/up/or watch is next
-
-		} else {
-			//we're reconnecting an existing viewer
-			mutex.Devices.RLock()
-			d, present := globalDevices[uint32(deviceId)]
-			mutex.Devices.RUnlock()
-
-			time.Sleep(1000) //don't provide a response instanltly - to make brute forcing harder
-			if !present {
-				device.WebSocket.Close()
-				return errorplus.New(nil, errorplus.Warn, fmt.Sprintf("No such device (%v) to reconnect.", deviceId)), device
-			}
-			if d.token != vTok {
-				device.WebSocket.Close()
-				return errorplus.New(nil, errorplus.Warn, fmt.Sprintf("Device token does not match got %v, want %v", redact(vTok), redact(d.token))), device
-			}
-			//it's a valid token and known viewer
-			device = d //important !
-		}
+	case msg.ConnectDevice:
+		return errorplus.New(nil, errorplus.Critical, "connectdevice shoul dbe processed elsewhere"), device
 
 	case msg.CreatePlayer:
-		player := player.New(globalPlayers, next.Id("player"), "", nil)
-		response := msg.NewMsg(msg.PlayerId, player.Id, player.Token)
+
+		playerName, email, password := "", "", ""
+		ibm.Read(&playerName, &email, &password)
+		salt := player.Salt()               //generate a new salt
+		hash := player.Hash(password, salt) //hash the password with the (additonal) salt
+		token := player.Salt()              //generate a new token
+
+		npid := next.Id("player")
+		_, present := globalPlayers[npid]
+		if present {
+			return errorplus.New(nil, errorplus.Error, "Generated player ID already present"), device
+		}
+		newPlayer := player.New(globalPlayers, npid, playerName, email, hash, salt, token, 0, 0, 0, nil)
+		err := newPlayer.Persist()
+		if err != nil {
+			return err, device
+		}
+
+		//adopt the device
+		device.owner = newPlayer
+		device.ViewingPlayer = newPlayer
+		device.primaryControls = newPlayer
+		device.secondaryControls = newPlayer
+		device.Persist()
+
+		response := msg.NewMsg(msg.PlayerId, newPlayer.Id, newPlayer.Token)
 
 		response.Write(msg.ReplaceDiv, "createAccount")
 
-		welcome(player, response)
-		deviceList(player, response, globalDevices)
-		observers(player, response, globalDevices)
+		welcome(newPlayer, response)
+		deviceList(newPlayer, response, globalDevices)
+		observers(newPlayer, response, globalDevices)
 		gamesInProgress(response, globalPlayers)
 
 		device.Send(response)
+		device.Notify("Player "+playerName+" created OK", "green")
 
-	case msg.SignIn: //signs a player in (so that they can manage devices)
+	case msg.SignIn: //signs a Player in (so that they can manage devices)
 	case msg.CreateGame: //creates a game
 
 		playerId := uint32(0)
 		playerName := ""
-		ibm.Read(&playerId, &playerName) //who will 'own' this game
+		gameName := ""
+		ibm.Read(&playerId, &playerName, &gameName) //who will 'own' this game
 
 		player, present := globalPlayers[playerId]
 		if !present {
@@ -1277,7 +1362,7 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 		}
 
 		//will make a new game with a new ID and add the player to it
-		newGame := game.New(globalGames)
+		newGame := game.New(globalGames, next.Id("game"), gameName)
 
 		runwayPos := vec.NewVec3(0, 0, 0)
 		runwayVec := vec.NewVec3(1000, 0, 1000)
@@ -1337,7 +1422,7 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 
 		//put me (and my connected socket, camera and grid)into the game i just loaded
 		//gm.Players = append(gm.Players, player)
-
+		device.Notify("loaded "+filename, "green")
 		device.startIn(gm)
 		return errorplus.New(nil, errorplus.Info, "Loaded game"), device
 
@@ -1345,7 +1430,7 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 		filename := ""
 		ibm.Read(&filename)
 		device.ViewingPlayer.Game.Save(filename, device.selectedMasses)
-		device.Notify("Saved OK", "info")
+		device.Notify("Saved OK", "green")
 		return errorplus.New(nil, errorplus.Info, "Saved game"), device
 
 	case msg.ControlPositions:
@@ -1482,8 +1567,8 @@ func observers(player *player.Player, response *msg.Msg, globalDevices map[uint3
 	response.Write("<table>")
 	tableHead(response, "ID", "Name", "Device", "Role", "Connected", "Remove")
 	for _, d := range globalDevices {
-		if d.ViewingPlayer != nil && d.ViewingPlayer == player && d.Owner != player {
-			tableRow(response, fmt.Sprintf("%d", d.Owner.Id), d.Owner.Name, d.Name, Role(player, d), d.Status(), d.RevokeButton())
+		if d.ViewingPlayer != nil && d.ViewingPlayer == player && d.owner != player {
+			tableRow(response, fmt.Sprintf("%d", d.owner.Id), d.owner.Name, d.Name, Role(player, d), d.Status(), d.RevokeButton())
 		}
 	}
 	response.Write("</table>")
@@ -1501,7 +1586,7 @@ func deviceList(player *player.Player, response *msg.Msg, globalDevices map[uint
 	tableHead(response, "ID", "Name", "PoV", "Connected", "Action")
 
 	for _, d := range globalDevices {
-		if d.ViewingPlayer != nil && d.ViewingPlayer == player && d.Owner == player {
+		if d.ViewingPlayer != nil && d.ViewingPlayer == player && d.owner == player {
 			tableRow(response, fmt.Sprintf("%d", d.Id), d.Name, d.pov, d.Status(), d.RevokeButton())
 		}
 	}

@@ -97,6 +97,11 @@ Action replay
 
 Dashcam type functionality - but with a fully '3D' movie 
 Playback mission higlights (or lowlights) from multiple angles on RTB
+dashcam records a continuous loop (1 minute) of all mass positions
+playback will require the game metadata (landSize,things, asset meshes),
+but you can move to any camera/position during blackback and land will be re-rendered for your camera
+Firemesh contents will also need to be encoded per fire growth interval
+Recording absolutes rather than deltas simplifies rewind and file sizes should be tiny anyway (the client actuall only needs the three key masses per thing)
 
 
 
@@ -350,7 +355,7 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
     * Dugan mixing (open mic) ?
 
 * Marketing
-    * Name/Branding/Domain
+    * Name/Branding/Domain (fireflight, wfhero, aboveandbeyond,)
     * Frictionless easy 'drop in' missions
     * Invites/Colab play
 
@@ -417,6 +422,17 @@ by 8th Decemeber - fire dynamics/modeling - slopes wind, basic smoke
     * Mailing engine
     * In-game mailing/(off line) messaging
     * Monetisation - fuel costs money, aircraft cost money - beating/putting out fires earns money
+
+* Ranks and leauges
+    * Total fires extinguished
+    * Fuel burned
+    * Hangar worth (net worth)
+    * XP
+    * RP
+    * Flying hours
+    * Aircraft destroyed
+    * Rescues/lives saved
+
    
 * Virtual currency and 'shop'
     * Bank accounts and transaction, balances, reversals
@@ -596,3 +612,20 @@ Ejecting/parachuting out is an option.
 
 Staying alive for the duration of a game, until the fire is out yeilds a big (XP) bonus (proportional to your contribution/time spent)
 The 'fallen' in a game should be given a gravestone high on the scorched ground - they can continue to observe the game - but they fall silent - possibly you view as an "angel" - maybe you can still have some influence .. direct the wind or something 'ethereal' (the wind always blows away from angels)
+
+
+
+
+
+
+GDC
+
+$100/day expenses
+
+10% of the 'company' - =10k$
+
+I will use not less than 20% of revenue to buy back until paid OR you can keep the shares (or any porion thereof) at that value
+You will be offered the same terms as me on any sale of shares
+Your shares will by diluted equally if/when we take furthe investment
+
+Say - we had $1m investment - in the company valued at 100k your 10k is not wo

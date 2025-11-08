@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-//var nick = player.New(globalPlayers, uint32(999), "nick", 0) //the nick player
-
 func StepWorldsForever() {
 
 	//gravTest()

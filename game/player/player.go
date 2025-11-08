@@ -3,11 +3,14 @@ package player
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"math/rand/v2"
+
+	"github.com/nickax/gofu/errorplus"
 	"github.com/nickax/gofu/fiz/thing"
 	"github.com/nickax/gofu/game"
 	"github.com/nickax/gofu/game/msg"
-	"github.com/nickax/gofu/log"
-	"math/rand/v2"
+	"github.com/nickax/gofu/mutex"
+	"github.com/nickax/gofu/persist"
 )
 
 type Player struct {
@@ -19,7 +22,10 @@ type Player struct {
 	//reduntant - viewers have a ViewingPlayerId
 	//Viewers     []*viewer.Viewer  //cameras watching this player (viewers are entirely 'anonymous')
 	//controllers []*websocket.Conn ///devices controlling this player/vehicle
-	coins   uint32  //in-game currency
+	coins uint32 //in-game currency
+	xp    uint32 //experience points
+	rp    uint32 //reputation points
+
 	heading float64 //heading of the vehicle in degrees
 	email   string
 	hash    string
@@ -32,13 +38,7 @@ func (p *Player) GetVehicle() *thing.Thing {
 	return p.vehicle //which migh nil
 }
 
-func New(globalPlayers map[uint32]*Player, id uint32, name string, email string, hash string, salt string, token string, coins uint32, game *game.Game) *Player {
-
-	existing, present := globalPlayers[id]
-	if present {
-		log.Logit("player with this ID already exists", id, existing.Name)
-		panic("player with this ID already exists")
-	}
+func New(globalPlayers map[uint32]*Player, id uint32, name string, email string, hash string, salt string, token string, coins uint32, xp uint32, rp uint32, game *game.Game) *Player {
 
 	player := &Player{Id: id,
 		Name:    name,
@@ -49,23 +49,40 @@ func New(globalPlayers map[uint32]*Player, id uint32, name string, email string,
 		salt:    salt,
 		hash:    hash, //(password, salt),
 		Token:   token,
+		xp:      xp,
+		rp:      rp,
 	}
 
+	mutex.Players.Lock()
 	globalPlayers[id] = player
+	mutex.Players.Unlock()
 
 	return player
 
 }
 
-func NewFromMsg(games map[uint32]*game.Game, players map[uint32]*Player, m *msg.Msg, things []*thing.Thing) *Player {
+func (p *Player) Persist() *errorplus.Event {
 
+	if p.Id == 0 {
+		return errorplus.New(nil, errorplus.Critical, "cannot persist player with id 0")
+	}
+	pmsg := msg.NewMsg(msg.P_Player, 0)
+	p.WriteTo(pmsg)
+	return persist.Append("repo.bin", pmsg)
+
+}
+
+func NewFromMsg(m *msg.Msg, games map[uint32]*game.Game, players map[uint32]*Player, things []*thing.Thing) (*Player, *errorplus.Event) {
+
+	msgType := m.MsgType
 	playerId := uint32(0)
 	gameId := uint32(0)
 	playerName, email, hash, salt, token := "", "", "", "", ""
-	coins := uint32(0)
-	m.Read(&playerId, &playerName, &gameId, &email, &hash, &salt, &token, &coins)
+	coins, xp, rp := uint32(0), uint32(0), uint32(0)
+	m.Read(&msgType, &playerId, &playerName, &gameId,
+		&email, &hash, &salt, &token, &coins, &xp, &rp)
 
-	player := New(players, playerId, playerName, email, hash, salt, token, coins, games[gameId])
+	player := New(players, playerId, playerName, email, hash, salt, token, coins, xp, rp, games[gameId])
 
 	vehicleIndex := int32(0)
 	m.Read(&vehicleIndex)
@@ -73,30 +90,19 @@ func NewFromMsg(games map[uint32]*game.Game, players map[uint32]*Player, m *msg.
 		player.vehicle = things[vehicleIndex]
 	}
 
-	return player
+	return player, nil
 }
 
 func (player *Player) WriteTo(msg *msg.Msg) {
-	msg.Write(player.Id, //unique player ID (Uint32)
-		player.Name, //curent player name (may change)
-		player.Game.Id,
-		player.vehicle.Index) //thing index of their current vehicle (-1 is none)
+
+	msg.Write(player.Id, player.Name, player.Game.Id,
+		player.email, player.hash, player.salt, player.Token,
+		player.coins, player.xp, player.rp, player.vehicle.Index) //thing index of their current vehicle (-1 is none)
 
 }
 
 func (p *Player) SetVehicle(t *thing.Thing) {
 	p.vehicle = t
-}
-
-func playersToMsg(players map[uint32]*Player) *msg.Msg {
-
-	msg := msg.NewMsg(msg.Players, uint32(len(players)))
-
-	for _, player := range players {
-		player.WriteTo(msg)
-	}
-
-	return msg
 }
 
 func Salt() string {

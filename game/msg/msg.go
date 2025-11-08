@@ -25,7 +25,7 @@ const (
 	Highlit    MsgEnum = 13
 	Camera     MsgEnum = 14
 	Cursor     MsgEnum = 15
-	Message    MsgEnum = 16
+	Notify     MsgEnum = 16
 	Vectors    MsgEnum = 17
 	PlayerIds  MsgEnum = 18
 	CreateGame MsgEnum = 19
@@ -62,6 +62,15 @@ const (
 	Players    MsgEnum = 47 //for serverside persistence/restore of players
 	ReplaceDiv MsgEnum = 48 //replace a div on the client side
 
+	Repository     MsgEnum = 100 //a repository of data (persistence)
+	P_Counters     MsgEnum = 101 //counter values
+	P_Player       MsgEnum = 102
+	P_Device       MsgEnum = 103
+	P_Asset        MsgEnum = 104
+	P_Possesion    MsgEnum = 105
+	P_Transaction  MsgEnum = 106
+	P_DeviceChange MsgEnum = 107
+	P_Game         MsgEnum = 108
 )
 
 // func (m MsgEnum) WriteTo(buff *bytes.Buffer) {
@@ -71,6 +80,15 @@ const (
 type Msg struct {
 	MsgType MsgEnum
 	Buff    *bytes.Buffer
+}
+
+func (m *Msg) IsOneOf(types ...MsgEnum) bool {
+	for _, t := range types {
+		if m.MsgType == t {
+			return true
+		}
+	}
+	return false
 }
 
 // NewMsgFromBytes creates a Msg from a byte slice
@@ -85,12 +103,13 @@ func NewFromBuff(buff *bytes.Buffer, expectedType MsgEnum) *Msg {
 	return &Msg{MsgType: MsgEnum(msgType), Buff: buff}
 }
 
-func readString(buff *bytes.Buffer) string {
+func readString(buff *bytes.Buffer, target *string) {
 	sl := uint16(0)
 	binary.Read(buff, le, &sl)
 	s := make([]byte, sl)
-	binary.Read(buff, le, &s)
-	return string(s)
+	binary.Read(buff, le, s)
+	*target = string(s)
+	//return string(s)
 }
 
 func writeString(buff *bytes.Buffer, s string) {
@@ -182,12 +201,12 @@ func read(buff *bytes.Buffer, into ...any) {
 		}
 
 		switch any(v).(type) {
-		case string:
-			into[i] = readString(buff)
-		case vec.V3:
+		case *string:
+			readString(buff, v.(*string)) //this is a type assertion
+		case *vec.V3:
 			into[i] = readVec3(buff)
 
-		case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32:
+		case *int32, *uint32, *int16, *uint16, *float32, *float64, *byte, *bool, *[]float32, *MsgEnum:
 			error := binary.Read(buff, le, into[i])
 			if error != nil {
 				panic(error)
@@ -224,11 +243,16 @@ func NewMsg(hdr MsgEnum, values ...any) *Msg {
 	return msg
 }
 
+// NewFromBytes - BEWARE sets message type from the first byte, DONT read it again
 func NewFromBytes(b []byte) *Msg {
 	buff := bytes.NewBuffer(b)
 	msgType := byte(0)
 	binary.Read(buff, le, &msgType)
 	return &Msg{MsgType: MsgEnum(msgType), Buff: buff}
+}
+
+func (m *Msg) Remaining() int {
+	return m.Buff.Len()
 }
 
 // func (m *Msg) WriteByte(b byte) error {

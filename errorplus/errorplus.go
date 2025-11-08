@@ -4,6 +4,7 @@ import "time"
 import "sync"
 import "runtime/debug"
 import "github.com/nickax/gofu/vec"
+import "fmt"
 
 var log = make([]*Event, 0)
 var mutex = sync.Mutex{}
@@ -21,12 +22,13 @@ type Event struct {
 	Err      error
 	Severity Severity
 	Msg      string
-	gid      int32   //game id
-	pid      int32   //player id
-	did      int32   //device id
-	vid      int32   //vehicle id - index (in global assets)
+	gid      uint32  //game id
+	pid      uint32  //player id
+	did      uint32  //device id
+	vid      uint32  //vehicle id - index (in global assets)
 	velocity *vec.V3 //velocity at time of error/event
 	time     time.Time
+	Extra    string
 	stack    []byte
 }
 
@@ -35,13 +37,13 @@ func New(err error, severity Severity, msg string) *Event {
 		Err:      err,
 		Severity: severity,
 		Msg:      msg,
-		gid:      -1,
-		pid:      -1,
-		did:      -1,
-		vid:      -1,
-
-		time:  time.Now(),
-		stack: nil,
+		gid:      0,
+		pid:      0,
+		did:      0,
+		vid:      0,
+		Extra:    "",
+		time:     time.Now(),
+		stack:    nil,
 	}
 
 	if err != nil {
@@ -56,14 +58,21 @@ func Log(e *Event) {
 		mutex.Lock()
 		defer mutex.Unlock()
 		log = append(log, e)
+		printOut(e.Msg, e.Err, e.pid, e.did)
 	}
 }
 
-func (e *Event) AddContext(gid int32, pid int32, did int32, vid int32, velocity *vec.V3) {
+func (e *Event) AddContext(gid uint32, pid uint32, did uint32, vid uint32, velocity *vec.V3) {
 	e.gid = gid
 	e.pid = pid
 	e.did = did
 	e.vid = vid
 	e.velocity = velocity
+
+}
+
+func printOut(v ...any) {
+
+	fmt.Println(v...)
 
 }

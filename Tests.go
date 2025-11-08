@@ -66,7 +66,7 @@ func tests() {
 
 	testFloat("Cross product orthogonal", func() float64 { return a.Cross(b).Dot(a) }, 0, "cross product not orthogonal")
 
-	p1 := plane.NewFromNormalAndPoint(globalOrigin, vec.Up)
+	p1 := plane.NewFromNormalAndPoint(vec.NewVec3(0, 0, 0), vec.Up)
 	somePoint := vec.NewVec3(0, 10, 0)
 	testFloat("Plane distance from point (on plane)", func() float64 { return p1.DistanceFrom(somePoint) }, 10, "plane (point on plane) distance wrong")
 

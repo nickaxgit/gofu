@@ -27,14 +27,14 @@ import (
 
 	"io"
 	"math"
-	"math/rand/v2"
 	"os"
 )
 
 //var rnGen *rand.Rand //nd.NewPCG(42, uint64(time.Microsecond)))
 
 type Game struct { //the DATA of a game in progress - it can be entirely replaced at any point by rejoining a game
-	Id uint32
+	Id   uint32
+	Name string
 
 	Masses []*mass.Mass
 	Things []*thing.Thing
@@ -53,21 +53,16 @@ type Game struct { //the DATA of a game in progress - it can be entirely replace
 	kinks      []float64 //land bends
 }
 
-func New(games map[uint32]*Game) *Game {
+func New(games map[uint32]*Game, id uint32, name string) *Game {
 	//create a new game
-	var gameId uint32
-
-	//make a random 4 digit game id
-	for gameId < 1000 {
-		gameId = uint32(rand.Float32() * 9999)
-	}
 
 	landSize := 10000.0
 	landHeight := 600.0
 	kinks := []float64{1.0, 0.8, 1.0, 0.5, 0.25, 0.125, 1.0 / 16, 1.0 / 32, 1.0 / 64, 1.0 / 128, 1.0 / 256, 1.0 / 512, 1.0 / 1024, 1.0 / 2048, 1.0 / 4096, 1.0 / 8192} //, 1.0 / 16384} //, 1.0 / 32768, 1.0 / 65536} //how much to pull down the midpoint at each level of recursion
 
 	game := &Game{
-		Id: gameId,
+		Id:   id,
+		Name: name,
 		//Players:    []*player.Player{},
 		// currentMutex: &sync.Mutex{},
 		// CurrentPlayers: make(map[*player]bool),
@@ -85,7 +80,7 @@ func New(games map[uint32]*Game) *Game {
 
 	if games != nil { //when we merge assets, we don't want to create a new game
 		mutex.Games.Lock()
-		games[gameId] = game
+		games[id] = game
 		mutex.Games.Unlock()
 	}
 	return game
@@ -199,13 +194,13 @@ func Load(games map[uint32]*Game, filename string) *Game {
 		log.Logit(err.Error())
 	}
 
-	m := msg.NewFromBytes(allBytes)
+	m := msg.NewFromBytes(allBytes) //beware sets message type from first byte
 
 	masses := mass.MassesFromMsg(m)
 	things := thing.ThingsFromMsg(m, masses)
 	//players := player.PlayersFromBuff(buff, filename, things)
 
-	state := New(games)
+	state := New(games, 1, filename)
 	state.Masses = masses
 	state.Things = things
 
