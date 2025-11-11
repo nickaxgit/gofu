@@ -19,7 +19,7 @@ func Id(name string) uint32 {
 	defer mtx.Unlock()
 	val, present := counters[name]
 	if !present {
-		val = 1 //start at 1 - 0 is the nothing/nobody/nowehere id
+		val = 1 //start at 1 - 0 is the nothing/nobody/nowhere id (see none.go files)
 	}
 	counters[name] = val + 1
 	return val

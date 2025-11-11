@@ -32,6 +32,8 @@ type Event struct {
 	stack    []byte
 }
 
+type Batch []*Event
+
 func New(err error, severity Severity, msg string) *Event {
 	se := &Event{
 		Err:      err,

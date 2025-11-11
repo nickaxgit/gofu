@@ -188,7 +188,11 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 			m := msg.NewFromBytes(msgBytes)
 
 			if device == nil {
-				device, evt = dev.NewFromConnectDeviceMsg(m, global.Devices, global.Nobody, ws)
+
+				//this is where the socket is bound to the device and the device reference is set for all future requests on this socket
+				//it also send the player their home screen
+				evt, device = dev.ReConnect(m, global.Devices, global.Players, ws)
+
 			} else {
 				device.InMtx.Lock()
 				//beware this (potentially) reassigns the device (from an anonymous -1) device to a kno

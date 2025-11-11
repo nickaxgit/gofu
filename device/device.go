@@ -26,6 +26,7 @@ import (
 	"github.com/nickax/gofu/game/label"
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/game/player"
+	"github.com/nickax/gofu/html"
 
 	"github.com/nickax/gofu/jsonmsg"
 	"github.com/nickax/gofu/log"
@@ -107,6 +108,11 @@ func New(devices map[uint32]*Device, id uint32, name string,
 	gridX := vec.NewVec3(1, 0, 0)
 	gridY := vec.NewVec3(0, 0, 1) //this is a bit confusing but the 2d grid is initialised on the word xz plane
 
+	if owner == nil || viewing == nil || primaryControls == nil || secondaryControls == nil {
+		log.Logit("Device New called with nil player(s): owner", owner, " viewing ", viewing, " primary ", primaryControls, " secondary ", secondaryControls)
+		panic("Device New called with nil player(s) - use player.None")
+	}
+
 	device := &Device{
 		//viewingPlayerId: -1,
 		Id:                id,
@@ -167,9 +173,21 @@ func NewFromMsg(m *msg.Msg, devices map[uint32]*Device, players map[uint32]*play
 }
 
 func (d *Device) WriteTo(m *msg.Msg) {
-	m.Write(d.Id, d.Name, d.token, d.owner.Id, d.ViewingPlayer.Id,
-		d.primaryControls.Id, d.secondaryControls.Id, d.isIndependent,
-		d.pov)
+
+	oid, vpid, pcid, scid := uint32(0), uint32(0), uint32(0), uint32(0)
+	if d.owner != nil {
+		oid = d.owner.Id
+	}
+	if d.ViewingPlayer != nil {
+		vpid = d.ViewingPlayer.Id
+	}
+	if d.primaryControls != nil {
+		pcid = d.primaryControls.Id
+	}
+	if d.secondaryControls != nil {
+		scid = d.secondaryControls.Id
+	}
+	m.Write(d.Id, d.Name, d.token, oid, vpid, pcid, scid, d.isIndependent, d.pov)
 }
 
 type ModeEnum string
@@ -1226,7 +1244,25 @@ func redact(s string) string {
 	return string(r)
 }
 
-func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nobody *player.Player, ws *websocket.Conn) (*Device, *errorplus.Event) {
+func ReConnect(m *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player, ws *websocket.Conn) (*errorplus.Event, *Device) {
+	device, evt := NewFromConnectDeviceMsg(m, globalDevices, player.None, ws)
+
+	if device != None { //this is device.none (it's just were' in the device namespace)
+		if device.owner != nil {
+			response := msg.Empty()
+			device.homeScreen(response, globalDevices, globalPlayers)
+			device.Send(response)
+		} else {
+			//send sign in/up options
+			response := msg.Empty()
+			device.signInUpScreen(response, globalDevices, globalPlayers)
+			device.Send(response)
+		}
+	}
+
+	return evt, device
+}
+func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nobody *player.Player, ws *websocket.Conn) (device *Device, error *errorplus.Event) {
 
 	if ibm.MsgType != msg.ConnectDevice {
 		return nil, errorplus.New(nil, errorplus.Error, fmt.Sprintf("First message must be connectdevice was %T %v", ibm.MsgType, ibm.MsgType)) //connects an existing or new device (viewer/controller)
@@ -1238,7 +1274,12 @@ func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nob
 
 	if deviceId == 0 {
 		// a new unknown device - create a new device,
-		return makeNewDevice(globalDevices, ws, nobody)
+		if vTok != "" {
+			errorplus.Log(errorplus.New(nil, errorplus.Warn, fmt.Sprintf("New device provided non empty token %v - ignoring", redact(vTok))))
+
+		}
+
+		return makeNewDevice(globalDevices, ws)
 
 	} else {
 		//we're reconnecting an existing device
@@ -1249,24 +1290,28 @@ func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nob
 		time.Sleep(time.Millisecond * 500) //don't provide a response instanltly - to make brute forcing harder
 		if !present {
 			//device.WebSocket.Close()
-			remade, _ := makeNewDevice(globalDevices, ws, nobody)
+			remade, _ := makeNewDevice(globalDevices, ws)
 
 			return remade, errorplus.New(nil, errorplus.Warn, fmt.Sprintf("No such device (%v) to reconnect.. remade as %v", deviceId, remade.Id))
 		}
 		if d.token != vTok {
 			d.WebSocket = ws
 			d.Notify("Device token mismatch on reconnect", "red")
+			//Mismatch could be hacking, or loss of database
+			//either way - reset the device ID and token
+			makeNewDevice(globalDevices, ws) //reset the device ready for adoption on signin/up
+
 			d.ReleaseWebSocket()
 			return nil, errorplus.New(nil, errorplus.Warn, fmt.Sprintf("Device token does not match got %v, want %v", redact(vTok), redact(d.token)))
 		}
 		//it's a valid token and known viewer
 		d.WebSocket = ws
-		d.Notify("Reconnected OK", "green")
+
 		return d, nil
 	}
 }
 
-func makeNewDevice(globalDevices map[uint32]*Device, ws *websocket.Conn, nobody *player.Player) (*Device, *errorplus.Event) {
+func makeNewDevice(globalDevices map[uint32]*Device, ws *websocket.Conn) (*Device, *errorplus.Event) {
 
 	ndid := next.Id("device")
 	_, present := globalDevices[ndid]
@@ -1274,6 +1319,7 @@ func makeNewDevice(globalDevices map[uint32]*Device, ws *websocket.Conn, nobody 
 		return nil, errorplus.New(nil, errorplus.Error, fmt.Sprintf("Generated next device ID %v already present", ndid))
 	}
 
+	nobody := player.None
 	newDevice := New(globalDevices, ndid, "Name me!", nobody, nobody, nobody, nobody, ws)
 	err := newDevice.Persist()
 	if err != nil {
@@ -1282,7 +1328,7 @@ func makeNewDevice(globalDevices map[uint32]*Device, ws *websocket.Conn, nobody 
 
 	idMsg := msg.NewMsg(msg.DeviceId, newDevice.Id, newDevice.token)
 	newDevice.Send(idMsg) //send the device id and token to the viewer - they are connected - sign in/up/or watch is next
-	newDevice.Notify("Connected as new device", "green")
+	newDevice.Notify(fmt.Sprintf("Connected as new device: %v", newDevice.Id), "green")
 	return newDevice, nil
 }
 
@@ -1306,6 +1352,14 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 
 	case msg.ConnectDevice:
 		return errorplus.New(nil, errorplus.Critical, "connectdevice shoul dbe processed elsewhere"), device
+
+	case msg.SignOut:
+		device.owner = player.None
+		device.Persist()
+		response := msg.Empty()
+		device.signInUpScreen(response, globalDevices, globalPlayers)
+		device.Send(response)
+		return errorplus.New(nil, errorplus.Info, "Signed out"), device
 
 	case msg.CreatePlayer:
 
@@ -1335,12 +1389,7 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 
 		response := msg.NewMsg(msg.PlayerId, newPlayer.Id, newPlayer.Token)
 
-		response.Write(msg.ReplaceDiv, "createAccount")
-
-		welcome(newPlayer, response)
-		deviceList(newPlayer, response, globalDevices)
-		observers(newPlayer, response, globalDevices)
-		gamesInProgress(response, globalPlayers)
+		device.homeScreen(response, globalDevices, globalPlayers)
 
 		device.Send(response)
 		device.Notify("Player "+playerName+" created OK", "green")
@@ -1486,6 +1535,35 @@ func (device *Device) GetVehicle(players map[uint32]*player.Player) *thing.Thing
 
 }
 
+func (device *Device) signInUpScreen(response *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player) {
+	response.Write(msg.ReplaceDiv, "content")
+	//If they sign out of their account,
+	//They can sign in to another and this device will be adopted
+	//A device can only be owned by one player at a time
+	// (used when several players share a machine, such as a web cafe)
+	response.Write("<h1>Welcome Hero!</h1>")
+	response.Write("<h2>Please sign in if you have an account, or sign up to create one</h2>")
+	response.Write("<h3>You fly a quick training mission, or spectate games without an account</h3>")
+	deviceList(device.owner, response, globalDevices)
+	gamesInProgress(response, globalPlayers)
+
+	html.InputBox(response, "un", "Enter your username")
+	html.InputBox(response, "pw", "Enter your password")
+	html.Button(response, "si", "Sign In", `sm(mt.SignIn,"un","pw","em")`)
+	html.Literal(response, " or ")
+	html.Button(response, "su", "Sign up", `sm(mt.CreatePlayer,"un","em","pw")`)
+
+}
+
+func (device *Device) homeScreen(response *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player) {
+	response.Write(msg.ReplaceDiv, "content")
+	welcome(device.owner, response)
+	deviceList(device.owner, response, globalDevices)
+	observers(device.owner, response, globalDevices)
+	gamesInProgress(response, globalPlayers)
+	html.Button(response, "so", "Sign Out", `sm(mt.SignOut)`)
+}
+
 func (device *Device) startEngine(index int, game *game.Game, response *msg.Msg) *errorplus.Event {
 	if device.ViewingPlayer == nil {
 		return errorplus.New(nil, errorplus.Info, "Engine start whilst not viewing a player")
@@ -1565,10 +1643,10 @@ func observers(player *player.Player, response *msg.Msg, globalDevices map[uint3
 	response.Write("<h2>Observers and Co-pilots:</h2>") //observer, independent observer, flight engineer, co-pilot
 	//todo - devices where viewing player is me, but I am not the owner
 	response.Write("<table>")
-	tableHead(response, "ID", "Name", "Device", "Role", "Connected", "Remove")
+	html.TableHead(response, "ID", "Name", "Device", "Role", "Connected", "Remove")
 	for _, d := range globalDevices {
 		if d.ViewingPlayer != nil && d.ViewingPlayer == player && d.owner != player {
-			tableRow(response, fmt.Sprintf("%d", d.owner.Id), d.owner.Name, d.Name, Role(player, d), d.Status(), d.RevokeButton())
+			html.TableRow(response, fmt.Sprintf("%d", d.owner.Id), d.owner.Name, d.Name, Role(player, d), d.Status(), d.RevokeButton())
 		}
 	}
 	response.Write("</table>")
@@ -1583,11 +1661,11 @@ func deviceList(player *player.Player, response *msg.Msg, globalDevices map[uint
 
 	response.Write("<h2>Your devices:</h2>")
 	response.Write("<table>")
-	tableHead(response, "ID", "Name", "PoV", "Connected", "Action")
+	html.TableHead(response, "ID", "Name", "PoV", "Connected", "Action")
 
 	for _, d := range globalDevices {
 		if d.ViewingPlayer != nil && d.ViewingPlayer == player && d.owner == player {
-			tableRow(response, fmt.Sprintf("%d", d.Id), d.Name, d.pov, d.Status(), d.RevokeButton())
+			html.TableRow(response, fmt.Sprintf("%d", d.Id), d.Name, d.pov, d.Status(), d.RevokeButton())
 		}
 	}
 
@@ -1596,15 +1674,15 @@ func deviceList(player *player.Player, response *msg.Msg, globalDevices map[uint
 func gamesInProgress(response *msg.Msg, globalPlayers map[uint32]*player.Player) {
 	response.Write("<h2>Games in progress:</h2>")
 	response.Write("<table>")
-	tableHead(response, "ID", "Players")
+	html.TableHead(response, "ID", "Players")
 
 	pbg := playersByGame(globalPlayers)
 	for g, players := range pbg {
-		tableRow(response, fmt.Sprintf("%d", g.Id), fmt.Sprintf("%d", len(players)))
+		html.TableRow(response, fmt.Sprintf("%d", g.Id), fmt.Sprintf("%d", len(players)))
 		response.Write("<tr><td colspan='2'>")
-		tableHead(response, "Player ID", "Name")
+		html.TableHead(response, "Player ID", "Name")
 		for _, p := range players {
-			tableRow(response, fmt.Sprintf("%d", p.Id), fmt.Sprintf("%v", p.Name))
+			html.TableRow(response, fmt.Sprintf("%d", p.Id), fmt.Sprintf("%v", p.Name))
 		}
 		response.Write("</td></tr>")
 	}
@@ -1639,21 +1717,4 @@ func Role(target *player.Player, device *Device) string {
 		return "Unknown role"
 	}
 
-}
-func tableHead(response *msg.Msg, cols ...string) {
-
-	response.Write("<tr>")
-	for _, c := range cols {
-		response.Write("<th>", c, "</th>")
-	}
-	response.Write("</tr>")
-
-}
-
-func tableRow(msg *msg.Msg, cols ...string) {
-	msg.Write("<tr>")
-	for _, c := range cols {
-		msg.Write("<td>", c, "</td>")
-	}
-	msg.Write("</tr>")
 }

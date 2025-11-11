@@ -61,6 +61,7 @@ const (
 
 	Players    MsgEnum = 47 //for serverside persistence/restore of players
 	ReplaceDiv MsgEnum = 48 //replace a div on the client side
+	SignOut    MsgEnum = 49 //sets the devices owner to nil
 
 	Repository     MsgEnum = 100 //a repository of data (persistence)
 	P_Counters     MsgEnum = 101 //counter values
@@ -71,6 +72,8 @@ const (
 	P_Transaction  MsgEnum = 106
 	P_DeviceChange MsgEnum = 107
 	P_Game         MsgEnum = 108
+
+	EndOfRecord MsgEnum = 254
 )
 
 // func (m MsgEnum) WriteTo(buff *bytes.Buffer) {

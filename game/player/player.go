@@ -3,6 +3,7 @@ package player
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"math/rand/v2"
 
 	"github.com/nickax/gofu/errorplus"
@@ -53,6 +54,10 @@ func New(globalPlayers map[uint32]*Player, id uint32, name string, email string,
 		rp:      rp,
 	}
 
+	if game == nil {
+		panic("game nil in player constructor (use game.None")
+	}
+
 	mutex.Players.Lock()
 	globalPlayers[id] = player
 	mutex.Players.Unlock()
@@ -66,39 +71,68 @@ func (p *Player) Persist() *errorplus.Event {
 	if p.Id == 0 {
 		return errorplus.New(nil, errorplus.Critical, "cannot persist player with id 0")
 	}
-	pmsg := msg.NewMsg(msg.P_Player, 0)
-	p.WriteTo(pmsg)
+	pmsg := msg.NewMsg(msg.P_Player)
+	p.WriteTo(pmsg) //write the player into the msg
 	return persist.Append("repo.bin", pmsg)
+
+}
+
+func (player *Player) WriteTo(m *msg.Msg) {
+
+	gid := uint32(0)
+	if player.Game != nil {
+		gid = player.Game.Id
+	}
+
+	vind := uint32(0)
+	if player.vehicle != nil {
+		vind = player.vehicle.Index
+	}
+
+	m.Write(player.Id, player.Name, gid,
+		player.email, player.hash, player.salt, player.Token,
+		player.coins, player.xp, player.rp, vind, msg.EndOfRecord) //thing index of their current vehicle (-1 is none)
 
 }
 
 func NewFromMsg(m *msg.Msg, games map[uint32]*game.Game, players map[uint32]*Player, things []*thing.Thing) (*Player, *errorplus.Event) {
 
 	msgType := m.MsgType
-	playerId := uint32(0)
-	gameId := uint32(0)
+	eor := byte(0)
+	playerId, gameId := uint32(0), uint32(0)
+
 	playerName, email, hash, salt, token := "", "", "", "", ""
-	coins, xp, rp := uint32(0), uint32(0), uint32(0)
+	coins, xp, rp, vind := uint32(0), uint32(0), uint32(0), uint32(0)
 	m.Read(&msgType, &playerId, &playerName, &gameId,
-		&email, &hash, &salt, &token, &coins, &xp, &rp)
+		&email, &hash, &salt, &token, &coins, &xp, &rp, &vind, &eor)
 
-	player := New(players, playerId, playerName, email, hash, salt, token, coins, xp, rp, games[gameId])
-
-	vehicleIndex := int32(0)
-	m.Read(&vehicleIndex)
-	if vehicleIndex > -1 {
-		player.vehicle = things[vehicleIndex]
+	if eor != byte(msg.EndOfRecord) {
+		return nil, errorplus.New(nil, errorplus.Error, "Player msg missing EOR")
 	}
 
+	player := New(players, playerId, playerName, email, hash, salt, token, coins, xp, rp, nil)
+
+	var game *game.Game = nil
+	var present bool = false
+	if gameId != 0 {
+		game, present = games[gameId]
+		if !present {
+			return player, errorplus.New(nil, errorplus.Error, fmt.Sprintf("Player %s references missing game id %d", playerName, gameId))
+		}
+
+	}
+	player.Game = game
+
+	//TODO - vehicles are a posession..
+	//they should be allowed in one game at a time, and only once
+
+	// vehicleIndex := int32(0)
+	// m.Read(&vehicleIndex)
+	// if vehicleIndex > 0 {
+	// 	player.vehicle = player.game.things[vehicleIndex]
+	// }
+
 	return player, nil
-}
-
-func (player *Player) WriteTo(msg *msg.Msg) {
-
-	msg.Write(player.Id, player.Name, player.Game.Id,
-		player.email, player.hash, player.salt, player.Token,
-		player.coins, player.xp, player.rp, player.vehicle.Index) //thing index of their current vehicle (-1 is none)
-
 }
 
 func (p *Player) SetVehicle(t *thing.Thing) {
