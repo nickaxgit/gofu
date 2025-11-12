@@ -92,8 +92,31 @@ type Device struct {
 	follow              bool                           //whether the camera follows the players vehicle
 	controls            map[input.ControlInput]float64 //an array fon control channel inputs
 	//each mixer (of the player) adds a contribution to to one mass (e.g. an aileron)
-	mixers []*mixer.Mixer //scales the output of a control (channles 1-7) from (-1 to +1) to a mass/spring - see updateActuators()
+	mixers      []*mixer.Mixer     //scales the output of a control (channles 1-7) from (-1 to +1) to a mass/spring - see updateActuators()
+	warning     []*errorplus.Event //we collect warnings per request/device
+	NumWarnings uint32             //current count of warnings - we reuse the warnings in the slice to avoid allocations
 
+}
+
+func (d *Device) ClearWarnings() {
+	d.NumWarnings = 0
+}
+
+func (d *Device) GetWarnings() []*errorplus.Event {
+	return d.warning[:d.NumWarnings]
+}
+
+func (d *Device) Warn(msg string, severity errorplus.Severity) {
+
+	if d.NumWarnings < 10 {
+		if d.warning[d.NumWarnings] == nil {
+			d.warning[d.NumWarnings] = errorplus.New(nil, severity, msg)
+		} else {
+			d.warning[d.NumWarnings].Msg = msg
+			d.warning[d.NumWarnings].Severity = severity
+		}
+		d.NumWarnings++
+	}
 }
 
 // New id is either a known device id and correct token, OR -1
@@ -143,6 +166,7 @@ func New(devices map[uint32]*Device, id uint32, name string,
 		mtx:            &sync.Mutex{},
 		InMtx:          &sync.Mutex{},
 		mixers:         mixer.StandardMixers,
+		warning:        make([]*errorplus.Event, 10),
 	}
 
 	//create and set control inputs for all 'channels'
@@ -157,10 +181,10 @@ func New(devices map[uint32]*Device, id uint32, name string,
 	return device
 }
 
-func (device *Device) Persist() *errorplus.Event {
+func (dev *Device) Persist() *errorplus.Event {
 
 	deviceMsg := msg.NewMsg(msg.P_Device)
-	device.WriteTo(deviceMsg)
+	dev.WriteTo(deviceMsg)
 	return persist.Append("repo.bin", deviceMsg)
 }
 
@@ -172,22 +196,22 @@ func NewFromMsg(m *msg.Msg, devices map[uint32]*Device, players map[uint32]*play
 
 }
 
-func (d *Device) WriteTo(m *msg.Msg) {
+func (dev *Device) WriteTo(m *msg.Msg) {
 
 	oid, vpid, pcid, scid := uint32(0), uint32(0), uint32(0), uint32(0)
-	if d.owner != nil {
-		oid = d.owner.Id
+	if dev.owner != nil {
+		oid = dev.owner.Id
 	}
-	if d.ViewingPlayer != nil {
-		vpid = d.ViewingPlayer.Id
+	if dev.ViewingPlayer != nil {
+		vpid = dev.ViewingPlayer.Id
 	}
-	if d.primaryControls != nil {
-		pcid = d.primaryControls.Id
+	if dev.primaryControls != nil {
+		pcid = dev.primaryControls.Id
 	}
-	if d.secondaryControls != nil {
-		scid = d.secondaryControls.Id
+	if dev.secondaryControls != nil {
+		scid = dev.secondaryControls.Id
 	}
-	m.Write(d.Id, d.Name, d.token, oid, vpid, pcid, scid, d.isIndependent, d.pov)
+	m.Write(dev.Id, dev.Name, dev.token, oid, vpid, pcid, scid, dev.isIndependent, dev.pov)
 }
 
 type ModeEnum string
@@ -210,109 +234,109 @@ type highlitType struct {
 	thing  *thing.Thing
 }
 
-func (device *Device) GetPlayer() *player.Player {
-	return device.ViewingPlayer
+func (dev *Device) GetPlayer() *player.Player {
+	return dev.ViewingPlayer
 }
 
-func (device *Device) Status() string {
-	if device.WebSocket != nil {
+func (dev *Device) Status() string {
+	if dev.WebSocket != nil {
 		return "Connected"
 	}
 	return "Disconnected"
 }
 
 // Watch a players vehicle from a given pov (defined within that vehicle)
-func (device *Device) Watch(player *player.Player, pov string) {
+func (dev *Device) Watch(player *player.Player, pov string) {
 
 	v := player.GetVehicle()
 	if v != nil {
 		cam := v.FindCam(pov)
 		if cam != nil {
-			device.Camera = cam
-			device.pov = pov //the vehicle.cameras[pov] can be used to find the 'home' position
+			dev.Camera = cam
+			dev.pov = pov //the vehicle.cameras[pov] can be used to find the 'home' position
 		}
 	}
 
 }
 
-func (device *Device) clearContextMenu() {
+func (dev *Device) clearContextMenu() {
 	//clear the context menu (on the client)
 	m := msg.NewMsg(msg.ClearContextMenu)
-	device.Send(m)
+	dev.Send(m)
 
 }
 
 // collects and sends the flames visible to this viewer
-func (device *Device) GetFlames(fire *terrain.TriMesh, message *msg.Msg) {
+func (dev *Device) GetFlames(fire *terrain.TriMesh, message *msg.Msg) {
 
 	tcs := mesh.NewTcs(0, 1, 1, 0)                    //texture atlas coordinates
 	flameMesh := mesh.New(201, "flame", 10000, 30000) //10k faces, 30k verts
 
-	fire.Root.GetFlames(device.landTri, fire, flameMesh, device.Camera, tcs)
+	fire.Root.GetFlames(dev.landTri, fire, flameMesh, dev.Camera, tcs)
 
 	flameMesh.WriteTo(message, 1)
 
 }
 
-func (device *Device) SendCamera() {
+func (dev *Device) SendCamera() {
 
 	msg := msg.NewMsg(msg.Camera)
-	device.Camera.WriteTo(msg)
-	device.Send(msg)
+	dev.Camera.WriteTo(msg)
+	dev.Send(msg)
 
 }
 
-func (device *Device) GetLandRoot() *terrain.Tri {
-	return device.landTri
+func (dev *Device) GetLandRoot() *terrain.Tri {
+	return dev.landTri
 }
 
-func (device *Device) processMouseMove(game *game.Game) { //isRunning bool, masses []*mass.Mass, things []*thing.Thing) {
+func (dev *Device) processMouseMove(game *game.Game) { //isRunning bool, masses []*mass.Mass, things []*thing.Thing) {
 
 	if !game.Running {
 
 		//a point on the far plane (where the mouse cursor is pointing)
 
-		if device.buttons == 2 { //panning camera
+		if dev.buttons == 2 { //panning camera
 
-			delta := (device.cursor.Sub(device.grab)).Mul(2)
+			delta := (dev.cursor.Sub(dev.grab)).Mul(2)
 
 			if delta.LengthSq() != 0 {
 
 				//logit("delta", delta.x, delta.y)
 
-				camRight := device.downCam.Direction.Cross(device.downCam.Up).Normalise()
+				camRight := dev.downCam.Direction.Cross(dev.downCam.Up).Normalise()
 
-				device.Camera.Up = device.downCam.Up.RotateAbout(camRight, delta.Y).Normalise()
-				pitched := device.downCam.Direction.RotateAbout(camRight, delta.Y)
-				yawed := pitched.RotateAbout(device.Camera.Up, -delta.X)
+				dev.Camera.Up = dev.downCam.Up.RotateAbout(camRight, delta.Y).Normalise()
+				pitched := dev.downCam.Direction.RotateAbout(camRight, delta.Y)
+				yawed := pitched.RotateAbout(dev.Camera.Up, -delta.X)
 
-				device.Camera.Direction = yawed
-				device.Camera.Up = vec.NewVec3(0, 1, 0) //auto level the camera
+				dev.Camera.Direction = yawed
+				dev.Camera.Up = vec.NewVec3(0, 1, 0) //auto level the camera
 
-				device.SendCamera()
+				dev.SendCamera()
 			}
 			return
 		}
 
-		switch device.mode {
+		switch dev.mode {
 
 		case editing:
 
-			if device.buttons == 0 {
-				pickRay := ray.New(device.Camera.Position, device.Camera.FarPos)
+			if dev.buttons == 0 {
+				pickRay := ray.New(dev.Camera.Position, dev.Camera.FarPos)
 
-				cm, _ := mass.ClosestMassToRay(game.Masses, device.springCursor, pickRay)
+				cm, _ := mass.ClosestMassToRay(game.Masses, dev.springCursor, pickRay)
 
-				if cm != device.highlit.mass {
-					device.highlit.mass = cm
-					device.sendHighlit() //might be nil
+				if cm != dev.highlit.mass {
+					dev.highlit.mass = cm
+					dev.sendHighlit() //might be nil
 				}
 			}
 
 			//mutates the viewers gridPos and spacePos (by reference)
-			device.Grid.UpdateGridPosAndSpacePos(device.Camera, device.zOff, device.gridPos, device.spacePos)
+			dev.Grid.UpdateGridPosAndSpacePos(dev.Camera, dev.zOff, dev.gridPos, dev.spacePos)
 
-			pickRay := ray.New(device.Camera.Position, device.Camera.FarPos)
+			pickRay := ray.New(dev.Camera.Position, dev.Camera.FarPos)
 
 			closest := math.MaxFloat64
 			for _, thing := range game.Things {
@@ -320,105 +344,105 @@ func (device *Device) processMouseMove(game *game.Game) { //isRunning bool, mass
 				spring, d := spring.ClosestSpringToRay(thing.Springs, pickRay)
 
 				if d < closest {
-					device.highlit.thing = thing
-					device.highlit.spring = spring
+					dev.highlit.thing = thing
+					dev.highlit.spring = spring
 					closest = d
 				}
 			}
 
-			device.sendHighlit()
+			dev.sendHighlit()
 
 		case moving:
-			device.moveSelected(game)
+			dev.moveSelected(game)
 		case stretching:
-			device.springCursor.P = device.spacePos.Clone() //moveSpringCursor()
-			device.sendMasses([]*mass.Mass{device.springCursor}, false)
+			dev.springCursor.P = dev.spacePos.Clone() //moveSpringCursor()
+			dev.sendMasses([]*mass.Mass{dev.springCursor}, false)
 		}
 
-		if device.buttons == 1 && device.mode == editing {
+		if dev.buttons == 1 && dev.mode == editing {
 			//dragging/panning the camera
-			if device.downGridPos != nil {
-				delta := device.gridPos.Sub(device.downGridPos).Multiply(.9)
-				device.Camera.Position = device.downCam.Position.Sub(delta)
-				device.SendCamera()
+			if dev.downGridPos != nil {
+				delta := dev.gridPos.Sub(dev.downGridPos).Multiply(.9)
+				dev.Camera.Position = dev.downCam.Position.Sub(delta)
+				dev.SendCamera()
 			}
 		}
 
-		device.SendCursor()
+		dev.SendCursor()
 	}
 }
 
-func (device *Device) sendBytes(msg []byte) {
+func (dev *Device) sendBytes(msg []byte) {
 
-	if device.WebSocket == nil {
-		log.Logit(device.pov + " viewer socket is disconnected")
+	if dev.WebSocket == nil {
+		log.Logit(dev.pov + " viewer socket is disconnected")
 		return
 	}
 
-	device.mtx.Lock()         //<<---MUTEX
-	defer device.mtx.Unlock() //deferred unlock
+	dev.mtx.Lock()         //<<---MUTEX
+	defer dev.mtx.Unlock() //deferred unlock
 	messageType := websocket.BinaryMessage
 
 	//logit("sent", len(msg), " binary bytes")
-	device.WebSocket.WriteMessage(messageType, msg) //write the message (and return any error)
+	dev.WebSocket.WriteMessage(messageType, msg) //write the message (and return any error)
 }
 
-func (device *Device) ViewChangedSignificantly() bool {
-	if device.lastCam == nil {
+func (dev *Device) ViewChangedSignificantly() bool {
+	if dev.lastCam == nil {
 		return true
 	}
 
-	dist := device.Camera.Position.DistanceFrom(device.lastCam.Position)
-	dir := device.Camera.Direction.Dot(device.lastCam.Direction)
+	dist := dev.Camera.Position.DistanceFrom(dev.lastCam.Position)
+	dir := dev.Camera.Direction.Dot(dev.lastCam.Direction)
 	if dist > 100 || dir < .95 {
-		device.lastCam = device.Camera.Clone() //store this as the new old position
+		dev.lastCam = dev.Camera.Clone() //store this as the new old position
 		return true
 	}
 	return false
 }
 
-func (device *Device) Send(msg ...*msg.Msg) {
+func (dev *Device) Send(msg ...*msg.Msg) {
 	for _, msg := range msg {
-		device.sendBytes(msg.AllBytes())
+		dev.sendBytes(msg.AllBytes())
 	}
 
 }
 
 // []**gameId uint32, masses []*mass.Mass, things []*thing.Thing, selectedMasses map[*mass.Mass]bool, grid *grid.Grid) {
 
-func (device *Device) SendLabels() {
+func (dev *Device) SendLabels() {
 
 	msg := msg.NewMsg(msg.Labels)
-	msg.Write(uint16(len(device.labels)))
-	for _, l := range device.labels {
+	msg.Write(uint16(len(dev.labels)))
+	for _, l := range dev.labels {
 		l.WriteTo(msg)
 	}
-	device.Send(msg)
+	dev.Send(msg)
 }
 
-func (device *Device) sendThings(things []*thing.Thing) {
+func (dev *Device) sendThings(things []*thing.Thing) {
 	msg := thing.ThingsAsMsg(things)
-	device.Send(msg)
+	dev.Send(msg)
 }
 
-func (device *Device) sendMasses(masses []*mass.Mass, withDetail bool) {
+func (dev *Device) sendMasses(masses []*mass.Mass, withDetail bool) {
 
-	msg := mass.MassesAsMsg(masses, withDetail, device.selectedMasses)
+	msg := mass.MassesAsMsg(masses, withDetail, dev.selectedMasses)
 
-	device.Send(msg)
+	dev.Send(msg)
 
 }
 
-func (device *Device) sendClear() {
+func (dev *Device) sendClear() {
 	msg := msg.NewMsg(msg.Clear)
-	device.Send(msg)
+	dev.Send(msg)
 }
 
-func (device *Device) SendLabelSets() { //For options on the sliders
+func (dev *Device) SendLabelSets() { //For options on the sliders
 
-	sendLabelSet(device, 1, actuator.MassActuators)
-	sendLabelSet(device, 2, actuator.SpringActuators)
-	sendLabelSet(device, 3, aero.SectionNames)
+	sendLabelSet(dev, 1, actuator.MassActuators)
+	sendLabelSet(dev, 2, actuator.SpringActuators)
+	sendLabelSet(dev, 3, aero.SectionNames)
 }
 
 func sendLabelSet[E actuator.ActuatorEnum | aero.Section](p *Device, idx byte, valueLabelPairs map[E]string) {
@@ -433,13 +457,13 @@ func sendLabelSet[E actuator.ActuatorEnum | aero.Section](p *Device, idx byte, v
 
 }
 
-func (device *Device) sendControlPin() uint32 {
+func (dev *Device) sendControlPin() uint32 {
 
 	m := msg.NewMsg(msg.ControlToken)
 	token := randomPin()
 
 	m.Write(token)
-	device.Send(m)
+	dev.Send(m)
 
 	return token
 
@@ -450,29 +474,29 @@ func randomPin() uint32 { //TODO - Check for existing token
 }
 
 // SendGameId - causes the client to start the game
-func (device *Device) sendGameId(gameId uint32) {
+func (dev *Device) sendGameId(gameId uint32) {
 	m := msg.NewMsg(msg.GameId)
 	m.Write(gameId)
-	device.Send(m)
+	dev.Send(m)
 }
 
-func (device *Device) sendCentreOfMass(t *thing.Thing) {
+func (dev *Device) sendCentreOfMass(t *thing.Thing) {
 
 	cg, weight := t.CentreOfMass()
-	device.Send(msg.NewMsg(msg.CentreOfMass, t.Index, cg, float32(weight)))
+	dev.Send(msg.NewMsg(msg.CentreOfMass, t.Index, cg, float32(weight)))
 
 }
 
-func (device *Device) moveSelected(game *game.Game) {
-	moveDelta := device.spacePos.Sub(device.moveStart)
+func (dev *Device) moveSelected(game *game.Game) {
+	moveDelta := dev.spacePos.Sub(dev.moveStart)
 
 	//add any movement normal to the grid to the delta
-	gridNormal := device.Grid.Xaxis.Cross(device.Grid.Yaxis).Normalise()
-	camDGN := gridNormal.Multiply(device.Camera.Position.Sub(device.downCam.Position).Dot(gridNormal))
+	gridNormal := dev.Grid.Xaxis.Cross(dev.Grid.Yaxis).Normalise()
+	camDGN := gridNormal.Multiply(dev.Camera.Position.Sub(dev.downCam.Position).Dot(gridNormal))
 	moveDelta.AddIn(camDGN)
 
-	for m := range device.selectedMasses {
-		p, present := device.massStartPos[m]
+	for m := range dev.selectedMasses {
+		p, present := dev.massStartPos[m]
 		if present {
 			m.P = p.Add(moveDelta)
 		} else {
@@ -481,154 +505,154 @@ func (device *Device) moveSelected(game *game.Game) {
 
 	}
 
-	device.regenTransformed(game.Masses)
+	dev.regenTransformed(game.Masses)
 
-	s := slices.Collect(maps.Keys(device.selectedMasses))
+	s := slices.Collect(maps.Keys(dev.selectedMasses))
 	if len(s) > 0 {
-		device.sendMasses(s, false) //just send the new positions (not details)
+		dev.sendMasses(s, false) //just send the new positions (not details)
 	}
 
 }
 
-func (device *Device) SetBoundValue(key string, value float64, masses []*mass.Mass, things []*thing.Thing) {
-	pointer := device.boundValues[key]
+func (dev *Device) SetBoundValue(key string, value float64, masses []*mass.Mass, things []*thing.Thing) {
+	pointer := dev.boundValues[key]
 	*(*float64)(pointer) = value //cast to *float64 and then dereference/set value
 
 	//TODO - optimise/reduce chatter
-	device.Send(mass.VectorsAsMsg(masses)) //send the new vectors
+	dev.Send(mass.VectorsAsMsg(masses)) //send the new vectors
 
-	device.sendMasses(masses, true) //send the potentially) modified mass
-	if device.currentThing == nil {
-		device.currentThing = things[0]
+	dev.sendMasses(masses, true) //send the potentially) modified mass
+	if dev.currentThing == nil {
+		dev.currentThing = things[0]
 	}
-	device.sendCentreOfMass(device.currentThing)
+	dev.sendCentreOfMass(dev.currentThing)
 
 }
 
 // regenTransformed updates any masses that are transforms of other masses (e.g. on the other side of a mirror)
-func (device *Device) regenTransformed(masses []*mass.Mass) {
+func (dev *Device) regenTransformed(masses []*mass.Mass) {
 	//reflected := make(map[*mass.Mass]*mass.Mass)
 	for _, m := range masses {
 
 		//this could be another transform such as a rotation
 		reflect := func(p *vec.V3) *vec.V3 {
-			return p.ReflectInPlane(device.Grid.Origin, device.Grid.Normal())
+			return p.ReflectInPlane(dev.Grid.Origin, dev.Grid.Normal())
 		}
 		m.RegenFromMaster(reflect)
 
 	}
 
-	device.sendMasses(masses, true)
+	dev.sendMasses(masses, true)
 
 }
 
 // used for sending section of the interleaved (often) floating point data that makes up vertex, normal, position and index buffers
 // in a format very close to that need by the GPU (or three.js buffers)
 
-func (device *Device) SendCursor() {
+func (dev *Device) SendCursor() {
 
-	msg := msg.NewMsg(msg.Cursor, device.cursor, device.gridPos, device.spacePos)
+	msg := msg.NewMsg(msg.Cursor, dev.cursor, dev.gridPos, dev.spacePos)
 
-	if device.highlit.mass != nil {
+	if dev.highlit.mass != nil {
 		msg.Write(0) //cursor sphere radius
 	} else {
 		msg.Write(float32(0.05)) //cursor sphere radius
 	}
-	device.Send(msg)
+	dev.Send(msg)
 
 }
 
-func (device *Device) sendHighlit() {
+func (dev *Device) sendHighlit() {
 
 	hm, ht, hs := int32(-1), int32(-1), int32(-1)
-	if device.highlit.mass != nil {
-		hm = device.highlit.mass.Index
+	if dev.highlit.mass != nil {
+		hm = dev.highlit.mass.Index
 	}
-	if device.highlit.thing != nil {
-		ht = int32(device.highlit.thing.Index)
+	if dev.highlit.thing != nil {
+		ht = int32(dev.highlit.thing.Index)
 
 	}
-	if device.highlit.spring != nil {
-		hs = device.highlit.spring.Index
+	if dev.highlit.spring != nil {
+		hs = dev.highlit.spring.Index
 	}
 
 	msg := msg.NewMsg(msg.Highlit, hm, ht, hs)
-	device.Send(msg)
+	dev.Send(msg)
 }
 
-func (device *Device) Notify(text string, severity string) {
+func (dev *Device) Notify(text string, severity string) {
 
 	msg := msg.NewMsg(msg.Notify, text, severity)
-	device.Send(msg)
+	dev.Send(msg)
 	log.Logit(text, severity)
 
 }
 
-func (device *Device) recordMassPositions(masses []*mass.Mass) {
-	device.massStartPos = make(map[*mass.Mass]*vec.V3) //reset each time
-	for _, m := range masses {                         //selectedMasses {
-		device.massStartPos[m] = m.P.Clone()
+func (dev *Device) recordMassPositions(masses []*mass.Mass) {
+	dev.massStartPos = make(map[*mass.Mass]*vec.V3) //reset each time
+	for _, m := range masses {                      //selectedMasses {
+		dev.massStartPos[m] = m.P.Clone()
 	}
 }
 
 // MoveCamera moves the camera (and any selected masses) based on key presses
-func (device *Device) MoveCamera(game *game.Game) {
+func (dev *Device) MoveCamera(game *game.Game) {
 
 	dir := vec.NewVec3(0, 0, 0)
 
 	speed := .5
-	if device.keys["Alt"] {
+	if dev.keys["Alt"] {
 		speed = 10
 	}
 
-	if device.keys["w"] {
+	if dev.keys["w"] {
 		dir.SetZ(speed)
 	}
-	if device.keys["s"] {
+	if dev.keys["s"] {
 		dir.SetZ(-speed)
 	}
-	if device.keys["a"] {
+	if dev.keys["a"] {
 		dir.SetX(-speed)
 	}
-	if device.keys["d"] && !device.keys["Control"] {
+	if dev.keys["d"] && !dev.keys["Control"] {
 		dir.SetX(speed)
 	}
-	if device.keys["ArrowUp"] {
+	if dev.keys["ArrowUp"] {
 		dir.SetY(speed)
 	}
-	if device.keys["ArrowDown"] {
+	if dev.keys["ArrowDown"] {
 		dir.SetY(-speed)
 	}
 
-	camDir := device.Camera.Direction
+	camDir := dev.Camera.Direction
 
-	right := camDir.Cross(device.Camera.Up).Normalise()
+	right := camDir.Cross(dev.Camera.Up).Normalise()
 	up := right.Cross(camDir).Normalise()
 	delta := right.Multiply(dir.X).Add(up.Multiply(dir.Y)).Add(camDir.Multiply(dir.Z))
 
 	if delta.LengthSq() > 0 {
-		device.Camera.Position.AddIn(delta)
-		device.SendCamera()
-		if device.mode == moving {
-			device.moveSelected(game)
+		dev.Camera.Position.AddIn(delta)
+		dev.SendCamera()
+		if dev.mode == moving {
+			dev.moveSelected(game)
 		}
 	}
 
 }
 
-func (device *Device) setMode(mode ModeEnum) {
-	device.mode = mode
+func (dev *Device) setMode(mode ModeEnum) {
+	dev.mode = mode
 	log.Logit("viewers mode set to", mode)
 
 	msg := msg.NewMsg(msg.Mode)
 	msg.Write(mode)
-	device.Send(msg)
+	dev.Send(msg)
 
 }
 
-func (device *Device) checkHighlitMass() bool {
-	if device.highlit.mass == nil {
-		device.Notify("Highlight a mass and press the key", "red")
+func (dev *Device) checkHighlitMass() bool {
+	if dev.highlit.mass == nil {
+		dev.Notify("Highlight a mass and press the key", "red")
 		return false
 	}
 	return true
@@ -636,7 +660,7 @@ func (device *Device) checkHighlitMass() bool {
 }
 
 // Tidy Remove masses not attached to a spring
-func (device *Device) Tidy(game *game.Game) {
+func (dev *Device) Tidy(game *game.Game) {
 
 	thingList := thing.ThingList(game.Things) //allows us to define methods on a slice of things
 	for {
@@ -659,26 +683,25 @@ func (device *Device) Tidy(game *game.Game) {
 
 // Processes keystrokes etc.
 // Returns a compound message to be broadcast to all devices viewing the game (engine startup sounds)
-func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *errorplus.Event {
+func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *errorplus.Event {
 
-	if device == nil {
-		return nil
-	}
-	if device.ViewingPlayer == nil {
-		return nil
-	}
-	if device.ViewingPlayer.Game == nil {
-		return nil
-	}
-
-	if device == nil {
+	if dev == None { //device.None
 		return errorplus.New(nil, errorplus.Warn, "structuredmessage (probably a keystroke) from disconnected device "+ibm.Cmd)
+
 	}
-	if device.ViewingPlayer == nil {
+	if dev.ViewingPlayer == player.None {
 		return errorplus.New(nil,
 			errorplus.Warn, "device has no viewing player: "+ibm.Cmd)
+
 	}
-	game := device.ViewingPlayer.Game
+
+	if dev.ViewingPlayer.Game == game.None {
+		return errorplus.New(nil,
+			errorplus.Warn, "device, viewing player game is none: "+ibm.Cmd)
+
+	}
+
+	gm := dev.ViewingPlayer.Game
 
 	dx, dy := float64(0), float64(0) //used for sliding skins
 	prop := "offset"
@@ -689,7 +712,7 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 	switch ibm.Cmd {
 	case "keyUp":
 		//a key was released
-		device.keys[ibm.Key] = false
+		dev.keys[ibm.Key] = false
 
 		switch ibm.Key {
 		case "ArrowLeft", "ArrowRight":
@@ -700,83 +723,83 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 
 	case "mw": //mousewheel
 
-		device.Camera.Position.AddIn(device.Grid.Normal().Multiply(ibm.Payload[0] * -0.005))
-		device.zOff += ibm.Payload[0] * -0.005
+		dev.Camera.Position.AddIn(dev.Grid.Normal().Multiply(ibm.Payload[0] * -0.005))
+		dev.zOff += ibm.Payload[0] * -0.005
 
-		device.processMouseMove(game) //*isRunning, masses, things)
-		device.SendCamera()
+		dev.processMouseMove(gm) //*isRunning, masses, things)
+		dev.SendCamera()
 
 	case "mm": //mouse move
 
-		device.movedSinceMouseDown = true
+		dev.movedSinceMouseDown = true
 
-		device.buttons = byte(ibm.Payload[0])
-		device.Camera.FarPos = vec.NewVec3(ibm.Payload[1], ibm.Payload[2], ibm.Payload[3])
-		device.cursor.X = ibm.Payload[4]
-		device.cursor.Y = ibm.Payload[5]
+		dev.buttons = byte(ibm.Payload[0])
+		dev.Camera.FarPos = vec.NewVec3(ibm.Payload[1], ibm.Payload[2], ibm.Payload[3])
+		dev.cursor.X = ibm.Payload[4]
+		dev.cursor.Y = ibm.Payload[5]
 
-		device.processMouseMove(game) //*isRunning, masses, things)
+		dev.processMouseMove(gm) //*isRunning, masses, things)
 
 	case "mu":
 
-		if device.buttons == 2 && !device.movedSinceMouseDown {
+		if dev.buttons == 2 && !dev.movedSinceMouseDown {
 
-			device.Send(mass.VectorsAsMsg(game.Masses)) //send the new vectors
+			dev.Send(mass.VectorsAsMsg(gm.Masses)) //send the new vectors
 
-			if device.highlit.mass != nil {
+			if dev.highlit.mass != nil {
 
 				//degreesToRadians := float32(180.0) / float32(math.Pi)
-				device.boundValues = make(map[string]*float64, 0)
+				dev.boundValues = make(map[string]*float64, 0)
 
 				//p.bindValue("radius", &p.highlit.mass.r, 0.01, 1.00, .01, 0)
-				device.bindValue("radius", &device.highlit.mass.R, 0.01, 1.00, .01, 0)
-				device.bindValue("Section", &device.highlit.mass.Section, 0, 1, 1, 3)
+				dev.bindValue("radius", &dev.highlit.mass.R, 0.01, 1.00, .01, 0)
+				dev.bindValue("Section", &dev.highlit.mass.Section, 0, 1, 1, 3)
 				//p.bindValue("aoa", p.highlit.mass, &p.highlit.mass.aoaRads, -20, +20, 1, 0)
-				device.bindValue("wingArea", &device.highlit.mass.WingArea, 0.1, 500.00, 1, 0)
+				dev.bindValue("wingArea", &dev.highlit.mass.WingArea, 0.1, 500.00, 1, 0)
 				//p.bindValue("dihedral", p.highlit.mass, &p.highlit.mass.dihedralDegrees, -10, 10, 1, 0)
 				//p.bindValue("controlSurface", p.highlit.mass, &p.highlit.mass.flightOutput, 0, 10, 1, 1) //use labelt set 1 (outoput flight controls)
 
-				device.bindValue("massActuator", (*float64)(unsafe.Pointer(&device.highlit.mass.ActuatorTag)), 0, float64(len(actuator.MassActuators)), 1, 1) //use label set 1 (mass actuator labels)
+				dev.bindValue("massActuator", (*float64)(unsafe.Pointer(&dev.highlit.mass.ActuatorTag)), 0, float64(len(actuator.MassActuators)), 1, 1) //use label set 1 (mass actuator labels)
 				//p.sendBoundValues() //will pop up a context menu clientside
-				device.setMode(props)
-			} else if device.highlit.spring != nil {
+				dev.setMode(props)
+			} else if dev.highlit.spring != nil {
 				//p.boundValues = make(map[string]boundValue, 0)
-				device.bindValue("springActuator", (*float64)(unsafe.Pointer(&device.highlit.spring.ActuatorTag)), 0, float64(len(actuator.SpringActuators)), 1, 2) //use label set 2 (spring actuator labels)
+				dev.bindValue("springActuator", (*float64)(unsafe.Pointer(&dev.highlit.spring.ActuatorTag)), 0, float64(len(actuator.SpringActuators)), 1, 2) //use label set 2 (spring actuator labels)
 				//p.bindValue("springActuator", &p.highlit.spring.actuatorTag, 0, float64(len(springActuators)), 1, 1) //use label set 1 (actuator labels)
 				//p.sendBoundValues()                                                                      //will pop up a context menu clientside
-				device.setMode(props)
+				dev.setMode(props)
 			}
 		}
 
-		device.buttons = byte(ibm.Payload[0])
+		dev.buttons = byte(ibm.Payload[0])
 
 	case "md":
 
-		device.buttons = byte(ibm.Payload[0])
+		dev.buttons = byte(ibm.Payload[0])
 
-		device.movedSinceMouseDown = false
+		dev.movedSinceMouseDown = false
 
-		device.grab = device.cursor.Clone()
+		dev.grab = dev.cursor.Clone()
 
-		device.downGridPos = device.gridPos.Clone()
+		dev.downGridPos = dev.gridPos.Clone()
 
-		device.downCam = device.Camera.Clone()
+		dev.downCam = dev.Camera.Clone()
 
-		if device.buttons == 1 {
+		if dev.buttons == 1 {
 
-			if device.highlit.mass != nil {
-				device.moveStart = device.highlit.mass.P.Clone()
+			if dev.highlit.mass != nil {
+				dev.moveStart = dev.highlit.mass.P.Clone()
 			} else {
-				device.moveStart = device.spacePos.Clone() //may be snapped
+				dev.moveStart = dev.spacePos.Clone() //may be snapped
 			}
 
-			device.recordMassPositions(game.Masses)
+			dev.recordMassPositions(gm.Masses)
 
-			if device.mode == editing {
+			if dev.mode == editing {
 				//toggle selection of highlit mass
-				phm := device.highlit.mass
+				phm := dev.highlit.mass
 				if phm != nil {
-					psm := device.selectedMasses
+					psm := dev.selectedMasses
 
 					there := psm[phm]
 					if there {
@@ -784,63 +807,63 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 					} else {
 						psm[phm] = true
 					}
-					device.sendMasses([]*mass.Mass{phm}, true)
+					dev.sendMasses([]*mass.Mass{phm}, true)
 				}
 			}
 
-			if device.highlit.mass != nil {
-				m := device.highlit.mass
-				gridPlane := device.Grid.Plane()
-				device.zOff = gridPlane.DistanceFrom(m.P)
+			if dev.highlit.mass != nil {
+				m := dev.highlit.mass
+				gridPlane := dev.Grid.Plane()
+				dev.zOff = gridPlane.DistanceFrom(m.P)
 
-				device.SendCursor()
+				dev.SendCursor()
 			}
 
-			switch device.mode {
+			switch dev.mode {
 			case startMove:
-				device.setMode(moving)
+				dev.setMode(moving)
 			case moving:
-				device.setMode(editing)
+				dev.setMode(editing)
 			case grabbingMesh:
 
-				device.meshGrab = device.spacePos.Clone()
-				device.setMode(offsettingMesh)
+				dev.meshGrab = dev.spacePos.Clone()
+				dev.setMode(offsettingMesh)
 			case offsettingMesh:
-				delta := device.spacePos.Sub(device.meshGrab)
+				delta := dev.spacePos.Sub(dev.meshGrab)
 				//delta.x *= -1 //UGLY - but the scenes x axis is inverted
-				device.currentThing.MeshOffset.AddIn(delta)
-				device.sendThings([]*thing.Thing{device.currentThing})
-				device.setMode(editing)
+				dev.currentThing.MeshOffset.AddIn(delta)
+				dev.sendThings([]*thing.Thing{dev.currentThing})
+				dev.setMode(editing)
 
 			case adding:
 				//we will make the spring between the highlit mass and a new mass
 				//if there is no highlit mass, then we add one
 				//on mouseup - we will collapse the new mass into any we are on top op
 				//first (possibly highlit) mass
-				device.makeNextSpring(game.Masses)
+				dev.makeNextSpring(gm.Masses)
 
-				device.setMode(stretching)
+				dev.setMode(stretching)
 
 			case stretching:
 
-				if device.highlit.mass != nil {
+				if dev.highlit.mass != nil {
 					log.Logit("substituting mass")
-					device.highlit.spring.M2 = device.highlit.mass
+					dev.highlit.spring.M2 = dev.highlit.mass
 
 					//remove it clientside
-					device.springCursor.R = 0
-					device.sendMasses([]*mass.Mass{device.springCursor}, true)
+					dev.springCursor.R = 0
+					dev.sendMasses([]*mass.Mass{dev.springCursor}, true)
 
-					game.Masses = game.Masses[:len(game.Masses)] //delete the last mass
+					gm.Masses = gm.Masses[:len(gm.Masses)] //delete the last mass
 
-					device.sendThings([]*thing.Thing{device.currentThing}) //sends the new spring (once on mousedown)
+					dev.sendThings([]*thing.Thing{dev.currentThing}) //sends the new spring (once on mousedown)
 				} else {
-					device.highlit.mass = device.springCursor
+					dev.highlit.mass = dev.springCursor
 				}
 
-				device.makeNextSpring(game.Masses)
+				dev.makeNextSpring(gm.Masses)
 			default:
-				return errorplus.New(nil, errorplus.Error, "Unknown mode on mouse down: "+string(device.mode))
+				return errorplus.New(nil, errorplus.Error, "Unknown mode on mouse down: "+string(dev.mode))
 			}
 
 		}
@@ -851,7 +874,7 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 
 		k := ibm.Key
 		kl := strings.ToLower(k)
-		device.keys[k] = true
+		dev.keys[k] = true
 
 		log.Logit("key down", k)
 		shift := ibm.Payload[0]
@@ -869,24 +892,24 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 		switch k {
 		case "ArrowLeft":
 			dx = -step
-			if game.Running {
-				device.controls[input.StickX] -= 0.05
+			if gm.Running {
+				dev.controls[input.StickX] -= 0.05
 			}
 		case "ArrowRight":
 			dx = +step
-			if game.Running {
-				device.controls[input.StickX] += 0.05
+			if gm.Running {
+				dev.controls[input.StickX] += 0.05
 			}
 
 		case "ArrowUp":
-			if game.Running {
-				device.controls[input.StickY] += 0.05
+			if gm.Running {
+				dev.controls[input.StickY] += 0.05
 			}
 
 			dy = +step
 		case "ArrowDown":
-			if game.Running {
-				device.controls[input.StickY] -= 0.05
+			if gm.Running {
+				dev.controls[input.StickY] -= 0.05
 			}
 
 			dy = -step //see the end of the if block for where the transform is send if dx or dy are set
@@ -895,109 +918,109 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 
 		switch kl {
 		case "t":
-			if device.currentThing == nil {
-				device.currentThing = game.Things[0]
+			if dev.currentThing == nil {
+				dev.currentThing = gm.Things[0]
 			}
-			device.setMode(adding)
+			dev.setMode(adding)
 		case "y": //Tidy - permanenty snaps reflection halves together and removes unreferenced masses
-			device.SnapMasses(game.Things)
-			device.Tidy(game)
-			device.sendClear()
+			dev.SnapMasses(gm.Things)
+			dev.Tidy(gm)
+			dev.sendClear()
 			log.Logit("tidy")
-			device.sendMasses(game.Masses, true)
-			device.sendThings(game.Things)
+			dev.sendMasses(gm.Masses, true)
+			dev.sendThings(gm.Things)
 		case "-":
-			device.controls[input.Throttle] -= 0.05
+			dev.controls[input.Throttle] -= 0.05
 		case "+":
-			device.controls[input.Throttle] += 0.05
+			dev.controls[input.Throttle] += 0.05
 		case "b":
 			//grow a bush
 
 		case "e":
-			device.setMode(editing)
+			dev.setMode(editing)
 		}
 
-		if device.keys["Control"] && kl == "d" { //deselect all
+		if dev.keys["Control"] && kl == "d" { //deselect all
 			//deselect all masses
-			device.selectedMasses = make(map[*mass.Mass]bool)
-			device.sendMasses(game.Masses, true)
-		} else if device.keys["Control"] && kl == "a" { //select all
+			dev.selectedMasses = make(map[*mass.Mass]bool)
+			dev.sendMasses(gm.Masses, true)
+		} else if dev.keys["Control"] && kl == "a" { //select all
 			//deselect all masses
-			for _, m := range game.Masses {
-				device.selectedMasses[m] = true
+			for _, m := range gm.Masses {
+				dev.selectedMasses[m] = true
 			}
-			device.sendMasses(game.Masses, true)
+			dev.sendMasses(gm.Masses, true)
 		} else if k == "0" { //reset z offset (from the grid)
-			device.zOff = 0
-			device.processMouseMove(game)
-			device.SendCamera()
-			device.controls[input.Throttle] = 0
+			dev.zOff = 0
+			dev.processMouseMove(gm)
+			dev.SendCamera()
+			dev.controls[input.Throttle] = 0
 		} else if k == "1" {
 			//start port engine
-			return device.startEngine(0, game, response)
+			return dev.startEngine(0, gm, response)
 		} else if k == "2" {
 			//start starboard engine
-			return device.startEngine(1, game, response)
+			return dev.startEngine(1, gm, response)
 
 		} else if kl == "o" {
 
-			if device.checkHighlitMass() {
-				device.currentThing.Om = device.highlit.mass
-				device.sendThings([]*thing.Thing{device.currentThing})
+			if dev.checkHighlitMass() {
+				dev.currentThing.Om = dev.highlit.mass
+				dev.sendThings([]*thing.Thing{dev.currentThing})
 			}
 
 		} else if kl == "f" { //set the forward direction mass
-			if device.checkHighlitMass() {
-				device.currentThing.Fm = device.highlit.mass
-				device.sendThings([]*thing.Thing{device.currentThing})
+			if dev.checkHighlitMass() {
+				dev.currentThing.Fm = dev.highlit.mass
+				dev.sendThings([]*thing.Thing{dev.currentThing})
 			} else {
-				device.follow = !device.follow
+				dev.follow = !dev.follow
 			}
 		} else if kl == "r" {
-			if device.keys["Control"] {
+			if dev.keys["Control"] {
 				//rotate thing 90 degrees more
-				device.currentThing.MeshRotation.AddIn(device.currentThing.MeshRotation.Normalise().Multiply(math.Pi / 2))
+				dev.currentThing.MeshRotation.AddIn(dev.currentThing.MeshRotation.Normalise().Multiply(math.Pi / 2))
 			} else {
 				//right mass  (x axis mass) of thing mesh
-				if device.checkHighlitMass() {
-					device.currentThing.Rm = device.highlit.mass
+				if dev.checkHighlitMass() {
+					dev.currentThing.Rm = dev.highlit.mass
 				}
 			}
-			device.sendThings([]*thing.Thing{device.currentThing})
+			dev.sendThings([]*thing.Thing{dev.currentThing})
 
 		} else if kl == "g" { //align the grid
-			if device.keys["Control"] { //CTRL-G - toggle gravity
-				game.ZeroG = !game.ZeroG
+			if dev.keys["Control"] { //CTRL-G - toggle gravity
+				gm.ZeroG = !gm.ZeroG
 			} else {
 
 			}
-		} else if kl == "m" && device.keys["Shift"] {
-			if device.currentThing == nil {
-				device.currentThing = game.Things[0]
+		} else if kl == "m" && dev.keys["Shift"] {
+			if dev.currentThing == nil {
+				dev.currentThing = gm.Things[0]
 			}
-			device.currentThing.MeshVisibility = 1 - device.currentThing.MeshVisibility
-			device.sendThings([]*thing.Thing{device.currentThing})
-		} else if kl == "m" && device.keys["Alt"] {
-			device.setMode(grabbingMesh)
+			dev.currentThing.MeshVisibility = 1 - dev.currentThing.MeshVisibility
+			dev.sendThings([]*thing.Thing{dev.currentThing})
+		} else if kl == "m" && dev.keys["Alt"] {
+			dev.setMode(grabbingMesh)
 
-		} else if kl == "m" && device.keys["Control"] {
+		} else if kl == "m" && dev.keys["Control"] {
 			//mirror the selected masses (in the grid)
 			//more generally - we will add the selected masses to the current transformation
 			//note - some masses will map the the same position (we will want to discard/reinstate them when hooking up springs)
 
-			sm := maps.Keys(device.selectedMasses)
+			sm := maps.Keys(dev.selectedMasses)
 			transformed := make(map[*mass.Mass]*mass.Mass)
 
 			for m := range sm {
-				tp := m.P.ReflectInPlane(device.Grid.Origin, device.Grid.Normal())
+				tp := m.P.ReflectInPlane(dev.Grid.Origin, dev.Grid.Normal())
 				//is there already one at the transformed point?
-				transformed[m] = mass.FindAt(game.Masses, tp, 0.01) //some masses (those on the plane) will map to themselves
+				transformed[m] = mass.FindAt(gm.Masses, tp, 0.01) //some masses (those on the plane) will map to themselves
 				if transformed[m] == nil {
 					//nop, make a new mass
-					transformed[m] = mass.New(game.Masses, int32(len(game.Masses)), tp, m.R, m.Fixed, m.IsCoin, m.Collideable, m) //add 'shadow' mass
+					transformed[m] = mass.New(gm.Masses, int32(len(gm.Masses)), tp, m.R, m.Fixed, m.IsCoin, m.Collideable, m) //add 'shadow' mass
 				}
 			}
-			device.regenTransformed(game.Masses) //(re)mirror all transformed masses (in the grid plane)
+			dev.regenTransformed(gm.Masses) //(re)mirror all transformed masses (in the grid plane)
 
 			for k, m := range transformed {
 				m.WingRoot = transformed[k.WingRoot]
@@ -1011,7 +1034,7 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 			//wire up the springs - once. We will need to remove transformed masses which map onto their own point of origin
 			//note we are adding to the collection we are iterating over - but that it ok (in Go)
 			//mirror the springs
-			for _, s := range device.currentThing.Springs {
+			for _, s := range dev.currentThing.Springs {
 				//todo - if only one end is selected (and transformed) we should still create a spring
 				tm1 := transformed[s.M1]
 				tm2 := transformed[s.M2]
@@ -1020,48 +1043,48 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 					if tm1 == tm2 {
 						log.Logit("spring to self")
 					}
-					device.currentThing.AddSpring(tm1, tm2, s.RestLength, s.Collideable, actuator.NONE)
+					dev.currentThing.AddSpring(tm1, tm2, s.RestLength, s.Collideable, actuator.NONE)
 
 				}
 			}
-			device.sendThings([]*thing.Thing{device.currentThing})
+			dev.sendThings([]*thing.Thing{dev.currentThing})
 
 		} else if k == "Escape" {
-			if device.mode == stretching {
-				device.springCursor.R = 0
-				device.sendMasses([]*mass.Mass{device.springCursor}, true)
+			if dev.mode == stretching {
+				dev.springCursor.R = 0
+				dev.sendMasses([]*mass.Mass{dev.springCursor}, true)
 
-				game.DeleteLastMass()
-				device.currentThing.DeleteLastSpring()
-				device.sendThings([]*thing.Thing{device.currentThing}) //one less spring
-				device.setMode(adding)
-			} else if device.mode == moving { // cancel a move
-				for m := range device.selectedMasses {
-					m.P = device.moveStart
+				gm.DeleteLastMass()
+				dev.currentThing.DeleteLastSpring()
+				dev.sendThings([]*thing.Thing{dev.currentThing}) //one less spring
+				dev.setMode(adding)
+			} else if dev.mode == moving { // cancel a move
+				for m := range dev.selectedMasses {
+					m.P = dev.moveStart
 				}
 
-				s := slices.Collect(maps.Keys(device.selectedMasses))
-				device.sendMasses(s, false)
-				device.setMode(editing)
-			} else if device.mode == props {
-				device.boundValues = make(map[string]*float64, 0)
-				device.clearContextMenu()
-				device.setMode(editing)
+				s := slices.Collect(maps.Keys(dev.selectedMasses))
+				dev.sendMasses(s, false)
+				dev.setMode(editing)
+			} else if dev.mode == props {
+				dev.boundValues = make(map[string]*float64, 0)
+				dev.clearContextMenu()
+				dev.setMode(editing)
 
 			} else {
 
 				//pressing escape to run
-				device.SnapMasses(game.Things)
-				device.sendThings(game.Things)
+				dev.SnapMasses(gm.Things)
+				dev.sendThings(gm.Things)
 
-				device.BindMixers(device.ViewingPlayer.GetVehicle())
+				dev.BindMixers(dev.ViewingPlayer.GetVehicle())
 
-				game.Running = !game.Running
-				log.Logit("running", game.Running)
+				gm.Running = !gm.Running
+				log.Logit("running", gm.Running)
 			}
 
 		} else if kl == "m" {
-			device.setMode(startMove)
+			dev.setMode(startMove)
 			// } else if k == "x" { //define the axle/wing axis
 			// 	selected:=slices.Collect(maps.Keys(viewer.selectedMasses))
 			// 	if len(viewer.selectedMasses) == 1 && viewer.highlit.mass != nil && viewer.highlit.mass != selected[0] {
@@ -1073,88 +1096,91 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 			// 		viewer.sendMessage("Select the wingtip/wheel hub mass, and higlight the axle mass when defining it", "error")
 			// 	}
 		} else if kl == "z" || kl == "x" { //define wing root/plane
-			selectedMass := slices.Collect(maps.Keys(device.selectedMasses))[0]
+			selectedMass := slices.Collect(maps.Keys(dev.selectedMasses))[0]
 
-			if device.highlit.mass != nil && len(device.selectedMasses) == 1 && device.highlit.mass != selectedMass {
-				if k == "z" {
+			if dev.highlit.mass != nil && len(dev.selectedMasses) == 1 && dev.highlit.mass != selectedMass {
+				switch k {
+				case "z":
 					m := selectedMass
-					wr := device.highlit.mass
+					wr := dev.highlit.mass
 					m.WingRoot = wr
 					span := m.P.Sub(m.Axle.P).Length()
 					chord := m.Axle.P.Sub(m.WingRoot.P).Length()
 					m.WingArea = span * chord
 
-					if device.currentThing != nil {
-						device.currentThing.SetVelocity(aero.TestFlight)
-						game.FlyMasses() //*pretend* we are flying at 20ms
-						device.SendVectors(game)
+					if dev.currentThing != nil {
+						dev.currentThing.SetVelocity(aero.TestFlight)
+						gm.FlyMasses() //*pretend* we are flying at 20ms
+						dev.SendVectors(gm)
 					}
 
-					device.Notify("Wing root defined", "green")
-				} else if k == "x" {
-					if selectedMass.Axle == device.highlit.mass {
+					dev.Notify("Wing root defined", "green")
+				case "x":
+					if selectedMass.Axle == dev.highlit.mass {
 						selectedMass.Axle = nil //remove the axle
-						device.Notify("Axle removed", "green")
+						dev.Notify("Axle removed", "green")
 					} else {
-						selectedMass.Axle = device.highlit.mass
-						device.Notify("Axis/Axle defined", "green")
+						selectedMass.Axle = dev.highlit.mass
+						dev.Notify("Axis/Axle defined", "green")
 					}
 				}
-				device.sendMasses([]*mass.Mass{selectedMass}, true)
+				dev.sendMasses([]*mass.Mass{selectedMass}, true)
 
 			} else {
-				device.Notify("Select one mass, and higlight another when setting axes", "red")
+				dev.Notify("Select one mass, and higlight another when setting axes", "red")
 			}
 		} else if kl == "l" { //flip the lift direction of the highlit mass (wing)
 
-			device.SnapMasses(game.Things)
-			if device.highlit.mass != nil {
-				device.highlit.mass.Flip = !device.highlit.mass.Flip
-				device.currentThing.SetVelocity(aero.TestFlight)
-				game.FlyMasses() //*pretend* we are flying at 20ms
-				device.SendLabels()
+			dev.SnapMasses(gm.Things)
+			if dev.highlit.mass != nil {
+				dev.highlit.mass.Flip = !dev.highlit.mass.Flip
+				dev.currentThing.SetVelocity(aero.TestFlight)
+				gm.FlyMasses() //*pretend* we are flying at 20ms
+				dev.SendLabels()
 			}
 		} else if kl == "i" { //turin on AoA labels on wings, and brake force on brake masses, extension on spring actuators
-			device.labels = make([]*label.Label, 0)
+			dev.labels = make([]*label.Label, 0)
 
-			for _, m := range game.Masses {
+			for _, m := range gm.Masses {
 				if m.WingRoot != nil {
-					label.New(device.labels, "AOA", m, m, 1, 30, &m.AoaDegrees)
+					label.New(dev.labels, "AOA", m, m, 1, 30, &m.AoaDegrees)
 				}
 				if m.ActuatorTag == actuator.LeftWheelBrake || m.ActuatorTag == actuator.RightWheelBrake {
-					label.New(device.labels, "BRK", m, m, 5, 20, &m.Brake)
+					label.New(dev.labels, "BRK", m, m, 5, 20, &m.Brake)
 				}
 			}
-			if device.currentThing == nil {
-				device.currentThing = game.Things[0]
+			if dev.currentThing == nil {
+				if gm != game.None {
+					dev.currentThing = gm.Things[0]
+				}
 			}
-			for _, s := range device.currentThing.Springs {
+			for _, s := range dev.currentThing.Springs {
 				if s.ActuatorTag > 0 {
-					label.New(device.labels, actuator.SpringActuators[s.ActuatorTag], s.M1, s.M2, 5, 20, &s.Expansion)
+					label.New(dev.labels, actuator.SpringActuators[s.ActuatorTag], s.M1, s.M2, 5, 20, &s.Expansion)
 				}
 			}
 
-			device.SendLabels()
+			dev.SendLabels()
 
 		} else if kl == "p" {
-			m := device.highlit.mass
+			m := dev.highlit.mass
 			if m != nil {
 				m.Fixed = !m.Fixed
-				device.sendMasses([]*mass.Mass{m}, true)
+				dev.sendMasses([]*mass.Mass{m}, true)
 			}
 
 		} else if k == "Delete" {
-			if device.highlit.mass == nil && device.highlit.spring != nil {
-				device.highlit.thing.DeleteSpring(device.highlit.spring)
-				device.sendThings([]*thing.Thing{device.highlit.thing})
-			} else if device.highlit.mass != nil {
+			if dev.highlit.mass == nil && dev.highlit.spring != nil {
+				dev.highlit.thing.DeleteSpring(dev.highlit.spring)
+				dev.sendThings([]*thing.Thing{dev.highlit.thing})
+			} else if dev.highlit.mass != nil {
 				//if viewer.highlit.mass.NotAttached() {
-				device.highlit.mass.R = 0
-				device.sendMasses([]*mass.Mass{device.highlit.mass}, true)
+				dev.highlit.mass.R = 0
+				dev.sendMasses([]*mass.Mass{dev.highlit.mass}, true)
 
-				device.highlit.mass.Delete(game.Masses) //less than straightforward
-				device.sendMasses(game.Masses, true)
-				device.sendThings(game.Things)
+				dev.highlit.mass.Delete(gm.Masses) //less than straightforward
+				dev.sendMasses(gm.Masses, true)
+				dev.sendThings(gm.Things)
 				//}
 			}
 		}
@@ -1162,27 +1188,27 @@ func (device *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) 
 
 	//sends any transform of the skin (done with cursor keys and/or shift)
 	if dx != 0 || dy != 0 {
-		if device.currentThing != nil {
-			ct := device.currentThing
+		if dev.currentThing != nil {
+			ct := dev.currentThing
 			if prop == "rotation" {
 				//ct.Rotation += dx
 			} else { //if prop=="scale" {
 				ct.MeshScale.X += dx
 				ct.MeshScale.Y += dy
 			}
-			device.sendThings([]*thing.Thing{ct}) //will need to send the offset, rotation and scale of the mesh/skin
+			dev.sendThings([]*thing.Thing{ct}) //will need to send the offset, rotation and scale of the mesh/skin
 		}
 	}
 
 	return nil
 }
 
-func (device *Device) SendVectors(game *game.Game) {
-	device.Send(mass.VectorsAsMsg(game.Masses)) //send the new vectors
+func (dev *Device) SendVectors(game *game.Game) {
+	dev.Send(mass.VectorsAsMsg(game.Masses)) //send the new vectors
 }
 
 // Snapmasses - 	where we have mirrored, or rotationally copied springs - collapse the coincident masses and rewire the springs
-func (device *Device) SnapMasses(things []*thing.Thing) {
+func (dev *Device) SnapMasses(things []*thing.Thing) {
 
 	for _, t := range things {
 		t.Rewire()
@@ -1190,26 +1216,26 @@ func (device *Device) SnapMasses(things []*thing.Thing) {
 
 }
 
-func (device *Device) makeNextSpring(masses []*mass.Mass) {
-	if device.highlit.mass == nil {
-		device.highlit.mass = mass.New(masses, int32(len(masses)), device.spacePos, .05, false, false, true, nil)
+func (dev *Device) makeNextSpring(masses []*mass.Mass) {
+	if dev.highlit.mass == nil {
+		dev.highlit.mass = mass.New(masses, int32(len(masses)), dev.spacePos, .05, false, false, true, nil)
 	}
 
-	m1 := device.highlit.mass
+	m1 := dev.highlit.mass
 	m2 := mass.New(masses, int32(len(masses)), m1.P.Clone().Add(vec.NewVec3(0, .001, 0)), 0.05, false, false, true, nil)
 
-	device.springCursor = m2
+	dev.springCursor = m2
 
-	device.highlit.spring = device.currentThing.AddSpring(m1, m2, 1, 1, actuator.NONE)
+	dev.highlit.spring = dev.currentThing.AddSpring(m1, m2, 1, 1, actuator.NONE)
 	log.Logit("made spring", m1.Index, m2.Index)
 
 	//p.recordMassPositions() //we need to (re) do this as we have added masses
 
 	// p.selectedMasses = make(map[*mass.Mass]bool)
 	// p.selectedMasses[m2] = true
-	device.sendMasses([]*mass.Mass{m1, m2}, false)
-	device.sendThings([]*thing.Thing{device.currentThing})
-	device.sendHighlit()
+	dev.sendMasses([]*mass.Mass{m1, m2}, false)
+	dev.sendThings([]*thing.Thing{dev.currentThing})
+	dev.sendHighlit()
 
 }
 
@@ -1222,17 +1248,17 @@ func (device *Device) makeNextSpring(masses []*mass.Mass) {
 // 	}
 // }
 
-func (device *Device) bindValue(key string, valuePointer *float64, min float64, max float64, step float64, labelSet byte) {
+func (dev *Device) bindValue(key string, valuePointer *float64, min float64, max float64, step float64, labelSet byte) {
 
-	device.boundValues[key] = valuePointer //store the address of the value to be updated
+	dev.boundValues[key] = valuePointer //store the address of the value to be updated
 
 	m := msg.NewMsg(msg.BindValue, key, *valuePointer, min, max, step, labelSet)
-	device.Send(m) //we will receive msg.ValueChange messages back
+	dev.Send(m) //we will receive msg.ValueChange messages back
 
 }
 
-func (device *Device) ReleaseWebSocket() {
-	device.WebSocket = nil
+func (dev *Device) ReleaseWebSocket() {
+	dev.WebSocket = nil
 }
 
 func redact(s string) string {
@@ -1245,10 +1271,15 @@ func redact(s string) string {
 }
 
 func ReConnect(m *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player, ws *websocket.Conn) (*errorplus.Event, *Device) {
+
 	device, evt := NewFromConnectDeviceMsg(m, globalDevices, player.None, ws)
 
+	if device == nil {
+		return evt, nil
+	}
+
 	if device != None { //this is device.none (it's just were' in the device namespace)
-		if device.owner != nil {
+		if device.owner != player.None {
 			response := msg.Empty()
 			device.homeScreen(response, globalDevices, globalPlayers)
 			device.Send(response)
@@ -1274,12 +1305,13 @@ func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nob
 
 	if deviceId == 0 {
 		// a new unknown device - create a new device,
-		if vTok != "" {
-			errorplus.Log(errorplus.New(nil, errorplus.Warn, fmt.Sprintf("New device provided non empty token %v - ignoring", redact(vTok))))
 
+		newDevice, err := makeNewDevice(globalDevices, ws)
+		if vTok != "" {
+			newDevice.Warn(fmt.Sprintf("New device provided non empty token %v - ignoring", redact(vTok)), errorplus.Warn)
 		}
 
-		return makeNewDevice(globalDevices, ws)
+		return newDevice, err
 
 	} else {
 		//we're reconnecting an existing device
@@ -1292,13 +1324,15 @@ func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nob
 			//device.WebSocket.Close()
 			remade, _ := makeNewDevice(globalDevices, ws)
 
-			return remade, errorplus.New(nil, errorplus.Warn, fmt.Sprintf("No such device (%v) to reconnect.. remade as %v", deviceId, remade.Id))
+			remade.Warn(fmt.Sprintf("No such device (%v) to reconnect.. remade as %v", deviceId, remade.Id), errorplus.Warn)
+			return remade, nil
 		}
 		if d.token != vTok {
 			d.WebSocket = ws
-			d.Notify("Device token mismatch on reconnect", "red")
+			d.Notify("Device token mismatch on reconnect - please refresh", "red")
+			d.Warn(fmt.Sprintf("Device token does not match got %v, want %v", redact(vTok), redact(d.token)), errorplus.Warn)
 			//Mismatch could be hacking, or loss of database
-			//either way - reset the device ID and token
+			//either way - reset the device (send it a new ID and token)
 			makeNewDevice(globalDevices, ws) //reset the device ready for adoption on signin/up
 
 			d.ReleaseWebSocket()
@@ -1332,36 +1366,36 @@ func makeNewDevice(globalDevices map[uint32]*Device, ws *websocket.Conn) (*Devic
 	return newDevice, nil
 }
 
-func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.Game, globalPlayers map[uint32]*player.Player, globalDevices map[uint32]*Device) (*errorplus.Event, *Device) {
+func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.Game, globalPlayers map[uint32]*player.Player, globalDevices map[uint32]*Device) (*errorplus.Event, *Device) {
 
 	var myGame *game.Game = nil
-	if device.ViewingPlayer != nil {
-		myGame = device.ViewingPlayer.Game
+	if dev.ViewingPlayer != nil {
+		myGame = dev.ViewingPlayer.Game
 	}
 
-	if device.Id == 0 && ibm.MsgType != msg.ConnectDevice {
-		return errorplus.New(nil, errorplus.Warn, fmt.Sprintf("Device must connect first, anonymous/nobody device tried to send %T %v", ibm.MsgType, ibm.MsgType)), device
+	if dev.Id == 0 && ibm.MsgType != msg.ConnectDevice {
+		return errorplus.New(nil, errorplus.Warn, fmt.Sprintf("Device must connect first, anonymous/nobody device tried to send %T %v", ibm.MsgType, ibm.MsgType)), dev
 	}
 
-	if device.ViewingPlayer == nil && !ibm.IsOneOf(msg.CreatePlayer, msg.SignIn, msg.ConnectDevice) {
-		return errorplus.New(nil, errorplus.Warn, "A viewer must connectcreate a player or sign in first"), device
+	if dev.ViewingPlayer == nil && !ibm.IsOneOf(msg.SignUp, msg.SignIn, msg.ConnectDevice) {
+		return errorplus.New(nil, errorplus.Warn, "A viewer must sign up or sign in first"), dev
 
 	}
 
 	switch ibm.MsgType {
 
 	case msg.ConnectDevice:
-		return errorplus.New(nil, errorplus.Critical, "connectdevice shoul dbe processed elsewhere"), device
+		return errorplus.New(nil, errorplus.Critical, "connect device should be processed elsewhere"), dev
 
 	case msg.SignOut:
-		device.owner = player.None
-		device.Persist()
+		dev.owner = player.None
+		dev.Persist()
 		response := msg.Empty()
-		device.signInUpScreen(response, globalDevices, globalPlayers)
-		device.Send(response)
-		return errorplus.New(nil, errorplus.Info, "Signed out"), device
+		dev.signInUpScreen(response, globalDevices, globalPlayers)
+		dev.Send(response)
+		return errorplus.New(nil, errorplus.Info, "Signed out"), dev
 
-	case msg.CreatePlayer:
+	case msg.SignUp:
 
 		playerName, email, password := "", "", ""
 		ibm.Read(&playerName, &email, &password)
@@ -1372,29 +1406,60 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 		npid := next.Id("player")
 		_, present := globalPlayers[npid]
 		if present {
-			return errorplus.New(nil, errorplus.Error, "Generated player ID already present"), device
+			return errorplus.New(nil, errorplus.Error, "Generated player ID already present (signUp)"), dev
 		}
 		newPlayer := player.New(globalPlayers, npid, playerName, email, hash, salt, token, 0, 0, 0, nil)
 		err := newPlayer.Persist()
 		if err != nil {
-			return err, device
+			return err, dev
 		}
 
 		//adopt the device
-		device.owner = newPlayer
-		device.ViewingPlayer = newPlayer
-		device.primaryControls = newPlayer
-		device.secondaryControls = newPlayer
-		device.Persist()
+		dev.owner = newPlayer
+		dev.ViewingPlayer = newPlayer
+		dev.primaryControls = newPlayer
+		dev.secondaryControls = newPlayer
+		dev.Persist()
 
 		response := msg.NewMsg(msg.PlayerId, newPlayer.Id, newPlayer.Token)
 
-		device.homeScreen(response, globalDevices, globalPlayers)
+		dev.homeScreen(response, globalDevices, globalPlayers)
 
-		device.Send(response)
-		device.Notify("Player "+playerName+" created OK", "green")
+		dev.Send(response)
+		dev.Notify("Player "+playerName+" created OK", "green")
+		dev.Warn("Player "+playerName+" created OK", errorplus.Info)
 
-	case msg.SignIn: //signs a Player in (so that they can manage devices)
+	case msg.SignIn: //signs a Player in (so that they can manage devices) - generally players remain signed in
+		//when signed out a devices owner is set to player.None
+		playerName, password := "", ""
+		ibm.Read(&playerName, &password)
+		playerName = strings.ToLower(playerName)
+
+		for _, p := range globalPlayers { //TODO - index players by name
+			if strings.ToLower(p.Name) == playerName {
+				//found the player - check the password
+
+				if p.CheckPassword(password) {
+					//adopt the device
+					dev.owner = p
+					dev.Persist()
+					response := msg.Empty()
+					dev.homeScreen(response, globalDevices, globalPlayers)
+					dev.Send(response)
+					return nil, dev
+				} else {
+					time.Sleep(time.Millisecond * 1500) //delay to make brute forcing harder
+					dev.Notify("Wrong password", "red")
+					dev.Warn("Password incorrect", errorplus.Warn)
+					return nil, dev
+
+				}
+			}
+		}
+
+		dev.Notify("No such player "+playerName, "red")
+		return errorplus.New(nil, errorplus.Warn, "no such player "+playerName), dev
+
 	case msg.CreateGame: //creates a game
 
 		playerId := uint32(0)
@@ -1404,10 +1469,10 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 
 		player, present := globalPlayers[playerId]
 		if !present {
-			return errorplus.New(nil, errorplus.Warn, "No such player "+fmt.Sprint(playerId)), device
+			return errorplus.New(nil, errorplus.Warn, "No such player "+fmt.Sprint(playerId)), dev
 		}
 		if player.Name != playerName {
-			return errorplus.New(nil, errorplus.Warn, "Player name does not match"), device
+			return errorplus.New(nil, errorplus.Warn, "Player name does not match"), dev
 		}
 
 		//will make a new game with a new ID and add the player to it
@@ -1422,14 +1487,14 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 		//Plough the runway and set the start and end heights
 		ogm := msg.Empty()
 		landPos, _ := newGame.MakeLand(runwayPos, runwayVec.Normalise(), ogm)
-		device.Send(ogm) //send the land
+		dev.Send(ogm) //send the land
 
 		log.Logit("Runway land made between", landPos, "and", landPos.Add(runwayVec))
 
 		player.Game = newGame
-		device.ViewingPlayer = player
+		dev.ViewingPlayer = player
 
-		device.startIn(newGame)
+		dev.startIn(newGame)
 
 		// aircraftScene := game.Load(nil, "wip26")
 		// aircraft := aircraftScene.Things[0] //assume first thing is the aircraft
@@ -1452,9 +1517,9 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 		value := float64(0)
 		ibm.Read(&key, &value)
 		if myGame == nil {
-			return errorplus.New(nil, errorplus.Warn, "Received a valuechange outside of a game"), device
+			return errorplus.New(nil, errorplus.Warn, "Received a valuechange outside of a game"), dev
 		}
-		device.SetBoundValue(key, value, myGame.Masses, myGame.Things)
+		dev.SetBoundValue(key, value, myGame.Masses, myGame.Things)
 
 	case msg.Load:
 
@@ -1471,16 +1536,16 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 
 		//put me (and my connected socket, camera and grid)into the game i just loaded
 		//gm.Players = append(gm.Players, player)
-		device.Notify("loaded "+filename, "green")
-		device.startIn(gm)
-		return errorplus.New(nil, errorplus.Info, "Loaded game"), device
+		dev.Notify("loaded "+filename, "green")
+		dev.startIn(gm)
+		return errorplus.New(nil, errorplus.Info, "Loaded game"), dev
 
 	case msg.Save:
 		filename := ""
 		ibm.Read(&filename)
-		device.ViewingPlayer.Game.Save(filename, device.selectedMasses)
-		device.Notify("Saved OK", "green")
-		return errorplus.New(nil, errorplus.Info, "Saved game"), device
+		dev.ViewingPlayer.Game.Save(filename, dev.selectedMasses)
+		dev.Notify("Saved OK", "green")
+		return errorplus.New(nil, errorplus.Info, "Saved game"), dev
 
 	case msg.ControlPositions:
 
@@ -1490,52 +1555,53 @@ func (device *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*gam
 		for i := 0; i < int(blobs); i++ {
 			ibm.Read(&blobId, &x, &y)
 
-			device.SetControlInputsFromBlob(blobId, float64(x), float64(y))
+			dev.SetControlInputsFromBlob(blobId, float64(x), float64(y))
 
 		}
-		device.updateActuators()
+		dev.updateActuators()
 
 	default:
-		panic("other Inbound binary messages not implemented")
+		return errorplus.New(nil, errorplus.Error, fmt.Sprintf("Inbound binary message not implemented: %v", ibm.MsgType)), dev
+
 	}
 
-	return nil, device
+	return nil, dev
 
 }
 
-func (device *Device) startIn(game *game.Game) {
+func (dev *Device) startIn(game *game.Game) {
 	//state.send(nil, &reply{Cmd: "playerJoined", Payload: player})    //tell everyone about the new player
-	device.SendCamera()                  //send the camera position
-	device.sendMasses(game.Masses, true) //send all the masses
-	device.sendThings(game.Things)
-	device.SendLabelSets()
+	dev.SendCamera()                  //send the camera position
+	dev.sendMasses(game.Masses, true) //send all the masses
+	dev.sendThings(game.Things)
+	dev.SendLabelSets()
 
-	device.sendGameId(game.Id) //game id starts it running
+	dev.sendGameId(game.Id) //game id starts it running
 
 	//	controlTokens[p] = p.sendControlPin() //send a PIN to them so they can take control from another device
 }
 
-func (device *Device) updateActuators() {
+func (dev *Device) updateActuators() {
 	//note that the mixer contains the bound actuators (springs/masses/engines)
 	//  so need no knowledge of the vehicle
-	for _, mix := range device.mixers {
+	for _, mix := range dev.mixers {
 		mix.ZeroOutputs()
 	}
 
-	for _, mixer := range device.mixers {
-		mixer.Mix(device.controls) //add in defelctions
+	for _, mixer := range dev.mixers {
+		mixer.Mix(dev.controls) //add in defelctions
 	}
 }
 
-func (device *Device) GetVehicle(players map[uint32]*player.Player) *thing.Thing {
-	if device.ViewingPlayer == nil {
+func (dev *Device) GetVehicle(players map[uint32]*player.Player) *thing.Thing {
+	if dev.ViewingPlayer == nil {
 		return nil
 	}
-	return device.ViewingPlayer.GetVehicle()
+	return dev.ViewingPlayer.GetVehicle()
 
 }
 
-func (device *Device) signInUpScreen(response *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player) {
+func (dev *Device) signInUpScreen(response *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player) {
 	response.Write(msg.ReplaceDiv, "content")
 	//If they sign out of their account,
 	//They can sign in to another and this device will be adopted
@@ -1544,31 +1610,31 @@ func (device *Device) signInUpScreen(response *msg.Msg, globalDevices map[uint32
 	response.Write("<h1>Welcome Hero!</h1>")
 	response.Write("<h2>Please sign in if you have an account, or sign up to create one</h2>")
 	response.Write("<h3>You fly a quick training mission, or spectate games without an account</h3>")
-	deviceList(device.owner, response, globalDevices)
+	deviceList(dev.owner, response, globalDevices)
 	gamesInProgress(response, globalPlayers)
 
 	html.InputBox(response, "un", "Enter your username")
 	html.InputBox(response, "pw", "Enter your password")
-	html.Button(response, "si", "Sign In", `sm(mt.SignIn,"un","pw","em")`)
+	html.Button(response, "si", "Sign In", `sm(mt.SignIn,'un','pw','em')`)
 	html.Literal(response, " or ")
-	html.Button(response, "su", "Sign up", `sm(mt.CreatePlayer,"un","em","pw")`)
+	html.Button(response, "su", "Sign up", `sm(mt.CreatePlayer,'un','em','pw')`)
 
 }
 
-func (device *Device) homeScreen(response *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player) {
+func (dev *Device) homeScreen(response *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player) {
 	response.Write(msg.ReplaceDiv, "content")
-	welcome(device.owner, response)
-	deviceList(device.owner, response, globalDevices)
-	observers(device.owner, response, globalDevices)
+	welcome(dev.owner, response)
+	deviceList(dev.owner, response, globalDevices)
+	observers(dev.owner, response, globalDevices)
 	gamesInProgress(response, globalPlayers)
 	html.Button(response, "so", "Sign Out", `sm(mt.SignOut)`)
 }
 
-func (device *Device) startEngine(index int, game *game.Game, response *msg.Msg) *errorplus.Event {
-	if device.ViewingPlayer == nil {
+func (dev *Device) startEngine(index int, game *game.Game, response *msg.Msg) *errorplus.Event {
+	if dev.ViewingPlayer == nil {
 		return errorplus.New(nil, errorplus.Info, "Engine start whilst not viewing a player")
 	}
-	vehicle := device.ViewingPlayer.GetVehicle()
+	vehicle := dev.ViewingPlayer.GetVehicle()
 	if vehicle == nil {
 		return errorplus.New(nil, errorplus.Info, "Engine start - Player is not in a vehicle")
 	}
@@ -1582,25 +1648,25 @@ func (device *Device) startEngine(index int, game *game.Game, response *msg.Msg)
 	return nil
 }
 
-func (device *Device) SetControlInputsFromBlob(blobId byte, x float64, y float64) {
+func (dev *Device) SetControlInputsFromBlob(blobId byte, x float64, y float64) {
 
 	switch blobId {
 
 	case 1:
-		device.controls[input.StickX] = float64(x)/128 - 1 //normalise to +/- 1
-		device.controls[input.StickY] = float64(y)/128 - 1
-		log.Logit("right stick", device.controls[input.StickX], device.controls[input.StickY])
+		dev.controls[input.StickX] = float64(x)/128 - 1 //normalise to +/- 1
+		dev.controls[input.StickY] = float64(y)/128 - 1
+		log.Logit("right stick", dev.controls[input.StickX], dev.controls[input.StickY])
 
 	case 2:
-		device.controls[input.Rudder] = float64(x)/128 - 1
-		device.controls[input.Throttle] = float64(y)/128 - 1
-		log.Logit("left stick", device.controls[input.Rudder], device.controls[input.Throttle])
+		dev.controls[input.Rudder] = float64(x)/128 - 1
+		dev.controls[input.Throttle] = float64(y)/128 - 1
+		log.Logit("left stick", dev.controls[input.Rudder], dev.controls[input.Throttle])
 
 	case 3:
-		device.controls[input.WheelBrakeLeft] = float64(y)/128 - 1
+		dev.controls[input.WheelBrakeLeft] = float64(y)/128 - 1
 
 	case 4:
-		device.controls[input.WheelBrakeRight] = float64(y)/128 - 1
+		dev.controls[input.WheelBrakeRight] = float64(y)/128 - 1
 
 	default:
 		log.Logit("warning - unhandled blob id ", blobId)
@@ -1608,10 +1674,10 @@ func (device *Device) SetControlInputsFromBlob(blobId byte, x float64, y float64
 
 }
 
-func (device *Device) BindMixers(vehicle *thing.Thing) {
+func (dev *Device) BindMixers(vehicle *thing.Thing) {
 	// For each mixer, set the mixers, mass and engine (output) the the actuator in the vehicle
 
-	for _, mx := range device.mixers {
+	for _, mx := range dev.mixers {
 
 		mx.Spring = vehicle.FindSpringActuator(mx.Actuator)
 		mx.Engine.Spring = vehicle.FindSpringActuator(mx.Actuator)
@@ -1623,7 +1689,7 @@ func (device *Device) BindMixers(vehicle *thing.Thing) {
 
 }
 
-func (device *Device) RevokeButton() string {
+func (dev *Device) RevokeButton() string {
 	return ("<button>Kick</button>") //will need to set the devices watchingplayer, primary and secondary controls to it's owner
 }
 

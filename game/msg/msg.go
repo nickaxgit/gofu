@@ -52,7 +52,7 @@ const (
 	PositionInstances MsgEnum = 40 //send mesh instance positions (to the client) (trees etc)
 
 	ConnectDevice   MsgEnum = 41 //(re)connects a viewer/controller device, an id of -1 will create a new device
-	CreatePlayer    MsgEnum = 42 //create a new player (sign up)
+	SignUp          MsgEnum = 42 //create a new player (sign up)
 	SignIn          MsgEnum = 46 //Sign in a player (to manage devices/choose games)
 	AddPlayerToGame MsgEnum = 43 //Set a players game
 	WatchPlayer     MsgEnum = 44 //Watch a player (set a viewers player)

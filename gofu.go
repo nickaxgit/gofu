@@ -180,11 +180,11 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 
 		response := msg.Empty()
 
+		device.ClearWarnings() //warnings are logged per device/request (device holds a single set)
+
 		switch messageType {
 		case websocket.BinaryMessage:
-
 			//msgbytes is a slice of bytes
-
 			m := msg.NewFromBytes(msgBytes)
 
 			if device == nil {
@@ -213,27 +213,10 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 			log.Logit("Unknown message type:", messageType)
 		}
 
-		//there has been an error or something to log
-		if evt != nil {
-			var did, pid, gid, vid uint32
-
-			velocity := (*vec.V3)(nil)
-			if device != nil {
-				did = device.Id
-
-				if device.ViewingPlayer != nil {
-					pid = device.ViewingPlayer.Id
-					if device.ViewingPlayer.Game != nil {
-						gid = device.ViewingPlayer.Game.Id
-					}
-					if device.ViewingPlayer.GetVehicle() != nil {
-						vid = device.ViewingPlayer.GetVehicle().AssetId
-						velocity = device.ViewingPlayer.GetVehicle().Om.GetVelocity()
-					}
-				}
-			}
-			evt.AddContext(gid, pid, did, vid, velocity)
-			errorplus.Log(evt)
+		//there has been an error or something to log *most* reqeuest will pass without incident
+		logevt(device, evt) //any critical error
+		for _, w := range device.GetWarnings() {
+			logevt(device, w)
 		}
 
 	}
@@ -243,6 +226,31 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 	}
 
 	//log.Logit("socket error/ended for", player.Name)
+}
+
+func logevt(device *dev.Device, evt *errorplus.Event) {
+	if evt != nil {
+		var did, pid, gid, vid uint32
+
+		velocity := (*vec.V3)(nil)
+		if device != nil {
+			did = device.Id
+
+			if device.ViewingPlayer != nil {
+				pid = device.ViewingPlayer.Id
+				if device.ViewingPlayer.Game != nil {
+					gid = device.ViewingPlayer.Game.Id
+				}
+				if device.ViewingPlayer.GetVehicle() != nil {
+					vid = device.ViewingPlayer.GetVehicle().AssetId
+					velocity = device.ViewingPlayer.GetVehicle().Om.GetVelocity()
+				}
+			}
+		}
+		evt.AddContext(gid, pid, did, vid, velocity)
+		errorplus.Log(evt)
+
+	}
 }
 
 func customHeaders(fs http.Handler) http.HandlerFunc {

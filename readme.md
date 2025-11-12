@@ -473,7 +473,7 @@ A game can exist without players - it doesn't (need to) "belong" to anyone
 
 viewer.msgCreateGame  returnd gid
 
-msgCreatePlayer("name") - returns Pid
+msgSignUp("name") - returns Pid
 
 AddPlayerToGame(gid,pid)
 

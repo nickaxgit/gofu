@@ -66,6 +66,12 @@ func New(globalPlayers map[uint32]*Player, id uint32, name string, email string,
 
 }
 
+// Checkpassword checks a plaintext password against the stored hash
+func (p *Player) CheckPassword(pw string) bool {
+	hash := Hash(pw, p.salt)
+	return hash == p.hash
+}
+
 func (p *Player) Persist() *errorplus.Event {
 
 	if p.Id == 0 {

@@ -433,24 +433,3 @@ func (game *Game) resolveMassOverlaps() {
 		}
 	}
 }
-
-func lerp(x float64, data []float64) float64 {
-
-	if x <= data[0] {
-		return data[1]
-	}
-
-	if x >= data[len(data)-2] {
-		return data[len(data)-1]
-	}
-
-	for i := 0; i < len(data); i += 2 {
-		if data[i] > x {
-			t := (x - data[i-2]) / (data[i] - data[i-2])
-			return data[i-1] + t*(data[i+1]-data[i-1])
-		}
-	}
-
-	panic("lerp failed")
-
-}
