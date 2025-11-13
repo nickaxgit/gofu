@@ -8,8 +8,8 @@ func InputBox(response *msg.Msg, id string, label string) {
 	response.Write(`<input type=text id="` + id + `" placeholder="` + label + `">`)
 }
 
-func Button(response *msg.Msg, id string, label string, script string) {
-	response.Write(`<button id="` + id + `" onclick="` + script + `">` + label + `</button>`)
+func Button(response *msg.Msg, label string, script string) {
+	response.Write(`<button onclick="` + script + `">` + label + `</button>`)
 }
 
 func Literal(response *msg.Msg, content string) { //just to keep calling blocks cleaner

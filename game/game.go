@@ -3,31 +3,19 @@ package game
 //lighteright game state - the objects do not have methods (as they are deserialised from server data)
 import (
 	"bufio"
-	//	"sync"
-
-	//"github.com/gorilla/websocket"
-
-	//	"go.mongodb.org/mongo-driver/bson" //once stuctures are stabilised - can probaly just use bufio direclty
 	"bytes"
 	"encoding/binary"
-
 	"github.com/nickax/gofu/fiz/mass"
 	"github.com/nickax/gofu/fiz/thing"
 	"github.com/nickax/gofu/game/msg"
-	"github.com/nickax/gofu/mutex"
-
-	//game does not know about devices or players (devices and players know about the game)
-	//"github.com/nickax/gofu/game/player"
-	//"github.com/nickax/gofu/viewer"
-
 	"github.com/nickax/gofu/game/sound"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/terrain"
 	"github.com/nickax/gofu/vec"
-
 	"io"
 	"math"
 	"os"
+	"sync"
 )
 
 //var rnGen *rand.Rand //nd.NewPCG(42, uint64(time.Microsecond)))
@@ -53,7 +41,9 @@ type Game struct { //the DATA of a game in progress - it can be entirely replace
 	kinks      []float64 //land bends
 }
 
-func New(games map[uint32]*Game, id uint32, name string) *Game {
+var mutex = sync.RWMutex{}
+
+func New(id uint32, name string) *Game {
 	//create a new game
 
 	landSize := 10000.0
@@ -78,12 +68,31 @@ func New(games map[uint32]*Game, id uint32, name string) *Game {
 
 	game.BuildFireMesh()
 
-	if games != nil { //when we merge assets, we don't want to create a new game
-		mutex.Games.Lock()
-		games[id] = game
-		mutex.Games.Unlock()
-	}
 	return game
+}
+
+var games map[uint32]*Game = map[uint32]*Game{0: None} //all games by id
+
+func Get(id uint32) *Game {
+	mutex.RLock()
+	g, ok := games[id]
+	mutex.RUnlock()
+	if !ok {
+		return None //game.None
+	}
+	return g
+}
+
+func AllRunning() []*Game {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	result := make([]*Game, 0)
+	for _, g := range games {
+		if g.Running {
+			result = append(result, g)
+		}
+	}
+	return result
 }
 
 func (game *Game) GetFire() *terrain.TriMesh {
@@ -179,7 +188,7 @@ func landToBytes(s *Game) []byte {
 // 	viewer.SendGameId(gameId) //game id starts it running
 // }
 
-func Load(games map[uint32]*Game, filename string) *Game {
+func Load(filename string) *Game {
 
 	file, err := os.Open(filename + ".bin")
 	if err != nil {
@@ -200,11 +209,9 @@ func Load(games map[uint32]*Game, filename string) *Game {
 	things := thing.ThingsFromMsg(m, masses)
 	//players := player.PlayersFromBuff(buff, filename, things)
 
-	state := New(games, 1, filename)
+	state := New(1, filename)
 	state.Masses = masses
 	state.Things = things
-
-	//state.landSizeFromByteBuffer(buff)
 
 	//fix up wing areas on loading
 	for _, m := range state.Masses {

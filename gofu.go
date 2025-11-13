@@ -3,10 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	dev "github.com/nickax/gofu/device"
+
+	"github.com/nickax/gofu/device"
 	"github.com/nickax/gofu/errorplus"
 	"github.com/nickax/gofu/game/msg"
-	"github.com/nickax/gofu/global"
+	"github.com/nickax/gofu/game/player"
 	"github.com/nickax/gofu/jsonmsg"
 	"github.com/nickax/gofu/loader"
 	"github.com/nickax/gofu/log"
@@ -32,13 +33,11 @@ var upgrader = websocket.Upgrader{
 func homePage(w http.ResponseWriter, _ *http.Request) {
 	log.Logit("homePage called")
 	fmt.Fprintf(w, "<h1>Game server</h1>")
-	for _, v := range global.Devices {
+	for _, v := range device.AllConnected() {
 		if v.WebSocket != nil {
-			if v.ViewingPlayer == nil {
-				fmt.Fprintf(w, "<p>Device %v (%v) has no player", v.Name, v.Id)
-				continue
+			if v.ViewingPlayer != player.None {
+				fmt.Fprintf(w, "<p>Device %v (%v) watches player %v (%v)", v.Name, v.Id, v.ViewingPlayer.Name, v.ViewingPlayer.Id)
 			}
-			fmt.Fprintf(w, "<p>Device %v (%v) watches player %v (%v)", v.Name, v.Id, v.ViewingPlayer.Name, v.ViewingPlayer.Id)
 		}
 
 	}
@@ -164,8 +163,8 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	//initial anonymous/unknown device
-	var device *dev.Device = nil
+	//initial anonymous/unknown dev
+	var dev *device.Device = nil
 
 	for { // read in a messages forever on this socket (from this player)
 
@@ -180,55 +179,62 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 
 		response := msg.Empty()
 
-		device.ClearWarnings() //warnings are logged per device/request (device holds a single set)
-
 		switch messageType {
 		case websocket.BinaryMessage:
 			//msgbytes is a slice of bytes
 			m := msg.NewFromBytes(msgBytes)
 
-			if device == nil {
+			if dev == nil {
 
 				//this is where the socket is bound to the device and the device reference is set for all future requests on this socket
 				//it also send the player their home screen
-				evt, device = dev.ReConnect(m, global.Devices, global.Players, ws)
+				evt, dev = device.ReConnect(m, ws)
 
 			} else {
-				device.InMtx.Lock()
+
+				dev.InMtx.Lock()
+				dev.ClearWarnings() //warnings are logged per device/request (device holds a single set)
 				//beware this (potentially) reassigns the device (from an anonymous -1) device to a kno
-				evt, device = device.ProcessBinaryMsg(m, global.Games, global.Players, global.Devices)
-				device.InMtx.Unlock()
+				evt, dev = dev.ProcessBinaryMsg(m)
+				dev.InMtx.Unlock()
 			}
 
 		case websocket.TextMessage:
 
-			var jsonMessage jsonmsg.Msg
-			err := json.Unmarshal(msgBytes, &jsonMessage)
-			if err != nil {
-				log.Logit(err.Error())
-			}
+			if dev != nil {
+				dev.ClearWarnings()
 
-			evt = device.ProcessStructuredMsg(&jsonMessage, response)
+				var jsonMessage jsonmsg.Msg
+				err := json.Unmarshal(msgBytes, &jsonMessage)
+				if err != nil {
+					log.Logit(err.Error())
+				}
+
+				evt = dev.ProcessStructuredMsg(&jsonMessage, response)
+
+			}
 		default:
 			log.Logit("Unknown message type:", messageType)
 		}
 
 		//there has been an error or something to log *most* reqeuest will pass without incident
-		logevt(device, evt) //any critical error
-		for _, w := range device.GetWarnings() {
-			logevt(device, w)
+		logevt(dev, evt) //any critical error
+		if dev != nil {
+			for _, w := range dev.GetWarnings() {
+				logevt(dev, w)
+			}
 		}
 
 	}
 
-	if device != nil {
-		device.ReleaseWebSocket()
+	if dev != nil {
+		dev.ReleaseWebSocket()
 	}
 
 	//log.Logit("socket error/ended for", player.Name)
 }
 
-func logevt(device *dev.Device, evt *errorplus.Event) {
+func logevt(device *device.Device, evt *errorplus.Event) {
 	if evt != nil {
 		var did, pid, gid, vid uint32
 

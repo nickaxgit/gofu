@@ -32,8 +32,6 @@ type Event struct {
 	stack    []byte
 }
 
-type Batch []*Event
-
 func New(err error, severity Severity, msg string) *Event {
 	se := &Event{
 		Err:      err,
@@ -58,8 +56,8 @@ func New(err error, severity Severity, msg string) *Event {
 func Log(e *Event) {
 	if e != nil {
 		mutex.Lock()
-		defer mutex.Unlock()
 		log = append(log, e)
+		mutex.Unlock()
 		printOut(e.Msg, e.Err, e.pid, e.did)
 	}
 }

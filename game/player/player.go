@@ -1,16 +1,15 @@
 package player
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
-	"fmt"
-	"math/rand/v2"
+	"strings"
+	"sync"
 
+	"github.com/nickax/gofu/crypto"
 	"github.com/nickax/gofu/errorplus"
 	"github.com/nickax/gofu/fiz/thing"
 	"github.com/nickax/gofu/game"
 	"github.com/nickax/gofu/game/msg"
-	"github.com/nickax/gofu/mutex"
+
 	"github.com/nickax/gofu/persist"
 )
 
@@ -35,11 +34,64 @@ type Player struct {
 	//engineSounds        []uint16 //sound ids for the engine sounds (multi-engined aircraft)
 }
 
+var players = make(map[uint32]*Player, 0)
+var playerMutex = sync.RWMutex{}
+
+var playersByName = make(map[string]*Player, 0)
+var pbnMutex = sync.RWMutex{}
+
+func GetByName(name string) *Player {
+	name = strings.ToLower(name)
+	pbnMutex.RLock()
+	p, present := playersByName[name]
+	pbnMutex.RUnlock()
+	if !present {
+		return None //player.none
+	}
+	return p //happy path
+}
+func Get(id uint32) *Player {
+	playerMutex.RLock()
+	p, present := players[id]
+	playerMutex.RUnlock()
+	if !present {
+		return None //player.none
+	}
+	return p
+}
+
+func Set(p *Player) {
+	playerMutex.Lock()
+	players[p.Id] = p
+	playerMutex.Unlock()
+
+	pbnMutex.Lock()
+	playersByName[strings.ToLower(p.Name)] = p
+	pbnMutex.Unlock()
+}
+
+func PlayersByGame() map[*game.Game][]*Player {
+	result := make(map[*game.Game][]*Player, 0)
+	playerMutex.RLock()
+	defer playerMutex.RUnlock()
+	for _, p := range players {
+		g := p.Game
+
+		plist, present := result[g]
+		if !present {
+			plist = make([]*Player, 0)
+			result[g] = plist
+		}
+		result[g] = append(plist, p)
+	}
+	return result
+}
+
 func (p *Player) GetVehicle() *thing.Thing {
 	return p.vehicle //which migh nil
 }
 
-func New(globalPlayers map[uint32]*Player, id uint32, name string, email string, hash string, salt string, token string, coins uint32, xp uint32, rp uint32, game *game.Game) *Player {
+func New(id uint32, name string, email string, hash string, salt string, token string, coins uint32, xp uint32, rp uint32, game *game.Game) *Player {
 
 	player := &Player{Id: id,
 		Name:    name,
@@ -58,17 +110,13 @@ func New(globalPlayers map[uint32]*Player, id uint32, name string, email string,
 		panic("game nil in player constructor (use game.None")
 	}
 
-	mutex.Players.Lock()
-	globalPlayers[id] = player
-	mutex.Players.Unlock()
-
 	return player
 
 }
 
 // Checkpassword checks a plaintext password against the stored hash
 func (p *Player) CheckPassword(pw string) bool {
-	hash := Hash(pw, p.salt)
+	hash := crypto.Hash(pw, p.salt)
 	return hash == p.hash
 }
 
@@ -101,33 +149,29 @@ func (player *Player) WriteTo(m *msg.Msg) {
 
 }
 
-func NewFromMsg(m *msg.Msg, games map[uint32]*game.Game, players map[uint32]*Player, things []*thing.Thing) (*Player, *errorplus.Event) {
+func NewFromMsg(m *msg.Msg) (*Player, *errorplus.Event) {
 
-	msgType := m.MsgType
+	//msgType := msg.MsgEnum(0)
 	eor := byte(0)
 	playerId, gameId := uint32(0), uint32(0)
 
 	playerName, email, hash, salt, token := "", "", "", "", ""
 	coins, xp, rp, vind := uint32(0), uint32(0), uint32(0), uint32(0)
-	m.Read(&msgType, &playerId, &playerName, &gameId,
-		&email, &hash, &salt, &token, &coins, &xp, &rp, &vind, &eor)
+	//DONT read the msgType (we've done that already!)
+
+	m.Read(&playerId)
+	m.Read(&playerName)
+	m.Read(&gameId)
+	m.Read(&email, &hash, &salt, &token,
+		&coins, &xp, &rp, &vind)
+
+	m.Read(&eor)
 
 	if eor != byte(msg.EndOfRecord) {
 		return nil, errorplus.New(nil, errorplus.Error, "Player msg missing EOR")
 	}
 
-	player := New(players, playerId, playerName, email, hash, salt, token, coins, xp, rp, nil)
-
-	var game *game.Game = nil
-	var present bool = false
-	if gameId != 0 {
-		game, present = games[gameId]
-		if !present {
-			return player, errorplus.New(nil, errorplus.Error, fmt.Sprintf("Player %s references missing game id %d", playerName, gameId))
-		}
-
-	}
-	player.Game = game
+	player := New(playerId, playerName, email, hash, salt, token, coins, xp, rp, game.Get(gameId))
 
 	//TODO - vehicles are a posession..
 	//they should be allowed in one game at a time, and only once
@@ -143,22 +187,4 @@ func NewFromMsg(m *msg.Msg, games map[uint32]*game.Game, players map[uint32]*Pla
 
 func (p *Player) SetVehicle(t *thing.Thing) {
 	p.vehicle = t
-}
-
-func Salt() string {
-	const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	b := make([]byte, 16)
-	for i := range b {
-		b[i] = letterBytes[rand.Int32N(int32(len(letterBytes)))]
-	}
-	return string(b)
-}
-
-func Hash(pw string, salt string) string {
-
-	hasher := sha256.New()
-	hasher.Write([]byte(pw + salt + "$~pepper3n3ss!"))
-	sha := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
-
-	return sha
 }

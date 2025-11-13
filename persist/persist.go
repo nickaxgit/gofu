@@ -15,8 +15,12 @@ func Append(filename string, item *msg.Msg) *errorplus.Event {
 	}
 	defer file.Close()
 
-	file.Write(item.AllBytes())
+	n, werr := file.Write(item.AllBytes())
 
-	next.SaveCounters(filename + ".counters")
-	return nil
+	if werr != nil || n == 0 {
+		return errorplus.New(werr, errorplus.Error, "Failed to append to file: "+filename)
+	}
+
+	return next.SaveCounters(filename + ".counters")
+
 }

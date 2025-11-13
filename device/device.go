@@ -34,8 +34,8 @@ import (
 	"github.com/nickax/gofu/next"
 	"github.com/nickax/gofu/ray"
 
+	"github.com/nickax/gofu/crypto"
 	"github.com/nickax/gofu/fiz/mixer"
-	"github.com/nickax/gofu/mutex"
 	"github.com/nickax/gofu/persist"
 	"github.com/nickax/gofu/terrain"
 	"github.com/nickax/gofu/vec"
@@ -52,7 +52,7 @@ type Device struct {
 	isIndependent     bool           //this device has its own camera (otherwise it sees exaclty what the player sees)
 	primaryControls   *player.Player //this is set to a target player when permission is granted, and set back to the owner if it is revoked, expires, or the controller leaves
 	secondaryControls *player.Player //this is set to a target player when permission is granted, and set back to the owner if it is revoked, expires, or the controller leaves
-	owner             *player.Player
+	Owner             *player.Player
 	pov               string      //point of pilot, copilot, instruments, overhead panel, satellite etc
 	Camera            *cam.Camera //initially a clone of viewPoint(within the vehicle) - Ongoing, additional position direction and up in vehicle space (our head swivel/slew)
 	lastCam           *cam.Camera //where were we positioned/looking when we last sent an update
@@ -98,6 +98,81 @@ type Device struct {
 
 }
 
+var mutex = sync.RWMutex{}
+var devices = make(map[uint32]*Device, 0) //all devices by id
+
+func Get(id uint32) *Device {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	device, present := devices[id]
+	if !present {
+		return None //device.none
+	}
+	return device
+}
+
+func Set(d *Device) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	devices[d.Id] = d
+}
+
+func ViewersOf(game *game.Game) (viewers []*Device, landRoots []*terrain.Tri) {
+
+	current := []*Device{}
+	lands := []*terrain.Tri{}
+
+	for _, d := range devices {
+		if d.ViewingPlayer != player.None {
+			if d.ViewingPlayer.Game == game {
+				current = append(current, d)
+				lands = append(lands, d.GetLandRoot())
+			}
+		}
+	}
+	return current, lands
+}
+func OwnedBy(player *player.Player) []*Device {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	var owned []*Device
+	for _, d := range devices {
+		if d.Owner == player {
+			owned = append(owned, d)
+		}
+	}
+	return owned
+}
+
+func Watching(p *player.Player) []*Device {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	var watchers []*Device
+	for _, d := range devices {
+		if d.ViewingPlayer == p && d.Owner != p {
+			watchers = append(watchers, d)
+		}
+	}
+	return watchers
+}
+
+func AllConnected() []*Device {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	var conns []*Device
+	for _, d := range devices {
+		if d.WebSocket != nil {
+			conns = append(conns, d)
+		}
+	}
+	return conns
+}
+
+// func SetStore(s Store) bool {
+// 	StoreImpl = s
+// 	return true
+// }
+
 func (d *Device) ClearWarnings() {
 	d.NumWarnings = 0
 }
@@ -121,9 +196,9 @@ func (d *Device) Warn(msg string, severity errorplus.Severity) {
 
 // New id is either a known device id and correct token, OR -1
 // which will create a device add it to the map - send ID/token back
-func New(devices map[uint32]*Device, id uint32, name string,
+func New(id uint32, name string,
 	owner *player.Player, viewing *player.Player,
-	primaryControls *player.Player, secondaryControls *player.Player,
+	primaryControls *player.Player, secondaryControls *player.Player, token string,
 	ws *websocket.Conn) *Device {
 	//pov string, ws *websocket.Conn, gridOrigin *vec.V3, controls map[input.ControlInput]float64) *Viewer {
 
@@ -140,11 +215,11 @@ func New(devices map[uint32]*Device, id uint32, name string,
 		//viewingPlayerId: -1,
 		Id:                id,
 		Name:              name,
-		owner:             owner,
+		Owner:             owner,
 		ViewingPlayer:     viewing, //can be nil at the very begining -
 		primaryControls:   primaryControls,
 		secondaryControls: secondaryControls,
-		token:             fmt.Sprintf("%06d", rand.Int31n(999999)),
+		token:             token,
 		WebSocket:         ws,
 		pov:               "none",
 		Camera:            cam.New(vec.NewVec3(0, 0, 0), vec.NewVec3(1, 0, 0), vec.NewVec3(0, 1, 0)), //default camera if none found
@@ -174,10 +249,6 @@ func New(devices map[uint32]*Device, id uint32, name string,
 		device.controls[input.ControlInput(i)] = 0
 	}
 
-	mutex.Devices.Lock()
-	devices[uint32(device.Id)] = device
-	mutex.Devices.Unlock()
-
 	return device
 }
 
@@ -188,19 +259,25 @@ func (dev *Device) Persist() *errorplus.Event {
 	return persist.Append("repo.bin", deviceMsg)
 }
 
-func NewFromMsg(m *msg.Msg, devices map[uint32]*Device, players map[uint32]*player.Player) *Device {
+func NewFromMsg(m *msg.Msg) *Device {
 
 	did, name, token, oid, vpid, pcid, scid, ii, pov := uint32(0), "", "", uint32(0), uint32(0), uint32(0), uint32(0), true, ""
 	m.Read(&did, &name, &token, &oid, &vpid, &pcid, &scid, &ii, &pov)
-	return New(devices, did, name, players[oid], players[vpid], players[pcid], players[scid], nil)
+	device := New(did, name,
+		player.Get(oid),
+		player.Get(vpid),
+		player.Get(pcid),
+		player.Get(scid), token, nil)
+
+	return device
 
 }
 
 func (dev *Device) WriteTo(m *msg.Msg) {
 
 	oid, vpid, pcid, scid := uint32(0), uint32(0), uint32(0), uint32(0)
-	if dev.owner != nil {
-		oid = dev.owner.Id
+	if dev.Owner != nil {
+		oid = dev.Owner.Id
 	}
 	if dev.ViewingPlayer != nil {
 		vpid = dev.ViewingPlayer.Id
@@ -234,9 +311,9 @@ type highlitType struct {
 	thing  *thing.Thing
 }
 
-func (dev *Device) GetPlayer() *player.Player {
-	return dev.ViewingPlayer
-}
+// func (dev *Device) GetPlayer() *player.Player {
+// 	return dev.ViewingPlayer
+// }
 
 func (dev *Device) Status() string {
 	if dev.WebSocket != nil {
@@ -1258,6 +1335,8 @@ func (dev *Device) bindValue(key string, valuePointer *float64, min float64, max
 }
 
 func (dev *Device) ReleaseWebSocket() {
+	dev.mtx.Lock()
+	defer dev.mtx.Unlock()
 	dev.WebSocket = nil
 }
 
@@ -1270,30 +1349,30 @@ func redact(s string) string {
 	return string(r)
 }
 
-func ReConnect(m *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player, ws *websocket.Conn) (*errorplus.Event, *Device) {
+func ReConnect(m *msg.Msg, ws *websocket.Conn) (*errorplus.Event, *Device) {
 
-	device, evt := NewFromConnectDeviceMsg(m, globalDevices, player.None, ws)
+	device, evt := NewFromConnectDeviceMsg(m, ws)
 
 	if device == nil {
 		return evt, nil
 	}
 
 	if device != None { //this is device.none (it's just were' in the device namespace)
-		if device.owner != player.None {
+		if device.Owner != player.None {
 			response := msg.Empty()
-			device.homeScreen(response, globalDevices, globalPlayers)
+			device.homeScreen(response)
 			device.Send(response)
 		} else {
 			//send sign in/up options
 			response := msg.Empty()
-			device.signInUpScreen(response, globalDevices, globalPlayers)
+			device.signInUpScreen(response)
 			device.Send(response)
 		}
 	}
 
 	return evt, device
 }
-func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nobody *player.Player, ws *websocket.Conn) (device *Device, error *errorplus.Event) {
+func NewFromConnectDeviceMsg(ibm *msg.Msg, ws *websocket.Conn) (dev *Device, error *errorplus.Event) {
 
 	if ibm.MsgType != msg.ConnectDevice {
 		return nil, errorplus.New(nil, errorplus.Error, fmt.Sprintf("First message must be connectdevice was %T %v", ibm.MsgType, ibm.MsgType)) //connects an existing or new device (viewer/controller)
@@ -1306,7 +1385,7 @@ func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nob
 	if deviceId == 0 {
 		// a new unknown device - create a new device,
 
-		newDevice, err := makeNewDevice(globalDevices, ws)
+		newDevice, err := makeNewDevice(ws)
 		if vTok != "" {
 			newDevice.Warn(fmt.Sprintf("New device provided non empty token %v - ignoring", redact(vTok)), errorplus.Warn)
 		}
@@ -1315,14 +1394,13 @@ func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nob
 
 	} else {
 		//we're reconnecting an existing device
-		mutex.Devices.RLock()
-		d, present := globalDevices[uint32(deviceId)]
-		mutex.Devices.RUnlock()
+
+		d := Get(deviceId)
 
 		time.Sleep(time.Millisecond * 500) //don't provide a response instanltly - to make brute forcing harder
-		if !present {
+		if d == None {                     //device.none
 			//device.WebSocket.Close()
-			remade, _ := makeNewDevice(globalDevices, ws)
+			remade, _ := makeNewDevice(ws)
 
 			remade.Warn(fmt.Sprintf("No such device (%v) to reconnect.. remade as %v", deviceId, remade.Id), errorplus.Warn)
 			return remade, nil
@@ -1333,7 +1411,7 @@ func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nob
 			d.Warn(fmt.Sprintf("Device token does not match got %v, want %v", redact(vTok), redact(d.token)), errorplus.Warn)
 			//Mismatch could be hacking, or loss of database
 			//either way - reset the device (send it a new ID and token)
-			makeNewDevice(globalDevices, ws) //reset the device ready for adoption on signin/up
+			makeNewDevice(ws) //reset the device ready for adoption on signin/up
 
 			d.ReleaseWebSocket()
 			return nil, errorplus.New(nil, errorplus.Warn, fmt.Sprintf("Device token does not match got %v, want %v", redact(vTok), redact(d.token)))
@@ -1345,16 +1423,13 @@ func NewFromConnectDeviceMsg(ibm *msg.Msg, globalDevices map[uint32]*Device, nob
 	}
 }
 
-func makeNewDevice(globalDevices map[uint32]*Device, ws *websocket.Conn) (*Device, *errorplus.Event) {
+func makeNewDevice(ws *websocket.Conn) (*Device, *errorplus.Event) {
 
 	ndid := next.Id("device")
-	_, present := globalDevices[ndid]
-	if present {
-		return nil, errorplus.New(nil, errorplus.Error, fmt.Sprintf("Generated next device ID %v already present", ndid))
-	}
 
 	nobody := player.None
-	newDevice := New(globalDevices, ndid, "Name me!", nobody, nobody, nobody, nobody, ws)
+	newDevice := New(ndid, "Name me!", nobody, nobody, nobody, nobody, crypto.Random16string(), ws)
+	Set(newDevice) //sores it in the map
 	err := newDevice.Persist()
 	if err != nil {
 		return newDevice, err
@@ -1366,7 +1441,7 @@ func makeNewDevice(globalDevices map[uint32]*Device, ws *websocket.Conn) (*Devic
 	return newDevice, nil
 }
 
-func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.Game, globalPlayers map[uint32]*player.Player, globalDevices map[uint32]*Device) (*errorplus.Event, *Device) {
+func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg) (*errorplus.Event, *Device) {
 
 	var myGame *game.Game = nil
 	if dev.ViewingPlayer != nil {
@@ -1388,10 +1463,10 @@ func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.G
 		return errorplus.New(nil, errorplus.Critical, "connect device should be processed elsewhere"), dev
 
 	case msg.SignOut:
-		dev.owner = player.None
+		dev.Owner = player.None
 		dev.Persist()
 		response := msg.Empty()
-		dev.signInUpScreen(response, globalDevices, globalPlayers)
+		dev.signInUpScreen(response)
 		dev.Send(response)
 		return errorplus.New(nil, errorplus.Info, "Signed out"), dev
 
@@ -1399,33 +1474,52 @@ func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.G
 
 		playerName, email, password := "", "", ""
 		ibm.Read(&playerName, &email, &password)
-		salt := player.Salt()               //generate a new salt
-		hash := player.Hash(password, salt) //hash the password with the (additonal) salt
-		token := player.Salt()              //generate a new token
+		salt := crypto.Random16string()     //generate a new salt
+		hash := crypto.Hash(password, salt) //hash the password with the (additonal) salt
+		token := crypto.Random16string()    //generate a new token
 
 		npid := next.Id("player")
-		_, present := globalPlayers[npid]
-		if present {
+		existing := player.Get(npid)
+
+		if existing != player.None {
 			return errorplus.New(nil, errorplus.Error, "Generated player ID already present (signUp)"), dev
 		}
-		newPlayer := player.New(globalPlayers, npid, playerName, email, hash, salt, token, 0, 0, 0, nil)
+
+		named := player.GetByName(strings.ToLower(playerName))
+
+		if named != player.None {
+			dev.Notify("Player name already taken - try another", "red")
+			return errorplus.New(nil, errorplus.Warn, "Player name already taken"), dev
+		}
+
+		newPlayer := player.New(npid, playerName, email, hash, salt, token, 0, 0, 0, game.None)
+		player.Set(newPlayer)
+
 		err := newPlayer.Persist()
 		if err != nil {
 			return err, dev
 		}
 
 		//adopt the device
-		dev.owner = newPlayer
+		dev.Owner = newPlayer
 		dev.ViewingPlayer = newPlayer
 		dev.primaryControls = newPlayer
 		dev.secondaryControls = newPlayer
-		dev.Persist()
+
+		err = dev.Persist()
+		if err != nil {
+			return err, dev
+		}
 
 		response := msg.NewMsg(msg.PlayerId, newPlayer.Id, newPlayer.Token)
+		dev.Send(response)
 
-		dev.homeScreen(response, globalDevices, globalPlayers)
+		//i don't know why i had to split this in two
+		response = msg.Empty()
+		dev.homeScreen(response)
 
 		dev.Send(response)
+
 		dev.Notify("Player "+playerName+" created OK", "green")
 		dev.Warn("Player "+playerName+" created OK", errorplus.Info)
 
@@ -1433,28 +1527,29 @@ func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.G
 		//when signed out a devices owner is set to player.None
 		playerName, password := "", ""
 		ibm.Read(&playerName, &password)
-		playerName = strings.ToLower(playerName)
 
-		for _, p := range globalPlayers { //TODO - index players by name
-			if strings.ToLower(p.Name) == playerName {
-				//found the player - check the password
+		p := player.GetByName(playerName)
 
-				if p.CheckPassword(password) {
-					//adopt the device
-					dev.owner = p
-					dev.Persist()
-					response := msg.Empty()
-					dev.homeScreen(response, globalDevices, globalPlayers)
-					dev.Send(response)
-					return nil, dev
-				} else {
-					time.Sleep(time.Millisecond * 1500) //delay to make brute forcing harder
-					dev.Notify("Wrong password", "red")
-					dev.Warn("Password incorrect", errorplus.Warn)
-					return nil, dev
+		if p != player.None {
+			//found the player - check the password
 
-				}
+			if p.CheckPassword(password) {
+				//adopt the device
+				dev.Owner = p
+				dev.Persist()
+				response := msg.Empty()
+				dev.homeScreen(response)
+				dev.Send(response)
+				dev.Notify("Welcome back "+playerName, "green")
+				return nil, dev
+			} else {
+				time.Sleep(time.Millisecond * 1500) //delay to make brute forcing harder
+				dev.Notify("Wrong password", "red")
+				dev.Warn("Password incorrect", errorplus.Warn)
+				return nil, dev
+
 			}
+
 		}
 
 		dev.Notify("No such player "+playerName, "red")
@@ -1467,16 +1562,17 @@ func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.G
 		gameName := ""
 		ibm.Read(&playerId, &playerName, &gameName) //who will 'own' this game
 
-		player, present := globalPlayers[playerId]
-		if !present {
+		p := player.Get(playerId)
+		if p == player.None {
 			return errorplus.New(nil, errorplus.Warn, "No such player "+fmt.Sprint(playerId)), dev
 		}
-		if player.Name != playerName {
+		if p.Name != playerName {
 			return errorplus.New(nil, errorplus.Warn, "Player name does not match"), dev
 		}
 
 		//will make a new game with a new ID and add the player to it
-		newGame := game.New(globalGames, next.Id("game"), gameName)
+		nid := next.Id("game")
+		newGame := game.New(nid, gameName) //game.New(globalGames, next.Id("game"), gameName)
 
 		runwayPos := vec.NewVec3(0, 0, 0)
 		runwayVec := vec.NewVec3(1000, 0, 1000)
@@ -1491,8 +1587,8 @@ func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.G
 
 		log.Logit("Runway land made between", landPos, "and", landPos.Add(runwayVec))
 
-		player.Game = newGame
-		dev.ViewingPlayer = player
+		p.Game = newGame
+		dev.ViewingPlayer = p
 
 		dev.startIn(newGame)
 
@@ -1504,11 +1600,19 @@ func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.G
 		// aircraft.Translate(landPos.Sub(cg).Add(vec.NewVec3(0, 10, 0)))
 		// ng.MergeThing(aircraft, aircraft.masses)
 
+	case msg.JoinGame:
+		gid := uint32(0)
+		ibm.Read(&gid)
+		g := game.Get(gid)
+		//who joins - ? device.over ? viewping player .. Primarycontroller ??
+
 	case msg.AddPlayerToGame:
 		pid := uint32(0)
 		gid := uint32(0)
 		ibm.Read(&pid, &gid)
-		globalPlayers[pid].Game = globalGames[gid]
+		player := player.Get(pid)
+		game := game.Get(gid)
+		player.Game = game
 
 	case msg.JoinAsController:
 
@@ -1528,7 +1632,8 @@ func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg, globalGames map[uint32]*game.G
 
 		//the old game is not destroyed - a new game is created and I am started in it
 		oGid := myGame.Id
-		gm := game.Load(globalGames, filename) //replace the game (globals - as the game is a pointer)
+		gm := game.Load(filename) //replace the game (globals - as the game is a pointer)
+		//StoreImpl.SetGame(gm)
 
 		gm.Id = oGid
 
@@ -1593,15 +1698,15 @@ func (dev *Device) updateActuators() {
 	}
 }
 
-func (dev *Device) GetVehicle(players map[uint32]*player.Player) *thing.Thing {
-	if dev.ViewingPlayer == nil {
+func (dev *Device) GetVehicle() *thing.Thing {
+	if dev.ViewingPlayer == player.None {
 		return nil
 	}
 	return dev.ViewingPlayer.GetVehicle()
 
 }
 
-func (dev *Device) signInUpScreen(response *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player) {
+func (dev *Device) signInUpScreen(response *msg.Msg) {
 	response.Write(msg.ReplaceDiv, "content")
 	//If they sign out of their account,
 	//They can sign in to another and this device will be adopted
@@ -1610,24 +1715,29 @@ func (dev *Device) signInUpScreen(response *msg.Msg, globalDevices map[uint32]*D
 	response.Write("<h1>Welcome Hero!</h1>")
 	response.Write("<h2>Please sign in if you have an account, or sign up to create one</h2>")
 	response.Write("<h3>You fly a quick training mission, or spectate games without an account</h3>")
-	deviceList(dev.owner, response, globalDevices)
-	gamesInProgress(response, globalPlayers)
 
-	html.InputBox(response, "un", "Enter your username")
-	html.InputBox(response, "pw", "Enter your password")
-	html.Button(response, "si", "Sign In", `sm(mt.SignIn,'un','pw','em')`)
+	deviceList(dev.Owner, response)
+	gamesInProgress(response)
+
+	html.InputBox(response, "un", "Username")
+	html.InputBox(response, "pw", "Password")
+	html.InputBox(response, "em", "Email")
+
+	html.Button(response, "Sign In", `sm(mt.SignIn,'un','pw','em')`)
 	html.Literal(response, " or ")
-	html.Button(response, "su", "Sign up", `sm(mt.CreatePlayer,'un','em','pw')`)
+	html.Button(response, "Sign up", `sm(mt.SignUp,'un','em','pw')`)
 
 }
 
-func (dev *Device) homeScreen(response *msg.Msg, globalDevices map[uint32]*Device, globalPlayers map[uint32]*player.Player) {
+func (dev *Device) homeScreen(response *msg.Msg) {
 	response.Write(msg.ReplaceDiv, "content")
-	welcome(dev.owner, response)
-	deviceList(dev.owner, response, globalDevices)
-	observers(dev.owner, response, globalDevices)
-	gamesInProgress(response, globalPlayers)
-	html.Button(response, "so", "Sign Out", `sm(mt.SignOut)`)
+	welcome(dev.Owner, response)
+	deviceList(dev.Owner, response)
+	observers(dev.Owner, response)
+	gamesInProgress(response)
+	html.Button(response, "Sign Out", `sm(mt.SignOut)`)
+	html.Button(response, "Create Game", `sm(mt.CreateGame)`)
+
 }
 
 func (dev *Device) startEngine(index int, game *game.Game, response *msg.Msg) *errorplus.Event {
@@ -1693,7 +1803,7 @@ func (dev *Device) RevokeButton() string {
 	return ("<button>Kick</button>") //will need to set the devices watchingplayer, primary and secondary controls to it's owner
 }
 
-func observers(player *player.Player, response *msg.Msg, globalDevices map[uint32]*Device) {
+func observers(player *player.Player, response *msg.Msg) {
 	//Observers see exactly what the pilot sees (low cost)
 	//Independent observers can switch cameras, slew and orbit
 	//Flight engineers - occupy the copilot seat and can operate throttles, flaps, gear, water drop, probes etc
@@ -1710,10 +1820,10 @@ func observers(player *player.Player, response *msg.Msg, globalDevices map[uint3
 	//todo - devices where viewing player is me, but I am not the owner
 	response.Write("<table>")
 	html.TableHead(response, "ID", "Name", "Device", "Role", "Connected", "Remove")
-	for _, d := range globalDevices {
-		if d.ViewingPlayer != nil && d.ViewingPlayer == player && d.owner != player {
-			html.TableRow(response, fmt.Sprintf("%d", d.owner.Id), d.owner.Name, d.Name, Role(player, d), d.Status(), d.RevokeButton())
-		}
+	for _, d := range Watching(player) {
+
+		html.TableRow(response, fmt.Sprintf("%d", d.Owner.Id), d.Owner.Name, d.Name, Role(player, d), d.Status(), d.RevokeButton())
+
 	}
 	response.Write("</table>")
 }
@@ -1723,28 +1833,29 @@ func welcome(player *player.Player, response *msg.Msg) {
 	response.Write("<h1>Hi ", player.Name, " - PID:", pid, "</h1>")
 }
 
-func deviceList(player *player.Player, response *msg.Msg, globalDevices map[uint32]*Device) {
+func deviceList(player *player.Player, response *msg.Msg) {
 
 	response.Write("<h2>Your devices:</h2>")
 	response.Write("<table>")
 	html.TableHead(response, "ID", "Name", "PoV", "Connected", "Action")
 
-	for _, d := range globalDevices {
-		if d.ViewingPlayer != nil && d.ViewingPlayer == player && d.owner == player {
-			html.TableRow(response, fmt.Sprintf("%d", d.Id), d.Name, d.pov, d.Status(), d.RevokeButton())
-		}
+	for _, d := range OwnedBy(player) {
+		html.TableRow(response, fmt.Sprintf("%d", d.Id), d.Name, d.pov, d.Status(), d.RevokeButton())
+
 	}
 
 }
 
-func gamesInProgress(response *msg.Msg, globalPlayers map[uint32]*player.Player) {
+func gamesInProgress(response *msg.Msg) {
 	response.Write("<h2>Games in progress:</h2>")
 	response.Write("<table>")
-	html.TableHead(response, "ID", "Players")
+	html.TableHead(response, "ID", "Players", "")
 
-	pbg := playersByGame(globalPlayers)
+	pbg := player.PlayersByGame() //StoreImpl.PlayersByGame() //globalPlayers)
 	for g, players := range pbg {
-		html.TableRow(response, fmt.Sprintf("%d", g.Id), fmt.Sprintf("%d", len(players)))
+		btnMsg := msg.Empty()
+		html.Button(btnMsg, "Join Game", fmt.Sprintf("smn(mt.JoinGame,%d)", g.Id))
+		html.TableRow(response, fmt.Sprintf("%d", g.Id), fmt.Sprintf("%d", len(players)), string(btnMsg.AllBytes()))
 		response.Write("<tr><td colspan='2'>")
 		html.TableHead(response, "Player ID", "Name")
 		for _, p := range players {
@@ -1753,16 +1864,6 @@ func gamesInProgress(response *msg.Msg, globalPlayers map[uint32]*player.Player)
 		response.Write("</td></tr>")
 	}
 	response.Write("</table>")
-}
-
-func playersByGame(globalPlayers map[uint32]*player.Player) map[*game.Game][]*player.Player {
-	pbg := make(map[*game.Game][]*player.Player)
-	for _, p := range globalPlayers {
-		if p.Game != nil {
-			pbg[p.Game] = append(pbg[p.Game], p)
-		}
-	}
-	return pbg
 }
 
 func Role(target *player.Player, device *Device) string {

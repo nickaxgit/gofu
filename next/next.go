@@ -11,12 +11,12 @@ import (
 )
 
 var counters = make(map[string]uint32) //global named counters
-var mtx = sync.Mutex{}
+var mutex = sync.Mutex{}
 
 func Id(name string) uint32 {
 
-	mtx.Lock()
-	defer mtx.Unlock()
+	mutex.Lock()
+	defer mutex.Unlock()
 	val, present := counters[name]
 	if !present {
 		val = 1 //start at 1 - 0 is the nothing/nobody/nowhere id (see none.go files)
@@ -54,8 +54,8 @@ func LoadCounters(filename string) *errorplus.Event {
 		return errorplus.New(nil, errorplus.Error, fmt.Sprintf("Counters file has invalid number of counters: %v: %v", filename, numCounters))
 	}
 
-	defer mtx.Unlock()
-	mtx.Lock()
+	defer mutex.Unlock()
+	mutex.Lock()
 
 	summary := ""
 	for i := uint32(0); i < numCounters; i++ {
@@ -80,11 +80,11 @@ func SaveCounters(filename string) *errorplus.Event {
 
 	msg := msg.NewMsg(msg.P_Counters, uint32(len(counters)))
 
-	mtx.Lock()
+	mutex.Lock()
 	for k, v := range counters {
 		msg.Write(k, v)
 	}
-	mtx.Unlock()
+	mutex.Unlock()
 
 	file.Write(msg.AllBytes())
 

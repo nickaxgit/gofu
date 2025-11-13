@@ -5,8 +5,6 @@ import (
 
 	"github.com/nickax/gofu/device"
 	"github.com/nickax/gofu/game/msg"
-	"github.com/nickax/gofu/global"
-	"github.com/nickax/gofu/terrain"
 
 	"time"
 )
@@ -18,50 +16,49 @@ func StepWorldsForever() {
 	//every 100 ms step all worlds
 	for range time.Tick(time.Millisecond * 33) { //<<waits here  //30fps
 		//print(".") //<< this is the heartbeat
-		for _, game := range global.Games {
+		for _, game := range game.AllRunning() {
 
-			cvs, lands := currentViewers(game) //TODO optimise (cache this) - also shouldn't need to collect/pass lands
+			cvs, lands := device.ViewersOf(game) //game.ViewerscurrentViewers(game) //TODO optimise (cache this) - also shouldn't need to collect/pass lands
 			//game.UpdateCurrentPlayersAndViewers() //don't need to do this every cycle
 			//game.Step(5) //<- this is a physics step - it queues stuff for all players
-			if game.Running {
-				for _, t := range game.Things {
-					t.UpdateTelemetry() //each thing has a telemetry property (which is an msg.Msg)
+
+			for _, t := range game.Things {
+				t.UpdateTelemetry() //each thing has a telemetry property (which is an msg.Msg)
+			}
+
+			game.Burn()
+
+			response := game.MoveAll(5, lands) //<- this is a physics step - it returns a message containing moved masses
+			for _, viewer := range cvs {
+				viewer.Send(response) //send the moved masses (and engine sounds)
+
+				vehicle := viewer.GetVehicle()
+				if vehicle != nil {
+					//viewer.Send(mass.Vectors())
+					viewer.SendVectors(game)
+					viewer.Send(vehicle.GetTelemetry())
 				}
 
-				game.Burn()
+				//viewer.FollowVehicleWithCamera()
 
-				response := game.MoveAll(5, lands) //<- this is a physics step - it returns a message containing moved masses
-				for _, viewer := range cvs {
-					viewer.Send(response) //send the moved masses (and engine sounds)
+				viewer.SendCamera()
+				viewer.SendLabels()
 
-					vehicle := viewer.GetVehicle(global.Players)
-					if vehicle != nil {
-						//viewer.Send(mass.Vectors())
-						viewer.SendVectors(game)
-						viewer.Send(vehicle.GetTelemetry())
-					}
+				if viewer.ViewChangedSignificantly() {
 
-					//viewer.FollowVehicleWithCamera()
-
-					viewer.SendCamera()
-					viewer.SendLabels()
-
-					if viewer.ViewChangedSignificantly() {
-
-						go func() {
-							message := msg.Empty()
-							viewer.GetFlames(game.GetFire(), message) //update visible flames for this player
-							viewer.Send(message)
-						}()
-						go func() {
-							message := msg.Empty()
-							game.MakeLand(viewer.Camera.Position, viewer.Camera.Direction, message)
-							viewer.Send(message)
-						}()
-					}
-
-					viewer.MoveCamera(game) //move the camera according to input
+					go func() {
+						message := msg.Empty()
+						viewer.GetFlames(game.GetFire(), message) //update visible flames for this player
+						viewer.Send(message)
+					}()
+					go func() {
+						message := msg.Empty()
+						game.MakeLand(viewer.Camera.Position, viewer.Camera.Direction, message)
+						viewer.Send(message)
+					}()
 				}
+
+				viewer.MoveCamera(game) //move the camera according to input
 			}
 
 		}
@@ -69,21 +66,6 @@ func StepWorldsForever() {
 
 	panic(`stepWorlds() has exited`)
 
-}
-
-func currentViewers(game *game.Game) (viewers []*device.Device, landRoots []*terrain.Tri) {
-	current := []*device.Device{}
-	lands := []*terrain.Tri{}
-	for _, v := range global.Devices {
-		player := v.GetPlayer()
-		if player != nil {
-			if player.Game == game {
-				current = append(current, v)
-				lands = append(lands, v.GetLandRoot())
-			}
-		}
-	}
-	return current, lands
 }
 
 // func joinGame(gameId uint32, playerName string, ws *websocket.Conn) *player.Player {

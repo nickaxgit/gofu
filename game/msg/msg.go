@@ -51,17 +51,18 @@ const (
 	Telemetry         MsgEnum = 39 //send telemetry data (to the client)
 	PositionInstances MsgEnum = 40 //send mesh instance positions (to the client) (trees etc)
 
-	ConnectDevice   MsgEnum = 41 //(re)connects a viewer/controller device, an id of -1 will create a new device
-	SignUp          MsgEnum = 42 //create a new player (sign up)
-	SignIn          MsgEnum = 46 //Sign in a player (to manage devices/choose games)
+	ConnectDevice MsgEnum = 41 //(re)connects a viewer/controller device, an id of -1 will create a new device
+	SignUp        MsgEnum = 42 //create a new player (sign up)
+
 	AddPlayerToGame MsgEnum = 43 //Set a players game
 	WatchPlayer     MsgEnum = 44 //Watch a player (set a viewers player)
 	DeviceId        MsgEnum = 45 //sends a device id (and token) to the client
-	PlayerId        MsgEnum = 46 //sends a player id (and token) to the client
+	SignIn          MsgEnum = 46 //Sign in a player (to manage devices/choose games)
 
 	Players    MsgEnum = 47 //for serverside persistence/restore of players
 	ReplaceDiv MsgEnum = 48 //replace a div on the client side
 	SignOut    MsgEnum = 49 //sets the devices owner to nil
+	PlayerId   MsgEnum = 50 //sends a player id (and token) to the client
 
 	Repository     MsgEnum = 100 //a repository of data (persistence)
 	P_Counters     MsgEnum = 101 //counter values

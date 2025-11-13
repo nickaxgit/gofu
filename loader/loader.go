@@ -1,15 +1,13 @@
 package loader
 
 import (
-	"os"
-
 	"github.com/nickax/gofu/device"
 	"github.com/nickax/gofu/errorplus"
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/game/player"
-	"github.com/nickax/gofu/global"
 	"github.com/nickax/gofu/next"
 	"github.com/nickax/gofu/persist"
+	"os"
 )
 
 func initIfAbsent(filename string) {
@@ -59,9 +57,12 @@ func LoadAll(filename string) *errorplus.Event {
 
 		switch msgType {
 		case msg.P_Player:
-			player.NewFromMsg(repo, global.Games, global.Players, nil)
+			p, _ := player.NewFromMsg(repo) //, store.GlStoreImpl)
+			player.Set(p)
+
 		case msg.P_Device:
-			device.NewFromMsg(repo, global.Devices, global.Players)
+			d := device.NewFromMsg(repo)
+			device.Set(d)
 		case msg.P_Asset:
 		case msg.P_Possesion:
 		case msg.P_Transaction:
