@@ -629,3 +629,20 @@ You will be offered the same terms as me on any sale of shares
 Your shares will by diluted equally if/when we take furthe investment
 
 Say - we had $1m investment - in the company valued at 100k your 10k is not wo
+
+
+
+
+
+
+
+
+TODO
+
+don't split underwater triangles (easy for sea - harder for lakes)
+
+reinstate/fix occlusion culling
+
+simplify water algo - maybe water should be part of the splitting process - not a post process
+
+

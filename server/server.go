@@ -5,6 +5,7 @@ import (
 
 	"github.com/nickax/gofu/device"
 	"github.com/nickax/gofu/game/msg"
+	//	"github.com/nickax/gofu/log"
 
 	"time"
 )
@@ -28,9 +29,12 @@ func StepWorldsForever() {
 
 			game.Burn()
 
-			response := game.MoveAll(5, lands) //<- this is a physics step - it returns a message containing moved masses
+			//response := game.MoveAll(5, lands) //<- this is a physics step - it returns a message containing moved masses
+			game.MoveAll(5, lands) //<- this is a physics step - it returns a message containing moved masses
+			//log.Logit(response)
+
 			for _, viewer := range cvs {
-				viewer.Send(response) //send the moved masses (and engine sounds)
+				//	viewer.Send(response) //send the moved masses (and engine sounds)
 
 				vehicle := viewer.GetVehicle()
 				if vehicle != nil {
@@ -42,95 +46,35 @@ func StepWorldsForever() {
 				//viewer.FollowVehicleWithCamera()
 
 				viewer.SendCamera()
-				viewer.SendLabels()
+				//viewer.SendLabels()
 
 				if viewer.ViewChangedSignificantly() {
 
-					go func() {
-						message := msg.Empty()
-						viewer.GetFlames(game.GetFire(), message) //update visible flames for this player
-						viewer.Send(message)
-					}()
-					go func() {
-						message := msg.Empty()
-						game.MakeLand(viewer.Camera.Position, viewer.Camera.Direction, message)
-						viewer.Send(message)
-					}()
+					// go func() {
+					// 	if game.GetFire().Root.FireInfo == nil {
+					// 		log.Logit("no fire info on root")
+					// 		return
+					// 	}
+					// 	message := msg.Empty()
+					// 	viewer.GetFlames(game.GetFire(), message) //update visible flames for this player
+					// 	viewer.Send(message)
+					// }()
+					//go func() {
+
+					message := msg.Empty()
+					//use copies of the camera position/direction (as camera is potentially mutated on the main thread)
+					game.MakeLand(viewer.Camera.Position.Clone(), viewer.Camera.Direction.Clone(), message)
+					viewer.Send(message)
+					//}()
 				}
 
-				viewer.MoveCamera(game) //move the camera according to input
+				viewer.MoveCamera(game) //move the camera (and any selected masses)according to keyboard input
 			}
 
 		}
+
 	}
 
 	panic(`stepWorlds() has exited`)
 
 }
-
-// func joinGame(gameId uint32, playerName string, ws *websocket.Conn) *player.Player {
-
-// 	g, present := Games[gameId]
-// 	if !present {
-// 		//TODO this is very unfinished
-// 		g = game.Load(Games, string(gameId)+".bin")
-
-// 		for _, p := range g.Players {
-// 			for _, v := range p.Viewers {
-// 				v.Mtx = &sync.Mutex{}
-// 				v.InMtx = &sync.Mutex{}
-// 			}
-// 		}
-// 	}
-
-// 	p, present := globalPlayers[playerId]
-
-// 	if !present {
-// 		p = state.AddPlayer(playerId, playerName, state.RandomStartPos(10000), ws)
-// 	} else {
-// 		logit("Player already exists:", playerId)
-// 	}
-
-// }
-
-// func ProcessCreateJoinOrControl(m *msg.Msg, ws *websocket.Conn) error {
-
-// 	var playerId uint32
-// 	var playerName string
-
-// 	switch m.MsgType {
-// 	case msg.CreateGame:
-
-// 		aircraft = nil //gc (eventually)
-
-// 		player.SetVehicle(vehicle)
-
-// 		gm.SceneStart(player, viewer) //sends stuff to the viewer
-// 		viewer.SendGameId(gameId)     //game id starts it running
-// 		viewer.SendControlPin()
-
-// 		log.Logit("Game created", game.GameId)
-
-// 		return nil
-
-// 	case msg.JoinGame:
-
-// 		m.Read(&gameId, &playerId, &playerName)
-// 		joinGame(gameId, playerId, playerName, ws) //returns a player
-
-// 	case msg.JoinAsController:
-// 		token := uint32(0)
-// 		msg.Read(m.Buff, token)
-// 		playerToControl := controlTokens[token]
-// 		if playerToControl != nil {
-// 			playerToControl.ControllerSocket = ws
-// 			return playerToControl //return the player to which this token maps
-// 		}
-// 		log.Logit("No pin for token", token)
-// 		return nil
-
-// 	default:
-// 		panic("First message was not create, join or control")
-// 	}
-
-// }

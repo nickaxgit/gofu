@@ -28,7 +28,7 @@ type Spring struct {
 // 	return s.RestLength
 // }
 
-func New(springs []*Spring, m1 *mass.Mass, m2 *mass.Mass, collideable byte, restLength float64, actuatorTag actuator.ActuatorEnum) *Spring {
+func New(index int32, m1 *mass.Mass, m2 *mass.Mass, collideable byte, restLength float64, actuatorTag actuator.ActuatorEnum) *Spring {
 	//set rest length at constrcution
 	if m1 == m2 {
 		panic(`degenerate spring (both ends same mass) at construction `)
@@ -39,9 +39,8 @@ func New(springs []*Spring, m1 *mass.Mass, m2 *mass.Mass, collideable byte, rest
 		restLength = m1.P.DistanceFrom(m2.P)
 	}
 
-	s := &Spring{Index: int32(len(springs)), M1: m1, M2: m2, Collideable: collideable, RestLength: restLength, ActuatorTag: actuatorTag}
+	s := &Spring{Index: index, M1: m1, M2: m2, Collideable: collideable, RestLength: restLength, ActuatorTag: actuatorTag}
 
-	springs = append(springs, s)
 	return s
 
 }
@@ -110,13 +109,13 @@ func (s *Spring) contains(p *vec.V3) bool {
 	return p.LiesBetween(s.M1.P, s.M2.P)
 }
 
-func NewFromMsg(springs []*Spring, m *msg.Msg, masses []*mass.Mass) *Spring {
+func NewFromMsg(idx int32, m *msg.Msg, masses []*mass.Mass) *Spring {
 
 	m1, m2, collideable, restLength, actuatorTag := int32(0), int32(0), byte(0), float32(0), byte(0)
 
-	m.Read(&m1, &m2, &collideable, &restLength, &collideable, &restLength, &actuatorTag)
+	m.Read(&m1, &m2, &collideable, &restLength, &actuatorTag)
 
-	return New(springs, masses[m1], masses[m2], collideable, float64(restLength), actuator.ActuatorEnum(actuatorTag))
+	return New(idx, masses[m1], masses[m2], collideable, float64(restLength), actuator.ActuatorEnum(actuatorTag))
 
 }
 

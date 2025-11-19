@@ -98,6 +98,9 @@ func ValueOr[T any](p *T, def T) T {
 // }
 
 func main() {
+
+	tests()
+
 	port := "127.0.0.1:8081" //":443" //":8081"
 	log.Logit("Gofu server - listening on " + port)
 	fs := http.FileServer(http.Dir("../dozer")) //the typescript app/front end is in here

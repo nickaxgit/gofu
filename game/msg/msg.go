@@ -22,7 +22,7 @@ const (
 	Mesh       MsgEnum = 4
 	Things     MsgEnum = 11
 	Masses     MsgEnum = 12
-	Highlit    MsgEnum = 13
+	Spheres    MsgEnum = 13
 	Camera     MsgEnum = 14
 	Cursor     MsgEnum = 15
 	Notify     MsgEnum = 16
@@ -122,6 +122,10 @@ func writeString(buff *bytes.Buffer, s string) {
 
 }
 
+func (msg *Msg) WritePointer() int {
+	return msg.Buff.Len()
+}
+
 // func GenericRead[T CanHandle](buff *bytes.Buffer) T {
 // 	var value T
 // 	switch any(value).(type) {
@@ -140,18 +144,6 @@ func writeString(buff *bytes.Buffer, s string) {
 // 	}
 // 	return value
 // }
-
-func readVec3(buff *bytes.Buffer) *vec.V3 {
-	p := vec.NewVec3(0, 0, 0)
-
-	floats := make([]float32, 3) //the components of a vector are float64's but we downscale to 32bits for transmission/storage
-	binary.Read(buff, le, &floats)
-	p.X = float64(floats[0])
-	p.Y = float64(floats[1])
-	p.Z = float64(floats[2])
-
-	return p
-}
 
 func writeVec3(buff *bytes.Buffer, v *vec.V3) {
 
@@ -177,11 +169,11 @@ func write(buff *bytes.Buffer, values ...any) {
 		switch any(v).(type) {
 		case string:
 			writeString(buff, any(v).(string))
-		case vec.V3:
+		case *vec.V3:
 			writeVec3(buff, any(v).(*vec.V3))
-		case vec.V2:
+		case *vec.V2:
 			writeVec2(buff, any(v).(*vec.V2))
-		case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32, MsgEnum:
+		case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32, []uint16, []uint8, MsgEnum:
 			error := binary.Write(buff, le, v)
 			if error != nil {
 				panic(error)
@@ -208,7 +200,11 @@ func read(buff *bytes.Buffer, into ...any) {
 		case *string:
 			readString(buff, v.(*string)) //this is a type assertion
 		case *vec.V3:
-			into[i] = readVec3(buff)
+			floats := make([]float32, 3) //the components of a vector are float64's but we downscale to 32bits for transmission/storage
+			binary.Read(buff, le, &floats)
+
+			//dereference - we will assign into the pointer to vec3
+			*v.(*vec.V3) = vec.V3{X: float64(floats[0]), Y: float64(floats[1]), Z: float64(floats[2])}
 
 		case *int32, *uint32, *int16, *uint16, *float32, *float64, *byte, *bool, *[]float32, *MsgEnum:
 			error := binary.Read(buff, le, into[i])

@@ -63,50 +63,51 @@ func (tl ThingList) References(m *mass.Mass) bool {
 	return false
 }
 
-func (vehicle *Thing) GetTelemetry() *msg.Msg {
-	return vehicle.telemetry
+func (thing *Thing) GetTelemetry() *msg.Msg {
+	return thing.telemetry
 }
 
 // TelemetryAsMsg returns a msg containing telemetry data for this vehicle (since last call, over that timespan)
-func (vehicle *Thing) UpdateTelemetry() {
+func (thing *Thing) UpdateTelemetry() {
 
-	distance := vehicle.Om.P.Sub(vehicle.lastTelemPos).Length()
-	dy := vehicle.Om.P.Y - vehicle.lastTelemPos.Y
+	distance := thing.Om.P.Sub(thing.lastTelemPos).Length()
+	dy := thing.Om.P.Y - thing.lastTelemPos.Y
 
-	direction := vehicle.Forward()
+	direction := thing.Forward()
 	newHeading := math.Atan2(direction.X, direction.Z) / (math.Pi * 2) * 360 //angle in degrees
 
 	now := time.Now()
-	time := now.Sub(vehicle.lastTelemTime).Seconds()
-	vehicle.lastTelemTime = now
+	time := now.Sub(thing.lastTelemTime).Seconds()
+	thing.lastTelemTime = now
 
-	omega := newHeading - vehicle.heading/time*60 //degrees per minute
+	omega := newHeading - thing.heading/time*60 //degrees per minute
 
-	vehicle.heading = newHeading
+	thing.heading = newHeading
 
-	vehicle.telemetry = msg.NewMsg(msg.Telemetry,
+	thing.telemetry = msg.NewMsg(msg.Telemetry,
 		uint16(4), //4 name value pairs
 		"vel", float32(distance/time),
 		"climb", float32(dy/time),
 		"turn", float32(omega),
-		"head", float32(vehicle.heading),
+		"head", float32(thing.heading),
 	)
 
 }
 
-func (vehicle *Thing) AddSpring(m1 *mass.Mass, m2 *mass.Mass, restLength float64, collideable byte, actuatorTag actuator.ActuatorEnum) *spring.Spring {
+func (thing *Thing) AddSpring(m1 *mass.Mass, m2 *mass.Mass, restLength float64, collideable byte, actuatorTag actuator.ActuatorEnum) *spring.Spring {
 
-	s := spring.New(vehicle.Springs, m1, m2, collideable, restLength, actuatorTag)
+	s := spring.New(int32(len(thing.Springs)), m1, m2, collideable, restLength, actuatorTag)
+	thing.Springs = append(thing.Springs, s)
 	return s
 }
-func (vehicle *Thing) FindCam(pov string) *cam.Camera {
+func (thing *Thing) FindCam(pov string) *cam.Camera {
 
-	povCam, present := vehicle.cameras[pov]
+	povCam, present := thing.cameras[pov]
 	if present {
 		return povCam
 	}
 
-	log.Logit("thing", vehicle.meshName, "has no camera for ", pov)
+	log.Logit("thing", thing.meshName, "has no camera for ", pov)
 	return nil
 
 }
@@ -141,16 +142,16 @@ func New(index uint32, meshName string, numEngines int) *Thing {
 
 }
 
-func (vehicle *Thing) StretchSprings() {
+func (thing *Thing) StretchSprings() {
 
-	for _, s := range vehicle.Springs {
+	for _, s := range thing.Springs {
 		s.Stretch()
 	}
 
 }
 
-func (vehicle *Thing) DeleteLastSpring() {
-	ss := vehicle.Springs //alias (reference) to things springs
+func (thing *Thing) DeleteLastSpring() {
+	ss := thing.Springs //alias (reference) to things springs
 
 	if len(ss) == 0 {
 		return
@@ -161,15 +162,15 @@ func (vehicle *Thing) DeleteLastSpring() {
 
 }
 
-func (vehicle *Thing) DeleteSpring(s *spring.Spring) {
+func (thing *Thing) DeleteSpring(s *spring.Spring) {
 
 	//TODO sanity check/test
 
-	if vehicle.Springs[s.Index] != s {
+	if thing.Springs[s.Index] != s {
 		panic("spring does not belong to thing")
 	}
-	vehicle.Springs = append(vehicle.Springs[:s.Index], vehicle.Springs[s.Index+1:]...)
-	for _, rs := range vehicle.Springs {
+	thing.Springs = append(thing.Springs[:s.Index], thing.Springs[s.Index+1:]...)
+	for _, rs := range thing.Springs {
 		if rs.Index > s.Index {
 			rs.Index--
 		}
@@ -177,26 +178,26 @@ func (vehicle *Thing) DeleteSpring(s *spring.Spring) {
 
 }
 
-func (vehicle *Thing) Focus() *vec.V3 {
-	return vehicle.Springs[0].M2.P
+func (thing *Thing) Focus() *vec.V3 {
+	return thing.Springs[0].M2.P
 }
 
-func (vehicle *Thing) Forward() *vec.V3 {
+func (thing *Thing) Forward() *vec.V3 {
 
-	o := vehicle.Om.P
-	f := vehicle.Fm.P
+	o := thing.Om.P
+	f := thing.Fm.P
 	return f.Sub(o).Normalise()
 
 }
 
-func (vechicle *Thing) Right() *vec.V3 {
-	o := vechicle.Om.P
-	r := vechicle.Rm.P
+func (thing *Thing) Right() *vec.V3 {
+	o := thing.Om.P
+	r := thing.Rm.P
 	return r.Sub(o).Normalise()
 }
 
-func (vehicle *Thing) FindMassActuator(act actuator.ActuatorEnum) *mass.Mass {
-	for _, s := range vehicle.Springs {
+func (thing *Thing) FindMassActuator(act actuator.ActuatorEnum) *mass.Mass {
+	for _, s := range thing.Springs {
 		if s.M1.IsActuator(act) {
 			return s.M1
 		}
@@ -205,12 +206,12 @@ func (vehicle *Thing) FindMassActuator(act actuator.ActuatorEnum) *mass.Mass {
 		}
 	}
 
-	log.Logit(vehicle.meshName, " has no mass actuator for", actuator.MassActuators[act])
+	log.Logit(thing.meshName, " has no mass actuator for", actuator.MassActuators[act])
 	return nil
 }
 
-func (vehicle *Thing) FindSpringActuator(act actuator.ActuatorEnum) *spring.Spring {
-	for _, s := range vehicle.Springs {
+func (thing *Thing) FindSpringActuator(act actuator.ActuatorEnum) *spring.Spring {
+	for _, s := range thing.Springs {
 		if s.ActuatorTag > 0 {
 			if s.ActuatorTag == act {
 				return s
@@ -218,18 +219,18 @@ func (vehicle *Thing) FindSpringActuator(act actuator.ActuatorEnum) *spring.Spri
 		}
 	}
 
-	log.Logit(vehicle.meshName, " has no spring actuator for", actuator.SpringActuators[act])
+	log.Logit(thing.meshName, " has no spring actuator for", actuator.SpringActuators[act])
 	return nil
 }
 
-func (vehicle *Thing) SetVelocity(v *vec.V3) {
-	for _, s := range vehicle.Springs {
+func (thing *Thing) SetVelocity(v *vec.V3) {
+	for _, s := range thing.Springs {
 		s.SetVelocity(v)
 	}
 }
 
-func (vehicle *Thing) Translate(v *vec.V3) {
-	for _, s := range vehicle.Springs {
+func (thing *Thing) Translate(v *vec.V3) {
+	for _, s := range thing.Springs {
 		s.Translate(v)
 
 	}
@@ -237,7 +238,7 @@ func (vehicle *Thing) Translate(v *vec.V3) {
 
 // Is the point P the thing
 // "draws" a line from the point (to test) to the origin and counts how many springs of this thing are crossed - if the number is odd, then the point is inside the thing
-func (vehicle *Thing) contains(p *vec.V2, m []*mass.Mass) bool {
+func (thing *Thing) contains(p *vec.V2, m []*mass.Mass) bool {
 
 	panic("contains not done")
 
@@ -262,17 +263,17 @@ func ThingsFromMsg(m *msg.Msg, masses []*mass.Mass) []*Thing {
 
 	for i := 0; i < int(numThings); i++ {
 		//create a new thing from the byte buffer, add it to the things slice (indexing it upon creation)
-		things = append(things, NewFromMsg(m, masses))
+		things = append(things, NewFromMsg(m, masses)) //the things contain (generate) the springs - to we don't need to pass them in
 	}
 
 	return things
 }
 
-func (vehicle *Thing) CentreOfMass() (*vec.V3, float64) {
+func (thing *Thing) CentreOfMass() (*vec.V3, float64) {
 
 	cg := vec.NewVec3(0, 0, 0)
 	tm := 0.0
-	for _, s := range vehicle.Springs {
+	for _, s := range thing.Springs {
 		tm += s.M1.MassKG()
 		cg.AddIn(s.M1.P.Multiply(s.M1.MassKG()))
 		tm += s.M2.MassKG()
@@ -283,9 +284,9 @@ func (vehicle *Thing) CentreOfMass() (*vec.V3, float64) {
 
 }
 
-func (vehicle *Thing) addFace(p ...*vec.V3) {
+func (thing *Thing) addFace(p ...*vec.V3) {
 	f := poly.NewConvexPolyFromVecs(p)
-	vehicle.faces = append(vehicle.faces, f)
+	thing.faces = append(thing.faces, f)
 }
 
 // func (thing *Thing) closestPointOnEdge(masses []*mass.Mass, wp *vec.V3) *vec.V3 {
@@ -325,28 +326,30 @@ func (vehicle *Thing) addFace(p ...*vec.V3) {
 // 	}
 // }
 
-func ThingsAsMsg(things []*Thing) *msg.Msg {
+func ThingsAsMsg(things []*Thing, withSprings bool) *msg.Msg {
 	m := msg.NewMsg(msg.Things)
 	m.Write(uint32(len(things)))
 
 	for _, thing := range things {
-		thing.WriteTo(m)
+		thing.WriteTo(m, withSprings)
 	}
 
 	return m
 }
 
-func (vehicle *Thing) WriteTo(msg *msg.Msg) {
+func (thing *Thing) WriteTo(msg *msg.Msg, withSprings bool) {
 
 	msg.Write(
-		vehicle.Index, vehicle.meshName,
-		vehicle.MeshOffset, vehicle.MeshScale, vehicle.MeshRotation,
-		vehicle.Om.Index, vehicle.Fm.Index, vehicle.Rm.Index,
-		vehicle.MeshVisibility, uint32(len(vehicle.Springs)),
-	)
+		thing.Index, thing.meshName,
+		thing.MeshOffset, thing.MeshScale, thing.MeshRotation,
+		thing.Om.Index, thing.Fm.Index, thing.Rm.Index,
+		thing.MeshVisibility)
 
-	for _, spring := range vehicle.Springs {
-		spring.WriteTo(msg)
+	if withSprings {
+		msg.Write(uint32(len(thing.Springs)))
+		for _, spring := range thing.Springs {
+			spring.WriteTo(msg)
+		}
 	}
 
 	// msg.GenericWrite[uint32](buff, thing.Index)
@@ -401,20 +404,20 @@ func (vehicle *Thing) WriteTo(msg *msg.Msg) {
 // 	}
 // }
 
-func (vehicle *Thing) Rewire() {
-	for _, s := range vehicle.Springs {
+func (thing *Thing) Rewire() {
+	for _, s := range thing.Springs {
 		s.Rewire()
 	}
 }
-func (vehicle *Thing) PushAway(m *mass.Mass) bool {
+func (thing *Thing) PushAway(m *mass.Mass) bool {
 
 	penetrated := false
 
-	for _, face := range vehicle.faces {
+	for _, face := range thing.faces {
 
 		pen := face.Penetration(m.P, m.R)
 		if pen > 1 {
-			log.Logit("deep penetration of thing", vehicle.meshName, "by mass", m.Index, "pen", pen)
+			log.Logit("deep penetration of thing", thing.meshName, "by mass", m.Index, "pen", pen)
 		}
 		if pen > 0 { //we're on the wrong side
 
@@ -430,14 +433,14 @@ func (vehicle *Thing) PushAway(m *mass.Mass) bool {
 
 }
 
-func (vehicle *Thing) velocity() float32 {
+func (thing *Thing) velocity() float32 {
 
-	return float32(vehicle.Om.GetVelocity().Length()) //m/s
+	return float32(thing.Om.GetVelocity().Length()) //m/s
 }
 
-func (vehicle *Thing) climbRate() float32 {
+func (thing *Thing) climbRate() float32 {
 
-	return float32(vehicle.Om.GetVelocity().Y) //m/s
+	return float32(thing.Om.GetVelocity().Y) //m/s
 
 }
 
@@ -446,21 +449,34 @@ func NewFromMsg(m *msg.Msg, masses []*mass.Mass) *Thing {
 	idx := int32(0)
 	m.Read(&idx)
 
-	meshName := ""
-	m.Read(&meshName)
+	//meshName := ""
+	//m.Read(&meshName)
 
-	thing := New(uint32(idx), meshName, 2)
+	thing := New(uint32(idx), "CL415", 2)
+
+	m.Read(thing.MeshOffset, thing.MeshScale, thing.MeshRotation)
+	junk := int16(0)
+	m.Read(&junk) //read padding
 
 	om, fm, rm := int32(0), int32(0), int32(0) //origin, forward and right masses
-	m.Read(&thing.MeshOffset, &thing.MeshScale, &thing.MeshRotation, &om, &fm, &rm, &thing.MeshVisibility)
-	if thing.MeshRotation.Length() == 0 {
-		log.Logit("warning: thing", thing.meshName, "has zero length mesh rotation - fixing")
-		thing.MeshRotation = vec.NewVec3(0, math.Pi*2, 0)
-	}
+	m.Read(&om, &fm, &rm)
 
 	thing.Om = masses[om]
 	thing.Fm = masses[fm]
 	thing.Rm = masses[rm]
+
+	vis := byte(0)
+	m.Read(&vis)
+
+	thing.MeshVisibility = vis
+
+	junk32 := int32(0)
+	m.Read(&junk32) //read padding
+
+	if thing.MeshRotation.Length() == 0 {
+		log.Logit("warning: thing", thing.meshName, "has zero length mesh rotation - fixing")
+		thing.MeshRotation = vec.NewVec3(0, math.Pi*2, 0)
+	}
 
 	thing.Springs = make([]*spring.Spring, 0)
 
@@ -470,8 +486,8 @@ func NewFromMsg(m *msg.Msg, masses []*mass.Mass) *Thing {
 	thing.Springs = make([]*spring.Spring, 0, numSprings)
 
 	for i := 0; i < int(numSprings); i++ {
-		spring.NewFromMsg(thing.Springs, m, masses)
-
+		s := spring.NewFromMsg(int32(i), m, masses)
+		thing.Springs = append(thing.Springs, s)
 	}
 
 	return thing

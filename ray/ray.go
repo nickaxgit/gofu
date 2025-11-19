@@ -11,12 +11,12 @@ type Ray struct {
 	Intersect *vec.V3 //scratchpad /probe result
 }
 
-func (ray *Ray) GetIntersect() *vec.V3 {
-	if ray.Intersect == nil {
-		panic("ray.intersect is nil - did you forget to probe the ray first?")
-	}
-	return ray.Intersect
-}
+// func (ray *Ray) GetIntersect() *vec.V3 {
+// 	if ray.Intersect == nil {
+// 		panic("ray.intersect is nil - did you forget to probe the ray first?")
+// 	}
+// 	return ray.Intersect
+// }
 
 func New(origin, end *vec.V3) *Ray {
 	if origin.Equals(end) {
@@ -24,7 +24,7 @@ func New(origin, end *vec.V3) *Ray {
 	}
 	direction := end.Sub(origin)
 
-	return &Ray{Origin: origin, End: end, direction: direction, Intersect: nil}
+	return &Ray{Origin: origin, End: end, direction: direction, Intersect: &vec.V3{X: 0, Y: 0, Z: 0}}
 }
 
 // GetDirection returns the (not normalised) direction vector of the ray (end - origin)
@@ -37,7 +37,7 @@ func (ray *Ray) PointAt(p *vec.V3) {
 	ray.End = p
 
 	//ray.direction = ray.End.Sub(ray.Origin)
-	ray.direction.SubInto(ray.direction, ray.Origin)
+	ray.direction.SubInto(ray.End, ray.Origin)
 }
 
 // distanceFromLineSegment calculates the shortest distance from the ray to the line segment ab

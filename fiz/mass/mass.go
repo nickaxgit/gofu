@@ -1,6 +1,10 @@
 package mass
 
 import (
+	"fmt"
+	"math"
+
+	"github.com/nickax/gofu/colors"
 	"github.com/nickax/gofu/game/actuator"
 	"github.com/nickax/gofu/game/aero"
 	"github.com/nickax/gofu/game/msg"
@@ -8,7 +12,6 @@ import (
 	"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/terrain"
 	"github.com/nickax/gofu/vec"
-	"math"
 )
 
 //coins (which are masses) - can be pushed by other masses, or by the springs of things
@@ -59,12 +62,6 @@ func VectorsAsMsg(masses []*Mass) *msg.Msg {
 
 	msg := msg.NewMsg(msg.Vectors)
 
-	orange := uint8(6)
-	blue := uint8(1)
-	red := uint8(4)
-
-	magenta := uint8(5)
-
 	//NEED PAUSED
 
 	numVecs := 0
@@ -84,7 +81,7 @@ func VectorsAsMsg(masses []*Mass) *msg.Msg {
 	msg.Write(uint16(numVecs)) //number of vectors
 
 	for _, m := range masses {
-		m.WriteVectorsTo(msg, red, blue, orange, magenta)
+		m.WriteVectorsTo(msg)
 	}
 
 	return msg
@@ -146,12 +143,9 @@ func (m *Mass) SetIndex(i int32) {
 	m.Index = i
 }
 
-func New(masses []*Mass, index int32, p *vec.V3, r float64, fixed bool, isCoin bool, collideable bool, transFormOf *Mass) *Mass {
+func New(index int32, p *vec.V3, r float64, fixed bool, isCoin bool, collideable bool, transFormOf *Mass) *Mass {
 
-	if len(masses) != int(index) {
-		panic("mass index mismatch")
-	}
-	return &Mass{Index: int32(len(masses) - 1),
+	return &Mass{Index: index,
 		P: p, R: r, Fixed: fixed, IsCoin: isCoin,
 		Collideable: collideable,
 		Op:          p.Clone(),
@@ -177,13 +171,16 @@ func (m *Mass) overlaps(masses []*Mass) *Mass {
 func (m *Mass) WithinDistanceOf(p *vec.V3, tol float64) bool {
 	return m.P.DistanceFrom(p) <= tol
 }
-func NewFromMsg(masses []*Mass, msg *msg.Msg, withDetail byte) {
+func NewFromMsg(massesSoFar []*Mass, msg *msg.Msg, withDetail byte) *Mass {
 
 	var idx int32 = 0
 	msg.Read(&idx)
 
-	m := New(masses, idx, nil, 0, false, false, false, nil)
-	msg.Read(&m.P)
+	p := &vec.V3{}
+	msg.Read(p) //read the mass position (note p is a pointer)
+
+	m := New(idx, p, 0, false, false, false, nil)
+
 	m.Op = m.P.Clone() //todo serialise this to be able to save masses in motion
 	if withDetail != 0 {
 		r := float32(0)
@@ -197,16 +194,23 @@ func NewFromMsg(masses []*Mass, msg *msg.Msg, withDetail byte) {
 
 		//obsoltete mass selected
 		selected := false
-		msg.Read(&selected, &m.axi, &m.wri, &m.WingArea, &transformIdx, &m.Flip, &sec, &mab)
+		//msg.Read(&selected, &m.axi, &m.wri, &m.WingArea, &transformIdx, &m.Flip, &sec, &mab)
+		junk := int32(0)
+		//f32Junk := float32(0)
+		msg.Read(&selected, &m.axi, &m.wri) //, &f32Junk, &f32Junk, &f32Junk)
+
+		msg.Read(&junk)
+		msg.Read(&transformIdx, &m.Flip, &sec, &mab)
 
 		if transformIdx != -1 {
-			m.transformOf = masses[transformIdx]
+			m.transformOf = massesSoFar[transformIdx]
 		}
 
 		m.Section = float64(aero.Section(sec))
 		m.ActuatorTag = actuator.ActuatorEnum(mab)
 
 	}
+	return m
 }
 
 func (m *Mass) Fly(running bool) {
@@ -426,23 +430,23 @@ func (m *Mass) ResolvePenetration(depth float64, impact *vec.V3, surface *terrai
 	m.Op = m.P.Sub(vr)
 }
 
-func (m *Mass) WriteVectorsTo(msg *msg.Msg, red byte, blue byte, orange byte, magenta byte) {
+func (m *Mass) WriteVectorsTo(msg *msg.Msg) {
 
 	//velocity vector
 	pp := m.P.Sub((m.P.Sub(m.Op)).Multiply(10))
-	msg.Write(m.P, pp, magenta)
+	msg.Write(m.P, pp, colors.Magenta)
 
 	if m.Axle != nil {
 		//Axle/leading edge
 		quarter := m.P.Add(m.Axle.P.Sub(m.P).Multiply(0.25))
-		msg.Write(m.P, quarter, orange)
+		msg.Write(m.P, quarter, colors.Orange)
 	}
 
 	if m.lift != nil {
 
 		//trailing edge
 
-		msg.Write(m.P, m.WingRoot.P, blue)
+		msg.Write(m.P, m.WingRoot.P, colors.Blue)
 
 		if m.Axle != nil {
 			centreOfLift := m.P.Add(m.WingRoot.P).Add(m.Axle.P).Multiply(1.0 / 3.0)
@@ -451,7 +455,7 @@ func (m *Mass) WriteVectorsTo(msg *msg.Msg, red byte, blue byte, orange byte, ma
 				log.Logit("axle and wingroot are the same")
 			}
 			liftEnd := centreOfLift.Add(m.lift.Multiply(0.0001))
-			msg.Write(centreOfLift, liftEnd, red)
+			msg.Write(centreOfLift, liftEnd, colors.Red)
 
 		}
 
@@ -490,29 +494,34 @@ func (m *Mass) Delete(masses []*Mass) {
 	}
 }
 
-func MassesFromMsg(m *msg.Msg) []*Mass {
+func MassesFromMsg(message *msg.Msg) []*Mass {
 
-	if m.MsgType != msg.Masses {
+	if message.MsgType != msg.Masses {
 		panic("Masses are not next")
 	}
 
 	nm := uint32(0)
-	m.Read(&nm)
+	message.Read(&nm)
 
-	masses := make([]*Mass, nm)
+	massBatch := make([]*Mass, 0, nm)
 	withDetail := byte(0)
-	m.Read(&withDetail)
+	message.Read(&withDetail)
 
 	for i := 0; i < int(nm); i++ {
-		NewFromMsg(masses, m, withDetail) //creates them 'into' the mass slice
+		mass := NewFromMsg(massBatch, message, withDetail) //creates them 'into' the mass slice
+
+		massBatch = append(massBatch, mass)
+		if int(mass.Index) != i {
+			panic(fmt.Sprintf("mass index mismatch i:%v, mass.index:%v", i, mass.Index))
+		}
 	}
 
 	//now they're all here ..
-	for _, m := range masses {
-		m.ReReferenceIndices(masses) //sets Axles and wingRoots
+	for _, m := range massBatch {
+		m.ReReferenceIndices(massBatch) //sets Axles and wingRoots
 	}
 
-	return masses
+	return massBatch
 }
 
 func MassesAsMsg(masses []*Mass, withDetail bool, playerSelected map[*Mass]bool) *msg.Msg {
@@ -520,7 +529,7 @@ func MassesAsMsg(masses []*Mass, withDetail bool, playerSelected map[*Mass]bool)
 	msg := msg.NewMsg(msg.Masses, uint32(len(masses)), withDetail)
 
 	//send the masses
-	for _, mass := range masses {
+	for i, mass := range masses {
 		selected := byte(0)
 
 		present, isSelected := playerSelected[mass]
@@ -528,6 +537,9 @@ func MassesAsMsg(masses []*Mass, withDetail bool, playerSelected map[*Mass]bool)
 			selected = byte(1)
 		}
 
+		if i != int(mass.Index) {
+			panic(fmt.Sprintf("mass index mismatch i:%v, index:%v", i, mass.Index))
+		}
 		mass.WriteInto(msg, withDetail, selected) //writes the masses into one message
 
 	}

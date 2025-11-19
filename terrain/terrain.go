@@ -15,10 +15,10 @@ type TriMesh struct {
 
 	midpoints map[uint64]uint32 //compound key of the two endpoints of an edge, map contains the index of its midpoint vertex
 
-	size   float64   //+/- land size
-	kinks  []float64 //fractions of the land height to pull down by at each level
-	height float64   //+/- land height
-
+	size     float64   //+/- land size
+	kinks    []float64 //fractions of the land height to pull down by at each level
+	height   float64   //+/- land height
+	flooding bool      // for debug (concurrency check)
 }
 
 type fireInfo struct {
@@ -65,9 +65,9 @@ func (m *TriMesh) getNormals(asWater bool) []float32 {
 			}
 
 			vn := v.n.Normalise()
-			n[i*3] = float32(vn.GetX())
-			n[i*3+1] = float32(vn.GetY())
-			n[i*3+2] = float32(vn.GetZ())
+			n[i*3] = float32(vn.X)
+			n[i*3+1] = float32(vn.Y)
+			n[i*3+2] = float32(vn.Z)
 
 		} else {
 			log.Logit(v, " touches no tris")
@@ -91,8 +91,8 @@ func NewTriMesh(name string, maxFaces uint16, size float64, kinks []float64, hei
 	mesh.addVert(vec.NewVec3(size, 0, -size), 0, 0)
 	mesh.addVert(vec.NewVec3(-size, 0, -size), 0, 0)
 
-	root := newTri(nil, mesh, 0, 0, 1, 2)
-	return &TriMesh{name: name, Root: root, verts: []*vert{}, midpoints: make(map[uint64]uint32, maxFaces*3), size: size, kinks: kinks, height: height}
+	mesh.Root = newTri(nil, mesh, 0, 0, 1, 2) //make the root triangle
+	return mesh                               //&TriMesh{name: name, Root: root, verts: []*vert{}, midpoints: make(map[uint64]uint32, maxFaces*3), size: size, kinks: kinks, height: height}
 }
 
 func (m *TriMesh) midpoint(v1 uint32, v2 uint32) uint32 {
@@ -123,7 +123,7 @@ func (m *TriMesh) splitEdge(a, b uint32, dy float64, depth int) uint32 {
 
 	p := pa.Tween(pb, 0.5)
 
-	p.SetY(p.GetY() + dy)
+	p.Y += dy
 
 	//maintain a map of edges to midpoints
 	// key := uint32(a) + uint32(65536)*uint32(b)
@@ -145,7 +145,7 @@ func (m *TriMesh) splitEdge(a, b uint32, dy float64, depth int) uint32 {
 	// } else {
 
 	//for the first few levels of splitting, calculate UVs from altitude (so large scale features are consistent)
-	uvy := (p.GetY() + m.height) / (2 * m.height)
+	uvy := (p.Y + m.height) / (2 * m.height)
 	if depth > 6 {
 		//later splits, preserve ealier UVs (so fine geometry detail does not cause texture popping)
 		uvy = (m.verts[a].uv.GetY() + m.verts[b].uv.GetY()) / 2
@@ -235,7 +235,7 @@ func (m *TriMesh) getPositions(asWater bool) []float32 {
 	for i, j := range m.verts {
 
 		if asWater {
-			v := []float32{float32(j.p.GetX()), float32(j.wl), float32(j.p.GetZ())}
+			v := []float32{float32(j.p.X), float32(j.wl), float32(j.p.Z)}
 			p = append(p, v...)
 			p[i*3+1] = float32(j.wl) //y + j.wl*10) //water level * 10
 		} else {
@@ -250,7 +250,17 @@ func (m *TriMesh) getPositions(asWater bool) []float32 {
 // FloodAndDrain - adds the water surface meshes (to the msg)
 func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg) {
 
-	land.Root.shoreLines(waterlines) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
+	if land.flooding {
+		panic("concurrent flooding detected!")
+	}
+	defer func() { land.flooding = false }()
+	land.flooding = true
+
+	snapped := 0
+	land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
+
+	snapped = 0
+	land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
 
 	for i, wl := range waterlines {
 		land.flood(wl) //set the waterlevel of all land below this waterline
@@ -261,7 +271,7 @@ func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg) {
 				for _, v := range land.verts {
 					if v.wl > v.p.Y+300 {
 						count := 0
-						land.drain(v, wl, &count) //all deel lakes at this WL are drained to -1000000
+						land.drain(v, wl, &count) //all deep lakes at this WL are drained to -1000000
 
 						log.Logit("drained", count)
 						drained = true
@@ -276,32 +286,35 @@ func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg) {
 			}
 		}
 
-		funcIsUnderwater := func(t *Tri) bool { return t.IsUnderwater(.1) }
-		waterMesh := land.Root.ToSimpleMesh(uint16(4+i), land, nil, "water", true, funcIsUnderwater)
+		funcIsWater := func(t *Tri) bool { return t.OnOrUnderWater() }
+		waterMesh := land.Root.ToSimpleMesh(uint16(4+i), land, nil, "water", true, funcIsWater)
 
+		log.Logit("water mesh at wl", wl, " has ", waterMesh.FaceCount(), " faces and ", waterMesh.VertCount(), " verts")
 		waterMesh.WriteTo(response, 1)
 
 	}
 
 }
 
-func (tri *Tri) shoreLines(levels []float64) {
+func (t *Tri) shoreLines(levels []float64, snapped *int) {
 	//snap the lowest vert of triangles spanning the waterline(s) to the waterline
 	//note verts are pointers to vecs
-	if len(tri.children) == 0 {
 
-		yl, yh := tri.getYLowHigh()
+	if len(t.children) == 0 {
+
+		yl, yh := t.getYLowHigh()
 
 		for _, wl := range levels {
-			if yl.GetY() < wl && yh.GetY() > wl {
-				yl.SetY(wl)
+			if yl.Y < wl && yh.Y > wl {
+				yl.Y = wl
+				*snapped++
 				break
 			}
 		}
 
 	} else {
-		for _, c := range tri.children {
-			c.shoreLines(levels)
+		for _, c := range t.children {
+			c.shoreLines(levels, snapped)
 		}
 	}
 
@@ -309,7 +322,7 @@ func (tri *Tri) shoreLines(levels []float64) {
 
 func (m *TriMesh) flood(wl float64) {
 	for _, v := range m.verts {
-		if v.p.GetY() <= wl {
+		if v.p.Y <= wl {
 			v.wl = wl
 
 		} else {
@@ -370,7 +383,7 @@ func flow(a *vert, b *vert) {
 
 	//amount := diff  * rate
 
-	if a.wl > a.p.GetY() || b.wl > b.p.GetY() {
+	if a.wl > a.p.Y || b.wl > b.p.Y {
 		diff := a.wl - b.wl //uses the absolute water level
 		if diff < 0 {
 			diff = -diff

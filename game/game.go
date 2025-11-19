@@ -5,11 +5,13 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"github.com/nickax/gofu/errorplus"
 	"github.com/nickax/gofu/fiz/mass"
 	"github.com/nickax/gofu/fiz/thing"
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/game/sound"
 	"github.com/nickax/gofu/log"
+	//"github.com/nickax/gofu/persist"
 	"github.com/nickax/gofu/terrain"
 	"github.com/nickax/gofu/vec"
 	"io"
@@ -47,7 +49,7 @@ func New(id uint32, name string) *Game {
 	//create a new game
 
 	landSize := 10000.0
-	landHeight := 600.0
+	landHeight := 400.0
 	kinks := []float64{1.0, 0.8, 1.0, 0.5, 0.25, 0.125, 1.0 / 16, 1.0 / 32, 1.0 / 64, 1.0 / 128, 1.0 / 256, 1.0 / 512, 1.0 / 1024, 1.0 / 2048, 1.0 / 4096, 1.0 / 8192} //, 1.0 / 16384} //, 1.0 / 32768, 1.0 / 65536} //how much to pull down the midpoint at each level of recursion
 
 	game := &Game{
@@ -71,7 +73,7 @@ func New(id uint32, name string) *Game {
 	return game
 }
 
-var games map[uint32]*Game = map[uint32]*Game{0: None} //all games by id
+var games map[uint32]*Game = map[uint32]*Game{} // DONT put the sentinels in the map 0: None} //all games by id
 
 func Get(id uint32) *Game {
 	mutex.RLock()
@@ -83,14 +85,20 @@ func Get(id uint32) *Game {
 	return g
 }
 
+func Set(g *Game) {
+	mutex.Lock()
+	games[g.Id] = g
+	mutex.Unlock()
+}
+
 func AllRunning() []*Game {
 	mutex.RLock()
 	defer mutex.RUnlock()
 	result := make([]*Game, 0)
 	for _, g := range games {
-		if g.Running {
-			result = append(result, g)
-		}
+		//if g.Running {
+		result = append(result, g)
+		//}
 	}
 	return result
 }
@@ -138,7 +146,7 @@ func (game *Game) Save(filename string, selectedMasses map[*mass.Mass]bool) {
 
 	//writer.Write(landToBytes(s))                                 //write land size and kinks
 	writer.Write(mass.MassesAsMsg(game.Masses, true, selectedMasses).AllBytes()) //write all masses, with detail
-	writer.Write(thing.ThingsAsMsg(game.Things).AllBytes())                      //write all things (springs, meshnames, offsets, scales, rotations)
+	writer.Write(thing.ThingsAsMsg(game.Things, true).AllBytes())                //write all things (springs, meshnames, offsets, scales, rotations)
 
 	writer.Flush()
 
@@ -170,24 +178,6 @@ func landToBytes(s *Game) []byte {
 	return buff.Bytes()
 }
 
-// func (game *State) SeceneStart(player *player.Player, viewer *viewer.Viewer) []*msg.Msg {
-// 	viewer.Send(plant.GrowTree().ToMsg(200)) //prep for 200 instance meshed trees (there will be many more billboarded)
-// 	viewer.Send(player.Grid.AsMsg())
-// 	viewer.SendCamera() //sends *their* camera to them
-// 	viewer.Send(player.Grid.AsMsg())
-
-// 	viewer.SendMasses(game.Masses, true, player.selectedMasses)
-// 	viewer.Send(thing.ThingsAsMsg(game.Things)) //[]*thing.Thing{p.vehicle}) //sends mesh name and springs
-
-// 	viewer.SendLabelSets()
-
-// 	viewer.SendVectors(game)
-// 	viewer.SendCentreOfMass(viewer.currentThing)
-
-// 	viewer.Notify("Loaded", "info")
-// 	viewer.SendGameId(gameId) //game id starts it running
-// }
-
 func Load(filename string) *Game {
 
 	file, err := os.Open(filename + ".bin")
@@ -203,15 +193,11 @@ func Load(filename string) *Game {
 		log.Logit(err.Error())
 	}
 
+	state := New(1, filename)
 	m := msg.NewFromBytes(allBytes) //beware sets message type from first byte
 
-	masses := mass.MassesFromMsg(m)
-	things := thing.ThingsFromMsg(m, masses)
-	//players := player.PlayersFromBuff(buff, filename, things)
-
-	state := New(1, filename)
-	state.Masses = masses
-	state.Things = things
+	state.Masses = mass.MassesFromMsg(m)
+	state.Things = thing.ThingsFromMsg(m, state.Masses)
 
 	//fix up wing areas on loading
 	for _, m := range state.Masses {
@@ -383,6 +369,11 @@ func (game *Game) MoveAll(substeps int, lands []*terrain.Tri) *msg.Msg {
 
 		}
 
+		//it's very importnat we only write the terminator once!
+		if substep == 0 {
+			activity.Write(uint16(65535))
+		} //terminator (index)}
+
 		game.RunEngines(activity) //places thrust on some springs
 		game.FlyMasses()
 
@@ -439,4 +430,11 @@ func (game *Game) resolveMassOverlaps() {
 			}
 		}
 	}
+}
+
+func (g *Game) Persist() *errorplus.Event {
+
+	//gameMsg := msg.NewMsg(msg.P_Game)
+	//g.WriteTo(gameMsg)
+	return nil //persist.Append("repo.bin", gameMsg)
 }

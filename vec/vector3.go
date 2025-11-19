@@ -17,30 +17,30 @@ type V3 struct {
 	Z float64
 }
 
-func (p *V3) GetY() float64 {
-	return p.Y
-}
-func (p *V3) GetX() float64 {
-	return p.X
-}
+// func (p *V3) GetY() float64 {
+// 	return p.Y
+// }
+// func (p *V3) GetX() float64 {
+// 	return p.X
+// }
 
-func (p *V3) GetZ() float64 {
-	return p.Z
-}
+// func (p *V3) GetZ() float64 {
+// 	return p.Z
+// }
 
-func (p *V3) SetX(x float64) *V3 {
-	p.X = x
-	return p //allows method chaining
-}
+// func (p *V3) SetX(x float64) *V3 {
+// 	p.X = x
+// 	return p //allows method chaining
+// }
 
-func (p *V3) SetZ(z float64) *V3 {
-	p.Z = z
-	return p //allows method chaining
-}
-func (p *V3) SetY(y float64) *V3 {
-	p.Y = y
-	return p //allows method chaining
-}
+// func (p *V3) SetZ(z float64) *V3 {
+// 	p.Z = z
+// 	return p //allows method chaining
+// }
+// func (p *V3) SetY(y float64) *V3 {
+// 	p.Y = y
+// 	return p //allows method chaining
+// }
 
 func (p *V3) AsFloat32s() []float32 {
 	return []float32{float32(p.X), float32(p.Y), float32(p.Z)}
@@ -288,10 +288,17 @@ func (a *V3) Dot(b *V3) float64 {
 }
 
 func (a *V3) Cross(b *V3) *V3 {
-	if (a.Length() == 0) || (b.Length() == 0) {
-		panic("can't cross 0 vector")
-	}
+
 	return &V3{a.Y*b.Z - a.Z*b.Y, a.Z*b.X - a.X*b.Z, a.X*b.Y - a.Y*b.X}
+}
+
+func (d *V3) CrossInto(a, b *V3) *V3 {
+
+	d.X = a.Y*b.Z - a.Z*b.Y
+	d.Y = a.Z*b.X - a.X*b.Z
+	d.Z = a.X*b.Y - a.Y*b.X
+
+	return d
 }
 
 func (p *V3) SignedDistanceFromLineSegment(a, b, n *V3) float64 {
@@ -363,14 +370,15 @@ func (p *V3) LiesBetween(a *V3, b *V3) bool {
 		panic("a and b are the same point")
 	}
 	if p.Equals(a) || p.Equals(b) {
-		return false //if the point is at an endpoint, it doesn't lie *between* the endpoints
+		return true //if the point is at an endpoint, it doesn't lie *between* the endpoints
 	}
 
 	v1 := p.Sub(a) //vector from a to p
 	v2 := p.Sub(b) //vector from a to p
 
 	//if the dot product is negative, then the vectors (from the point to the endpoints) are pointing in opposite directions - and the point lies between A-B
-	return v1.Dot(v2) < 0 //the edge case is 0 when p is at an endpoint (dealt with above)
+	dp := v1.Dot(v2)
+	return dp <= 0.00001 //the edge case is 0 when p is at an endpoint (dealt with above)
 
 }
 

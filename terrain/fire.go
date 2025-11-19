@@ -17,11 +17,11 @@ func (fm *TriMesh) Ignite(firePos *vec.V3) {
 		if len(result.children) > 0 {
 			log.Logit("Igniting a non-leaf triangle at depth", result.Depth)
 		}
-		if result.fireInfo == nil {
-			result.fireInfo = &fireInfo{}
+		if result.FireInfo == nil {
+			result.FireInfo = &fireInfo{}
 		}
-		if result.fireInfo.flames == 0 {
-			result.fireInfo.flames = 1
+		if result.FireInfo.flames == 0 {
+			result.FireInfo.flames = 1
 		}
 
 	}
@@ -29,7 +29,13 @@ func (fm *TriMesh) Ignite(firePos *vec.V3) {
 
 func (fm *TriMesh) Burn(ft *Tri) int {
 
-	fi := ft.fireInfo
+	fi := ft.FireInfo
+
+	if fi == nil {
+		//log.Logit("no fire")
+		return 0
+	}
+
 	if fi.flames > 0 {
 		fi.flames++
 		if fi.flames > int(fi.sparkAt) && fi.flames < int(fi.sparkAt)+10 {
@@ -50,20 +56,20 @@ func (fm *TriMesh) Burn(ft *Tri) int {
 // recurse from fTri to find all triangles with flames, insert them (as billboards) into the simpleMesh
 func (tri *Tri) GetFlames(lt *Tri, fm *TriMesh, intoMesh *mesh.SimpleMesh, cam *cam.Camera, tcs *mesh.Tcs) int {
 
-	if tri.fireInfo.flames > 0 { //fTri.allBLTsAlight() { //fTri.flames > 0 {
+	if tri.FireInfo.flames > 0 { //fTri.allBLTsAlight() { //fTri.flames > 0 {
 
-		if tri.fireInfo.landDepth < 10 { //sampling at level 12 is 'good enough' for flame base
+		if tri.FireInfo.landDepth < 10 { //sampling at level 12 is 'good enough' for flame base
 			p, t := lt.VprobeLand(tri.centre) //TODO - do once and cache - also normal (for slope)
 			if t.Depth < 8 {
 				return 0
 			} //it's either very far away, or behind the camera
 
-			if t.Depth > tri.fireInfo.landDepth {
-				tri.fireInfo.y = p.Y //we have a better observation (of the land height) - update the flame base height
+			if t.Depth > tri.FireInfo.landDepth {
+				tri.FireInfo.y = p.Y //we have a better observation (of the land height) - update the flame base height
 				tri.Normal = t.Normal
 			}
-			if t.IsUnderwater(0) {
-				tri.fireInfo.flames = -1 //extinguish the flame
+			if t.OnOrUnderWater() {
+				tri.FireInfo.flames = -1 //extinguish the flame
 				return 0
 			} //flames under water do not burn
 
@@ -71,7 +77,7 @@ func (tri *Tri) GetFlames(lt *Tri, fm *TriMesh, intoMesh *mesh.SimpleMesh, cam *
 
 		//careful not to mutate the ftri centre
 		base := tri.centre.Clone()
-		base.Y = tri.fireInfo.y
+		base.Y = tri.FireInfo.y
 
 		intoMesh.Billboard(base, vec.Up, cam.Position, 4, 0, 8, 3, tcs) //triangular flame
 		return 1
@@ -86,25 +92,31 @@ func (tri *Tri) GetFlames(lt *Tri, fm *TriMesh, intoMesh *mesh.SimpleMesh, cam *
 
 }
 
-func (tri *Tri) contains2D(firePos *vec.V3) bool {
-	//checks whether the x/z of firePos is inside this triangle
-	if tri.flat == nil {
-		tri.flat = newFlatTrianglePoly(tri)
-	}
-	if firePos.GetY() != 0 {
-		panic("contains2D called with non zero y")
-	}
-	return tri.flat.Contains(firePos)
-}
+// func (tri *Tri) contains2D(firePos *vec.V3) bool {
+// 	//checks whether the x/z of firePos is inside this triangle
+// 	if tri.flat == nil {
+// 		tri.flat = newFlatTrianglePoly(tri)
+// 	}
+// 	if firePos.GetY() != 0 {
+// 		panic("contains2D called with non zero y")
+// 	}
+// 	return tri.flat.Contains(firePos)
+// }
 
 func (fm *TriMesh) scorchedAt(p *vec.V3) bool {
 
-	leaf := fm.Root.find(p) //once leafs have burned out - they can be retracted into a single scorched parent
+	leaf := fm.Root.find2D(p) //once leafs have burned out - they can be retracted into a single scorched parent
 
 	if leaf == nil {
 		return false //no leaf node here
 	}
-	fi := leaf.fireInfo
+
+	//TODO - why do we need this ?
+	if leaf.FireInfo == nil {
+		return false
+	}
+
+	fi := leaf.FireInfo
 	if fi.flames == -1 || fi.flames > 10 {
 		return true
 	}
@@ -112,21 +124,21 @@ func (fm *TriMesh) scorchedAt(p *vec.V3) bool {
 	return false
 }
 
-func (tri *Tri) splitUntil(fm *TriMesh, firePos *vec.V3, maxDepth int) *Tri {
+func (t *Tri) splitUntil(fm *TriMesh, firePos *vec.V3, maxDepth int) *Tri {
 	//recursively split triangles until the firePos is contained in a triangle at maxDepth
 
-	if tri.contains2D(firePos) {
-		if tri.Depth == maxDepth {
-			return tri
+	if t.contains2D(firePos) {
+		if t.Depth == maxDepth {
+			return t
 		}
 
 		//split only if necessary
-		if len(tri.children) == 0 {
-			tri.split()
+		if len(t.children) == 0 {
+			t.split()
 		}
 
 		miss := 0
-		for _, c := range tri.children {
+		for _, c := range t.children {
 			res := c.splitUntil(fm, firePos, maxDepth)
 			if res != nil {
 				return res

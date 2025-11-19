@@ -132,13 +132,13 @@ func (seg *segment) grow(age float64, sprouts *int, depth int) {
 
 			sproutYaxis := yAxis.RotateAbout(xAxis, bud.turn) //elevation
 			//sproutYAxis = yAxis.rotateAbout(seg.xAxis, droop)
-			droopedAxis := up.RotateAbout(vec.NewVec3(xAxis.GetX(), 0, xAxis.GetZ()).Normalise(), sproutType.droopTo) //the 'natural' droop angle for this leaf
+			droopedAxis := up.RotateAbout(vec.NewVec3(xAxis.X, 0, xAxis.Z).Normalise(), sproutType.droopTo) //the 'natural' droop angle for this leaf
 
 			sproutYaxis = sproutYaxis.Tween(droopedAxis, sproutType.droopStrength) //tend towrds the droop angle
 			//sproutYAxis = sproutYAxis.rotateAbout(seg.yAxis, rotation+(rand.Float64()-.5)/10).normalise()
 			//sproutXAxis := seg.xAxis.rotateAbout(seg.yAxis, rotation+bud.twist+(rand.Float64()-.5)/5).normalise()
 
-			xAxis.SetY(xAxis.GetY() * sproutType.twistsFlat) //tend to twist the leaves flat
+			xAxis.Y *= sproutType.twistsFlat //tend to twist the leaves flat
 			xAxis = xAxis.Normalise()
 
 			lad := sproutType.lengthAtDay.GetY(budAge)

@@ -5,6 +5,8 @@ import (
 
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/plane"
+	"github.com/nickax/gofu/poly"
+	"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/vec"
 )
 
@@ -66,9 +68,38 @@ func tests() {
 
 	testFloat("Cross product orthogonal", func() float64 { return a.Cross(b).Dot(a) }, 0, "cross product not orthogonal")
 
-	p1 := plane.NewFromNormalAndPoint(vec.NewVec3(0, 0, 0), vec.Up)
+	p1 := plane.NewFromNormalAndPoint(vec.Up, vec.NewVec3(0, 0, 0))
 	somePoint := vec.NewVec3(0, 10, 0)
 	testFloat("Plane distance from point (on plane)", func() float64 { return p1.DistanceFrom(somePoint) }, 10, "plane (point on plane) distance wrong")
+
+	testBool("Poly probe", func() bool {
+		poly := poly.NewConvexPoly()
+		poly.AddPointAt(0, -1, 10)
+		poly.AddPointAt(10, 2, 0)
+		poly.AddPointAt(-10, 3, 0)
+		ray := ray.New(vec.NewVec3(-10, 1000, 0), vec.NewVec3(-10, -1000, 0)) //fire a vertical ray through a vertex
+		return poly.Probe(ray)
+
+	}, true, "poly vertex probe failed")
+
+	testBool("Poly probe", func() bool {
+		poly := poly.NewConvexPoly()
+		poly.AddPointAt(0, -1, 10)
+		poly.AddPointAt(10, 2, 0)
+		poly.AddPointAt(-10, 3, 0)
+		ray := ray.New(vec.NewVec3(-11, 1000, 0), vec.NewVec3(-10, -1000, 0))
+		return poly.Probe(ray)
+
+	}, false, "poly extended edge vertex probe failed (should be outside)")
+
+	testBool("Poly contains2D - 2", func() bool {
+		ray := ray.New(vec.NewVec3(-14, 10000, 14), vec.NewVec3(-14, -10000, 14))
+		poly := poly.NewConvexPoly()
+		poly.AddPointAt(-20, 1762, 39)
+		poly.AddPointAt(0, 1762, 0)
+		poly.AddPointAt(-39, 1762, 0)
+		return poly.Probe(ray)
+	}, true, "Should be inside")
 
 	//logit(len(facePens.pens))
 
