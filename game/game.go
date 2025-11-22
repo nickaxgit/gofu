@@ -369,7 +369,7 @@ func (game *Game) MoveAll(substeps int, lands []*terrain.Tri) *msg.Msg {
 
 		}
 
-		//it's very importnat we only write the terminator once!
+		//it's very important we only write the terminator once!
 		if substep == 0 {
 			activity.Write(uint16(65535))
 		} //terminator (index)}

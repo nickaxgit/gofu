@@ -39,7 +39,7 @@ func (game *Game) GetTreesFor(root *terrain.Tri, camPos *vec.V3, camDir *vec.V3,
 }
 
 // Makeland - generates lands,scorched land, water and trees for the given camera position and direction (into Message)
-func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3, response *msg.Msg) (groundPosition *vec.V3, GroundTri *terrain.Tri) {
+func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3, response *msg.Msg) *terrain.TriMesh {
 
 	land := terrain.NewTriMesh("land", 65000, game.landSize, game.kinks, game.landHeight)
 	ts := time.Now()
@@ -77,20 +77,24 @@ func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3, response *msg.Msg) (g
 	land.Root.MakePrisms() //we want to construct volumes once for each triangle - not repeatedly during occlusion culling
 	log.Logit("made prisms took", time.Since(ts).Milliseconds(), "ms")
 
-	culled, kept := 0, 0
 	ts = time.Now()
-	land.Root.OccludeVerts(camPos) //TODO- only occlude verts in view frustum
-	log.Logit("occlude verts took", time.Since(ts).Milliseconds(), "ms")
+	land.Root.Occlude(camPos)
+	log.Logit("occlude took", time.Since(ts).Milliseconds(), "ms")
 
-	ts = time.Now()
-	land.Root.OcclusionCull(&culled, &kept)
-	log.Logit("occlusion cull took", time.Since(ts).Milliseconds(), "ms")
+	// culled, kept := 0, 0
+	// ts = time.Now()
+	// land.Root.OccludeVerts(camPos) //TODO- only occlude verts in view frustum
+	// log.Logit("occlude verts took", time.Since(ts).Milliseconds(), "ms")
 
-	log.Logit("culled:", culled, " kept:", kept, " tris")
+	// ts = time.Now()
+	// land.Root.OcclusionCull(&culled, &kept)
+	// log.Logit("occlusion cull took", time.Since(ts).Milliseconds(), "ms")
+
+	//	log.Logit("culled:", culled, " kept:", kept, " tris")
 
 	//patch convert and send
 
-	groundPosition, groundTriangle := land.Root.VprobeLand(camPos)
+	//groundPosition, groundTriangle := land.Root.VprobeLand(camPos)
 
 	// game.runwayStart, _ = land.Root.VprobeLand(game.runwayStart)
 	// game.runwayEnd.Y = (game.runwayStart.Y) //keep the runway level with the start point
@@ -127,13 +131,15 @@ func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3, response *msg.Msg) (g
 	log.Logit("splitting took", time.Since(ts).Milliseconds())
 	//}
 
-	waterlines := []float64{game.landHeight * 0.71, game.landHeight * 0.41, 0.1, -game.landHeight * 0.52}
+	//	waterlines := []float64{game.landHeight * 0.71, game.landHeight * 0.41, 0.1, -game.landHeight * 0.52}
 
 	//makes the water surface mesh messages - one for each waterline, into the message
-	land.FloodAndDrain(waterlines, response)
+	//land.FloodAndDrain(waterlines, response)
+	land.Flood(-1000)
 
 	//runwayMesh.WriteTo(message, 1)
 
+	//if t.Culled || t.Scorched || t.OnOrUnderWater() {
 	isLand := func(t *terrain.Tri) bool {
 
 		if t.Culled || t.Scorched || t.OnOrUnderWater() {
@@ -153,11 +159,11 @@ func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3, response *msg.Msg) (g
 	log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
 
 	///scorchedLand := land.Root.ToSimpleMesh(56, land, game.fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
-	wireframe := land.Root.ToSimpleMesh(32, land, game.fire, "whiteWires", false, isLand)
+	//wireframe := land.Root.ToSimpleMesh(32, land, game.fire, "whiteWires", false, isLand)
 
 	smallLandMesh.WriteTo(response, 1)
 	///scorchedLand.WriteTo(message, 1)
-	wireframe.WriteTo(response, 1)
+	//wireframe.WriteTo(response, 1)
 
-	return groundPosition, groundTriangle
+	return land
 }

@@ -1,9 +1,10 @@
 package plane
 
 import (
+	"math"
+
 	"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/vec"
-	"math"
 )
 
 type Plane struct {
@@ -48,11 +49,16 @@ func (plane *Plane) ClosestPointOnPlane(p *vec.V3) *vec.V3 {
 func (plane *Plane) ProbeLine(ray *ray.Ray) bool {
 
 	denom := plane.normal.Dot(ray.GetDirection())
-	if math.Abs(denom) < 1e-9 {
+	if denom > 1e6 {
+		return false //ray could only peirce backface
+	}
+
+	if math.Abs(denom) < 1e-9 { //ray glancing the plane - DBZ - intersect would be at infinity
 		return false
 	}
 
 	t := (plane.distance - plane.normal.Dot(ray.Origin)) / denom
+
 	if t < 0 || t > 1 {
 		return false
 	}

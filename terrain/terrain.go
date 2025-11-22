@@ -87,9 +87,10 @@ func NewTriMesh(name string, maxFaces uint16, size float64, kinks []float64, hei
 	//return &landMesh{name: name, verts: []*vert{}, fi: fis, midpoints: make(map[uint64]uint32, 0), splits: splits, height: height, size: size, kinks: kinks}
 	verts := make([]*vert, 0, 65000) //clear the verts
 	mesh := &TriMesh{name: name, verts: verts, midpoints: make(map[uint64]uint32, maxFaces*3), size: size, kinks: kinks, height: height}
-	mesh.addVert(vec.NewVec3(0, 0, size), 0, 0) //the height of the first vertex is the initial seed for the entire land
-	mesh.addVert(vec.NewVec3(size, 0, -size), 0, 0)
-	mesh.addVert(vec.NewVec3(-size, 0, -size), 0, 0)
+
+	mesh.addVert(vec.NewVec3(size, 0, -size), 0, 0)  //near right
+	mesh.addVert(vec.NewVec3(-size, 0, -size), 0, 0) //near left
+	mesh.addVert(vec.NewVec3(0, 0, size), 0, 0)      //far, far away
 
 	mesh.Root = newTri(nil, mesh, 0, 0, 1, 2) //make the root triangle
 	return mesh                               //&TriMesh{name: name, Root: root, verts: []*vert{}, midpoints: make(map[uint64]uint32, maxFaces*3), size: size, kinks: kinks, height: height}
@@ -263,7 +264,7 @@ func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg) {
 	land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
 
 	for i, wl := range waterlines {
-		land.flood(wl) //set the waterlevel of all land below this waterline
+		land.Flood(wl) //set the waterlevel of all land below this waterline
 
 		if i != len(waterlines)-1 {
 			for lake := 0; lake < 10; lake++ {
@@ -320,7 +321,7 @@ func (t *Tri) shoreLines(levels []float64, snapped *int) {
 
 }
 
-func (m *TriMesh) flood(wl float64) {
+func (m *TriMesh) Flood(wl float64) {
 	for _, v := range m.verts {
 		if v.p.Y <= wl {
 			v.wl = wl

@@ -174,19 +174,6 @@ func (spring *Spring) WriteTo(msg *msg.Msg) {
 
 }
 
-// func lineSegmentsCross(a1 *vec2, a2 *vec2, b1 *vec2, b2 *vec2) bool {
-
-// 	//returns true if the lines a1-a2 and b1-b2 cross
-// 	d := (a2.x-a1.x)*(b2.y-b1.y) - (a2.y-a1.y)*(b2.x-b1.x)
-// 	if d == 0 {
-// 		return false
-// 	} //lines are parallel
-// 	u := ((b1.x-a1.x)*(b2.y-b1.y) - (b1.y-a1.y)*(b2.x-b1.x)) / d
-// 	v := ((b1.x-a1.x)*(a2.y-a1.y) - (b1.y-a1.y)*(a2.x-a1.x)) / d
-// 	return (u >= 0 && u <= 1 && v >= 0 && v <= 1)
-
-// }
-
 func ClosestSpringToRay(springs []*Spring, ray *ray.Ray) (*Spring, float64) {
 
 	closestDistance := float64(1000)

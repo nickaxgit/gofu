@@ -62,27 +62,12 @@ func VectorsAsMsg(masses []*Mass) *msg.Msg {
 
 	msg := msg.NewMsg(msg.Vectors)
 
-	//NEED PAUSED
-
-	numVecs := 0
-	for _, m := range masses {
-		numVecs++
-		if m.Axle != nil {
-			numVecs++
-		}
-		if m.lift != nil {
-			numVecs++
-			if m.Axle != nil {
-				numVecs++
-			}
-		}
-	}
-
-	msg.Write(uint16(numVecs)) //number of vectors
-
 	for _, m := range masses {
 		m.WriteVectorsTo(msg)
 	}
+
+	terminator := float32(1e38)
+	msg.Write(terminator, terminator, terminator) //Terminator for vectors
 
 	return msg
 

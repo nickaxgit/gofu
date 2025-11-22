@@ -63,7 +63,7 @@ type Device struct {
 	highlit      highlitType
 	currentThing *thing.Thing
 	mode         ModeEnum
-	landTri      *terrain.Tri //terrain is generated JIT for each viewer
+	LandTri      *terrain.Tri //terrain is generated JIT for each viewer
 	Grid         *grid.Grid
 
 	gridPos      *vec.V3
@@ -127,7 +127,7 @@ func ViewersOf(game *game.Game) (viewers []*Device, landRoots []*terrain.Tri) {
 		if d.ViewingPlayer != player.None {
 			if d.ViewingPlayer.Game == game {
 				current = append(current, d)
-				lands = append(lands, d.GetLandRoot())
+				lands = append(lands, d.LandTri)
 			}
 		}
 	}
@@ -355,7 +355,7 @@ func (dev *Device) GetFlames(fire *terrain.TriMesh, message *msg.Msg) {
 	flameMesh := mesh.New(201, "flame", 10000, 30000) //10k faces, 30k verts
 
 	//adds a flame billboard to the flamemesh for every (bespoke) view triangle that sits on on globally burning triangle
-	fire.Root.GetFlames(dev.landTri, fire, flameMesh, dev.Camera, tcs)
+	fire.Root.GetFlames(dev.LandTri, fire, flameMesh, dev.Camera, tcs)
 
 	flameMesh.WriteTo(message, 1)
 
@@ -367,10 +367,6 @@ func (dev *Device) SendCamera() {
 	dev.Camera.WriteTo(msg)
 	dev.Send(msg)
 
-}
-
-func (dev *Device) GetLandRoot() *terrain.Tri {
-	return dev.landTri
 }
 
 func (dev *Device) highlightMass(nm *mass.Mass) {
@@ -872,8 +868,33 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 
 		dev.buttons = byte(ibm.Payload[0])
 		dev.Camera.FarPos = vec.NewVec3(ibm.Payload[1], ibm.Payload[2], ibm.Payload[3])
+
+		deltaX := (dev.cursor.X - ibm.Payload[4]) * 1000 //cursor uintt are normalised -1 to +1
+		deltaY := (dev.cursor.Y - ibm.Payload[5]) * 1000
+		delta := math.Sqrt(deltaX*deltaX + deltaY*deltaY)
+
 		dev.cursor.X = ibm.Payload[4]
 		dev.cursor.Y = ibm.Payload[5]
+
+		//find and highlight the deepest leaf triangle
+		if delta > 2 {
+			stats := terrain.NewProbeStats()
+			ray := ray.New(dev.Camera.Position, dev.Camera.FarPos)
+
+			if dev.LandTri != nil {
+				dev.LandTri.ProbeAll(ray, stats)
+				//	log.Logit(stats.String())
+
+				if stats.NearestTri != nil {
+					msg := stats.NearestTri.EdgesAsMsg()
+					stats.NearestTri.PrismEdges(msg) //show the prism Hierarchy
+					terminator := float32(1e38)
+					msg.Write(terminator, terminator, terminator) //Terminator for vectors
+
+					dev.Send(msg)
+				}
+			}
+		}
 
 		dev.processMouseMove(gm) //*isRunning, masses, things)
 
@@ -1752,6 +1773,8 @@ func (dev *Device) startIn(game *game.Game) {
 
 	dev.ViewingPlayer = dev.Owner
 	dev.ViewingPlayer.Game = game
+
+	dev.Camera.Position.Y += 1000
 
 	dev.SendCamera()             //send the camera position
 	dev.sendSpheres(game.Masses) //send all the masses

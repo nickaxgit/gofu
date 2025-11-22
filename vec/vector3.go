@@ -67,7 +67,8 @@ func (dst *V3) Set(x, y, z float64) *V3 {
 	return dst
 }
 
-// AddInto mutates dst to be the sum of the components
+// AddInto mutates dst to ADD the sum of all the components
+// BE AWARE any value already in the dst is added to - you will often want to start with a zero vector
 func (dst *V3) AddInto(components ...*V3) *V3 {
 	// dst = a + b
 	for _, b := range components {
@@ -89,13 +90,13 @@ func (dst *V3) SubInto(a, b *V3) *V3 {
 }
 
 // MulInto mutates dst to be a*s
-func (dst *V3) MulInto(a *V3, s float64) *V3 {
-	// dst = a * s
-	dst.X = a.X * s
-	dst.Y = a.Y * s
-	dst.Z = a.Z * s
-	return dst
-}
+// func (dst *V3) MulInto(a *V3, s float64) *V3 {
+// 	// dst = a * s
+// 	dst.X = a.X * s
+// 	dst.Y = a.Y * s
+// 	dst.Z = a.Z * s
+// 	return dst
+// }
 
 // distanceBetweenLines returns the shortest distance between two lines (not line segments)
 func DistanceBetweenLines(a1, a2, b1, b2 *V3) float64 {
@@ -169,6 +170,20 @@ func (a *V3) AddIn(b *V3) {
 	a.Z += b.Z
 }
 
+func (a *V3) MulIn(f float64) {
+	a.X *= f
+	a.Y *= f
+	a.Z *= f
+}
+
+func (a *V3) DivIn(f float64) { //helper for Mulin
+
+	f = 1 / f
+	a.X *= f
+	a.Y *= f
+	a.Z *= f
+}
+
 func (a *V3) SubIn(b *V3) {
 	a.X -= b.X
 	a.Y -= b.Y
@@ -235,7 +250,9 @@ func (a *V3) Normalise() *V3 {
 		panic("can't normalise 0 vector")
 		//return a
 	}
-	return &V3{X: a.X / l, Y: a.Y / l, Z: a.Z / l}
+
+	reciprocal := 1.0 / l //three multiplications is faster than one division
+	return &V3{X: a.X * reciprocal, Y: a.Y * reciprocal, Z: a.Z * reciprocal}
 }
 
 // func (p *V3) FromByteBuffer(buff *bytes.Buffer) {
@@ -257,10 +274,14 @@ func (a *V3) Equals(b *V3) bool {
 	if a == b {
 		return true //these are two referrences to the same object
 	}
-	if a.X == b.X && a.Y == b.Y && a.Z == b.Z {
+	const epsilon = 0.00001
+	if math.Abs(a.X-b.X) < epsilon &&
+		math.Abs(a.Y-b.Y) < epsilon &&
+		math.Abs(a.Z-b.Z) < epsilon {
 		return true
 	}
 	return false
+
 }
 
 func (a *V3) AlmostEquals(b *V3) bool {

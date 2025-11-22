@@ -63,7 +63,7 @@ func StepWorldsForever() {
 
 					message := msg.Empty()
 					//use copies of the camera position/direction (as camera is potentially mutated on the main thread)
-					game.MakeLand(viewer.Camera.Position.Clone(), viewer.Camera.Direction.Clone(), message)
+					viewer.LandTri = game.MakeLand(viewer.Camera.Position.Clone(), viewer.Camera.Direction.Clone(), message).Root
 					viewer.Send(message)
 					//}()
 				}

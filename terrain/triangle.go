@@ -1,6 +1,8 @@
 package terrain
 
 import (
+	"github.com/nickax/gofu/colors"
+	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/mesh"
 	"github.com/nickax/gofu/poly"
@@ -8,8 +10,10 @@ import (
 	"github.com/nickax/gofu/vec"
 	//"github.com/nickax/gofu/cam"
 
+	"fmt"
 	"math"
 	"math/rand/v2"
+	"time"
 )
 
 var up = vec.NewVec3(0, 1, 0)
@@ -41,12 +45,14 @@ type Tri struct {
 	Culled     bool
 	yMin       float64
 	yMax       float64
-	prismFaces []*poly.ConvexPoly //3 sides plus bottom and top
+	PrismFaces []*poly.ConvexPoly //3 sides plus bottom and top
 	poly       *poly.ConvexPoly   // made/cached JIT
 	//shadow  *poly.ConvexPoly //the trinagle pojected onto y=0 JIT/cached for vprobe
 	centre *vec.V3
+	target *vec.V3
 	//flat       *poly.ConvexPoly //cache of the flat polygon for 2d contains testing
 	FireInfo *fireInfo //nil for land triangles
+	isPatch  bool      //whether this triangle was created as part of patching
 }
 
 func newTrianglePoly(t *Tri) *poly.ConvexPoly {
@@ -57,7 +63,19 @@ func newTrianglePoly(t *Tri) *poly.ConvexPoly {
 	return poly
 }
 
-func (t *Tri) NewEndCap(y float64) *poly.ConvexPoly {
+func (t *Tri) NewBottomCap(y float64) *poly.ConvexPoly {
+	poly := poly.NewConvexPoly()
+	//for _, v := range t.vi {
+	for i := len(t.vi) - 1; i >= 0; i-- {
+		//poly.AddPoint(tri.mesh.verts[v].p.Add(vec.NewVec3(0, y, 0)))
+		p := t.mesh.verts[t.vi[i]].p.Clone()
+		p.Y = y
+		poly.AddPoint(p)
+	}
+	return poly
+}
+
+func (t *Tri) NewTopCap(y float64) *poly.ConvexPoly {
 	poly := poly.NewConvexPoly()
 	for _, v := range t.vi {
 		//poly.AddPoint(tri.mesh.verts[v].p.Add(vec.NewVec3(0, y, 0)))
@@ -90,10 +108,12 @@ func (t *Tri) Plough(runwayStart *vec.V3, runwayEnd *vec.V3, runwayWidth float64
 
 func (t *Tri) MakePrisms() {
 
+	//let the Leaves have prisms (for debugginh)
 	if len(t.children) == 0 {
-		return //leaf triangles don't need prisms
+		return //leaf triangles don't need prisms (it's cheaper and more accurate to test against the triangle itself)
 	}
 
+	//check winding !
 	for i, v := range t.vi {
 		vp := t.mesh.verts[v].p
 		vpn := t.mesh.verts[t.vi[(i+1)%3]].p
@@ -102,31 +122,44 @@ func (t *Tri) MakePrisms() {
 
 		//TODO endcaps and sides could share vec3 verts
 
-		tl := vp.Clone()
+		tl := vpn.Clone()
 		tl.Y = t.yMax
 
-		tr := vpn.Clone()
+		tr := vp.Clone()
 		tr.Y = t.yMax
 
-		br := vpn.Clone()
+		br := vp.Clone()
 		br.Y = t.yMin
 
-		bl := vp.Clone()
+		bl := vpn.Clone()
 		bl.Y = t.yMin
 
 		poly.AddPoint(tl)
 		poly.AddPoint(tr)
 		poly.AddPoint(br)
 		poly.AddPoint(bl)
-		t.prismFaces[i] = poly
+		t.PrismFaces[i] = poly
+
+		// c2c := poly.Centre().Sub(t.centre).Normalise()
+		// ppn := poly.Plane.GetNormal()
+		// if ppn.Dot(c2c) < 0 {
+		// 	panic("side face normal incorrect")
+		// }
 
 	}
 
 	//make endcaps
 
-	t.prismFaces[3] = t.NewEndCap(t.yMin) //bottom
-	t.prismFaces[4] = t.NewEndCap(t.yMax) //top
+	t.PrismFaces[3] = t.NewTopCap(t.yMax) //top
+	if t.PrismFaces[3].Plane.GetNormal().Y < 0 {
+		panic("top cap normal incorrect")
+	}
 	//tri.prismFaces[5] = newTrianglePoly(tri)
+
+	t.PrismFaces[4] = t.NewBottomCap(t.yMin) //bottom
+	if t.PrismFaces[4].Plane.GetNormal().Y > 0 {
+		panic("bottom cap normal incorrect")
+	}
 
 	for _, child := range t.children {
 		child.MakePrisms()
@@ -184,8 +217,12 @@ func (t *Tri) updateExtents(yMin float64, yMax float64) {
 	if yMax > t.yMax {
 		t.yMax = yMax
 	}
+
+	if t.parent == nil && t.Depth > 0 {
+		log.Logit("ORPHANED TRIANGLE")
+	}
 	if t.parent != nil {
-		t.parent.updateExtents(yMin, yMax)
+		t.parent.updateExtents(yMin, yMax) //<bubble up and update all ancestors
 	}
 }
 
@@ -241,8 +278,9 @@ func (t *Tri) find2D(p *vec.V3) *Tri {
 	return nil
 }
 
-func (t *Tri) addChild(vi ...uint32) *Tri {
+func (t *Tri) addChild(isPatch bool, vi ...uint32) *Tri {
 	child := newTri(t, t.mesh, t.Depth+1, vi...) //t.mesh.makeTri(t.depth+1, fi, a, b, c)
+	child.isPatch = isPatch
 	t.children = append(t.children, child)
 	return child
 }
@@ -325,8 +363,12 @@ func (t *Tri) Scorch(fire *TriMesh) {
 // if so, split in two to the opposite vertex
 func (t *Tri) Patch() {
 
+	if t.Culled {
+		panic("Culled triangle in Patch")
+	}
+
 	m := t.mesh
-	if len(t.children) == 0 && !t.Culled {
+	if len(t.children) == 0 {
 
 		for i := 0; i < 3; i++ {
 
@@ -441,56 +483,196 @@ func (t *Tri) countChildren(count *int) {
 
 }
 
-// for each triangle T - check if none of its verts can been seen from pos
-func (root *Tri) OccludeVerts(pos *vec.V3) {
-
-	oc := 0
-	//defining a slice once, and using/resetting a penetration count is faster
-	pens := make([]vec.V3, 10)
-	penCount := 0
-	probeCount := 0
-
-	ray := ray.New(pos, nowhereSpecial)
-	for _, v := range root.mesh.verts {
-		penCount = 0 //important
-		ray.PointAt(v.p)
-		if root.probe(ray, pens, &penCount, &probeCount, true) { //reursively probe the prisms/faces
-			v.occluded = true
-			oc++
-		} else {
-			v.occluded = false
-		}
-
+func (t *Tri) getLeaves() []*Tri {
+	leaves := []*Tri{}
+	if len(t.children) == 0 {
+		leaves = append(leaves, t)
 	}
 
-	log.Logit("occluded", oc, " of ", root.mesh.VertCount(), " verts", " probes", probeCount)
-}
-
-func (t *Tri) OcclusionCull(culled *int, kept *int) {
-
-	if t.Culled {
-		panic("already culled")
-	}
-	if !t.Culled && len(t.children) == 0 {
-
-		hidden := 0
-		for _, vi := range t.vi {
-			if t.mesh.verts[vi].occluded {
-				hidden++
-			}
-		}
-		if hidden == 3 {
-			t.Culled = true
-			*culled++
-
-		} else {
-			*kept++
-		}
-	}
 	for _, c := range t.children {
-		c.OcclusionCull(culled, kept)
+		leaves = append(leaves, c.getLeaves()...)
 	}
+
+	return leaves
 }
+
+func (root *Tri) Occlude(camPos *vec.V3) {
+
+	occluded := 0
+	//defining a slice once, and using/resetting a penetration count is faster
+
+	totalDepth := 0
+	maxDepth := 0 //how deep did we go (in any one recursion)
+	deepestEver := 0
+	backfacing := 0
+
+	ray := ray.New(camPos, nowhereSpecial)
+
+	ts := time.Now()
+	leaves := root.getLeaves()
+
+	stats := NewProbeStats()
+	for _, leaf := range leaves {
+
+		if leaf.poly == nil {
+			leaf.poly = newTrianglePoly(leaf) //cache the polygon
+		}
+
+		leaf.target = leaf.poly.Centre() //Highest().Clone()
+		leaf.target.Y += (leaf.target.DistanceFrom(leaf.poly.P[0]))
+
+		//leaf.target = leaf.centre.Clone()
+		//leaf.target.Y = leaf.yMax + 0.01
+
+		ray.PointAt(leaf.target)
+		if ray.GetDirection().Dot(leaf.Normal) > 0 {
+			//triangle is backfacing - it will be culled anyway
+			leaf.Culled = true
+			backfacing++
+			continue
+		}
+
+		stats.hit = false //clear the hit (we acculumulate in the stats object)
+		root.probe(ray, stats, 0)
+		if stats.hit {
+			leaf.Culled = true
+			occluded++
+		}
+
+		totalDepth += stats.maxDepth
+
+		if maxDepth > deepestEver {
+			deepestEver = maxDepth
+		}
+
+	}
+
+	avgDepth := float64(totalDepth) / float64(len(leaves))
+	ms := time.Since(ts).Milliseconds()
+
+	log.Logit("occluded", occluded, " of ", len(leaves), " leaves",
+		" backfacing:", backfacing,
+		" max depth:", deepestEver,
+		" avg depth:", avgDepth,
+		" time:", ms, "ms",
+	)
+	log.Logit(stats.String())
+
+}
+
+// PrismEdges - garthes the edges of this and all ancestor prismms into MSG as vectors for  debugging
+func (t *Tri) PrismEdges(msg *msg.Msg) {
+
+	//gather the (three) uprights from the sides
+	if len(t.children) > 0 {
+		for i := 0; i < 3; i++ {
+			poly := t.PrismFaces[i]
+			a := poly.P[0] //top left
+			b := poly.P[3] //bottom left
+			msg.Write(a, b, colors.White)
+		}
+
+		top := t.PrismFaces[3]
+		bottom := t.PrismFaces[4]
+
+		for i := 0; i < 3; i++ {
+			n := (i + 1) % 3
+			msg.Write(top.P[i], top.P[n], colors.Red)
+			msg.Write(bottom.P[i], bottom.P[n], colors.Blue)
+		}
+	}
+
+	//gather all ancestor prisms
+	if t.parent != nil {
+		t.parent.PrismEdges(msg)
+	}
+
+}
+
+// // for each triangle T - check if none of its verts can been seen from pos
+// func (root *Tri) OccludeVerts(pos *vec.V3) {
+
+// 	occluded := 0
+// 	//defining a slice once, and using/resetting a penetration count is faster
+// 	//pen := vec.NewVec3(0, 0, 0)
+
+// 	leafHits := 0
+// 	leafMisses := 0
+// 	prismHits := 0
+// 	prismMisses := 0
+// 	fourLeafMisses := 0
+// 	fourPrismMisses := 0
+// 	hct := 0
+
+// 	depth := 0
+
+// 	totalDepth := 0
+// 	maxDepth := 0 //how deep did we go (in any one recursion)
+// 	deepestEver := 0
+
+// 	done := false
+
+// 	ray := ray.New(pos, nowhereSpecial)
+// 	for _, v := range root.mesh.verts {
+
+// 		ray.PointAt(v.p)
+// 		maxDepth = 0
+
+// 		//reursively probe the prisms/faces
+// 		v.occluded, _ = root.probe(ray, &leafHits, &prismMisses, &prismHits, &fourLeafMisses, &fourPrismMisses, &leafMisses, &hct, depth, &maxDepth, &done)
+
+// 		totalDepth += maxDepth
+
+// 		if maxDepth > deepestEver {
+// 			deepestEver = maxDepth
+// 		}
+
+// 		if v.occluded {
+// 			occluded++
+// 		}
+
+// 	}
+
+// 	avgDepth := float64(totalDepth) / float64(len(root.mesh.verts))
+
+// 	log.Logit("occluded", occluded, " of ", root.mesh.VertCount(), " verts",
+// 		" leaf hits:", leafHits,
+// 		" leaf misses:", leafMisses,
+// 		" prism hits:", prismHits,
+// 		" prism misses:", prismMisses,
+// 		" four leaf misses:", fourLeafMisses,
+// 		" four prism misses:", fourPrismMisses,
+// 		" max depth:", deepestEver,
+// 		" avg depth:", avgDepth,
+// 		" hct:", hct, //missed prism but hit child triangle
+// 	)
+// }
+
+// func (t *Tri) OcclusionCull(culled *int, kept *int) {
+
+// 	if t.Culled {
+// 		panic("already culled")
+// 	}
+// 	if !t.Culled && len(t.children) == 0 {
+
+// 		hidden := 0
+// 		for _, vi := range t.vi {
+// 			if t.mesh.verts[vi].occluded {
+// 				hidden++
+// 			}
+// 		}
+// 		if hidden == 3 {
+// 			t.Culled = true
+// 			*culled++
+
+// 		} else {
+// 			*kept++
+// 		}
+// 	}
+// 	for _, c := range t.children {
+// 		c.OcclusionCull(culled, kept)
+// 	}
+// }
 
 // drill down from the land root triangle - bubbling up and calculating y extents for all ancestors of all leaf triangles
 func (t *Tri) CalcVerticalExtents() { //called on the root triangle
@@ -502,7 +684,7 @@ func (t *Tri) CalcVerticalExtents() { //called on the root triangle
 			yMin = math.Min(yMin, m.verts[vi].p.Y)
 			yMax = math.Max(yMax, m.verts[vi].p.Y)
 		}
-		t.updateExtents(yMin, yMax) //recursively update all ancestors extents
+		t.updateExtents(yMin, yMax) //recursively bubble up and update all ancestors extents
 	} else {
 		for _, c := range t.children {
 			c.CalcVerticalExtents() //recursively drill down to leaf triangles
@@ -580,9 +762,9 @@ func (t *Tri) splitDownTo(level int) {
 
 func (t *Tri) splitIn2(a, b, c, m uint32) {
 
-	t.removeFromTouches() //remove this tri from the list tris touching this vertex
-	t.addChild(a, m, c)   //left (clockwise wound)
-	t.addChild(a, b, m)   //right
+	t.removeFromTouches()     //remove this tri from the list tris touching this vertex
+	t.addChild(true, a, m, c) //left (clockwise wound)
+	t.addChild(true, a, b, m) //right
 
 }
 
@@ -603,6 +785,15 @@ func (t *Tri) aspect() float64 {
 }
 
 func (t *Tri) split() {
+
+	//      V2
+	//		/\
+	//     /  \
+	// V4 /____\ V5
+	//   / \  / \
+	//  /___\/___\
+	// V1   V3    V0
+
 	if len(t.children) == 0 {
 
 		//	kink := (t.mesh.height/(float64(t.depth*t.depth)+1) - 1) * .5 //maximum kink in this edge
@@ -611,28 +802,25 @@ func (t *Tri) split() {
 		kink := t.mesh.kinks[t.Depth] * t.mesh.height //maximum kink in this edge
 
 		m := t.mesh
-		v0 := t.vi[0]
-		v1 := t.vi[1]
-		v2 := t.vi[2]
+		v0, v1, v2 := t.vi[0], t.vi[1], t.vi[2]
 
 		seed := uint64(m.verts[v1].p.Y)
 		rnGen := rand.New(rand.NewPCG(seed, seed+1))
 		//rnGe§n = &rand.New(rand.NewPCG(m.verts[v0].p.x, m.verts[v0].p.y))
 
-		rn1 := rnGen.NormFloat64() //random number between -1 and 1
-		rn2 := rnGen.NormFloat64()
-		rn3 := rnGen.NormFloat64()
+		rn1, rn2, rn3 := rnGen.NormFloat64(), rnGen.NormFloat64(), rnGen.NormFloat64() //random number between -1 and 1
 
 		v3 := m.splitEdge(v0, v1, rn1*kink, t.Depth)
 		v4 := m.splitEdge(v1, v2, rn2*kink, t.Depth)
 		v5 := m.splitEdge(v2, v0, rn3*kink, t.Depth)
 
 		t.removeFromTouches() //the list of tirangles touching a vertex is used for normal calculation
-
-		t.addChild(v0, v3, v5) //top
-		t.addChild(v3, v1, v4) //right
-		t.addChild(v5, v4, v2) //left
-		t.addChild(v3, v4, v5) //centre
+		//Always put the horizontal edge in first
+		//wind clockwise
+		t.addChild(false, v5, v4, v2) //top
+		t.addChild(false, v0, v3, v5) //right
+		t.addChild(false, v3, v1, v4) //left
+		t.addChild(false, v4, v5, v3) //centre
 
 	} else {
 		log.Logit("splitting a triangle that already has children ??")
@@ -643,7 +831,9 @@ func (t *Tri) calcCentre() *vec.V3 {
 	v := t.mesh.verts
 	t.centre = vec.NewVec3(0, 0, 0)
 	t.centre.AddInto(v[t.vi[0]].p, v[t.vi[1]].p, v[t.vi[2]].p)
-	t.centre.MulInto(t.centre, 1.0/3.0)
+	t.centre.MulIn(float64(1.0 / 3.0))
+	//t.centre.Y += 0.1
+
 	return t.centre
 }
 
@@ -657,47 +847,166 @@ func (t *Tri) area() float64 {
 
 // returns the deepest (i.e. childless/leaf) triangle intersected by the ray from p0 to p1
 // maintaining a count, and populating the slice of penetrations by refererence is easier to get your head around than appending slices (possibly faster too)
-func (t *Tri) probe(ray *ray.Ray, pens []vec.V3, penCount *int, probeCount *int, earlyExit bool) bool {
+func (t *Tri) probe(ray *ray.Ray, stats *ProbeStats, depth int) {
+
+	if depth > stats.maxDepth {
+		stats.maxDepth = depth
+	}
 
 	if len(t.children) == 0 {
 
 		if t.poly == nil {
 			t.poly = newTrianglePoly(t) //cache the polygon
 		}
-		if !t.poly.Has(ray.End) {
-			//log.Logit("ray end outside tri bounds")
-			//log.Logit("probing leaf tri")
-			if t.poly.Probe(ray) {
-				//DONT use ray.intersect directly as it will be overwritten on the next penetration
-				if !earlyExit {
-					pens[*penCount] = *ray.Intersect.Clone()
-				} //the clone may be redundant as we are dereferencing
-				(*penCount)++
-				(*probeCount)++
-			} else {
-				if *penCount != 0 {
-					panic("wtf")
-				}
-				//log.Logit("missed leaf tri")
-			}
+
+		if t.Culled {
+			stats.skippedCulled++
+			return
+		}
+
+		// if ray.End == t.target {
+		// 	*done = true      //check if this has any effect on occlusion counts
+		// 	hitsomereturn false, nil //dont let triangles self occlude
+		// }
+
+		if t.poly.Probe(ray) {
+			stats.leafHits++
+			stats.hit = true //exit signal
+			//pen := ray.Intersect.Clone()
+			//*done = true
+		} else {
+			stats.leafMisses++
 		}
 
 	} else {
-		//vExtend := t.mesh.kinks[t.depth] * t.mesh.height
+
+		if ray.Origin.Y > t.yMax && ray.End.Y > t.yMax { //|| ray.Origin.Y < t.yMin && ray.End.Y < t.yMin {
+			stats.skips++
+		}
+
 		if t.prismContains(ray.Origin) || t.prismContains(ray.End) || t.probePrism(ray) {
+			stats.prismHits++
 			for _, ct := range t.children {
-				ct.probe(ray, pens, penCount, probeCount, earlyExit) //recurse
-				if *penCount > 0 && earlyExit {
-					return true
+
+				if ray.End.Y > ct.yMax && ray.Origin.Y > ct.yMax || ray.End.Y < ct.yMin && ray.Origin.Y < ct.yMin {
+					continue
+				}
+
+				ct.probe(ray, stats, depth+1)
+				if stats.hit {
+					return
 				}
 			}
+
 		} else {
-			//none of the trianlges in this prism need checking
-			//log.Logit("missed prism")
+			//none of the triangles in this prism need checking
+			stats.prismMisses++
+
 		}
 	}
 
-	return *penCount > 0
+}
+
+type ProbeStats struct {
+	hit           bool //used in occlusiuon cull
+	leafHits      int
+	leafMisses    int
+	prismHits     int
+	prismMisses   int
+	skips         int
+	nearestHit    *vec.V3
+	NearestTri    *Tri
+	skippedCulled int
+	maxDepth      int
+	SDist         float64 //smallest distance found sofar (start big) - used if ProbeAll()
+}
+
+func NewProbeStats() *ProbeStats {
+	return &ProbeStats{
+		SDist: math.MaxFloat64,
+	}
+}
+
+func (S *ProbeStats) String() string {
+	return fmt.Sprintf(`
+		leaf hits: %d
+		leaf misses: %d
+		prism hits: %d
+		prism misses: %d 
+		skips over/unders: %d 
+		nearest hit dist: %.2f
+		skipped culled: %d
+		`,
+		S.leafHits,
+		S.leafMisses,
+		S.prismHits,
+		S.prismMisses,
+		S.skips,
+		S.SDist,
+		S.skippedCulled,
+	)
+
+}
+
+// probeAll - find all intersections along the ray, returning the nearest hit point
+func (t *Tri) ProbeAll(ray *ray.Ray, stats *ProbeStats) {
+
+	if len(t.children) == 0 {
+		if t.poly == nil {
+			t.poly = newTrianglePoly(t) //cache the polygon
+		}
+
+		if t.Culled {
+			stats.skippedCulled++
+		} else {
+			if t.poly.Probe(ray) {
+				stats.leafHits++
+				pen := ray.Intersect.Clone()
+				d := pen.DistanceFrom(ray.Origin)
+				if d < stats.SDist {
+					stats.SDist = d
+					stats.nearestHit = pen
+					stats.NearestTri = t
+					ray.PointAt(pen) //move the ray end to the hit point
+				}
+			} else {
+				stats.leafMisses++
+			}
+		}
+	} else {
+
+		if t.prismContains(ray.Origin) || t.prismContains(ray.End) || t.probePrism(ray) {
+			stats.prismHits++
+			for _, ct := range t.children {
+
+				if ray.End.Y > ct.yMax && ray.Origin.Y > ct.yMax || ray.End.Y < ct.yMin && ray.Origin.Y < ct.yMin {
+					stats.skips++
+					continue
+				}
+				ct.ProbeAll(ray, stats)
+			}
+		} else {
+			//none of the triangles in this prism need checking
+			stats.prismMisses++
+		}
+	}
+
+}
+
+// EdgesAsMsg - return the edges of this triangle as a msg for clientside rendering/debugging
+func (t *Tri) EdgesAsMsg() *msg.Msg {
+
+	v := t.mesh.verts
+	a := v[t.vi[0]].p
+	b := v[t.vi[1]].p
+	c := v[t.vi[2]].p
+
+	return msg.NewMsg(
+		msg.Vectors,
+		a, b, colors.Magenta,
+		b, c, colors.Magenta,
+		c, a, colors.Magenta,
+	)
 
 }
 
@@ -715,9 +1024,13 @@ func (t *Tri) prismContains(p *vec.V3) bool {
 // test if the ray from p0 to p1 penetrates the volume of triangular based 'prism' extending between t.ymin and t.ymax
 func (t *Tri) probePrism(ray *ray.Ray) bool {
 
+	epsilon := 0.001
 	//for all five sides of the prism - check for a penetration
-	for _, s := range t.prismFaces {
+	for i, s := range t.PrismFaces {
 		if s.Probe(ray) {
+			if ray.Intersect.Y > t.yMax+epsilon || ray.Intersect.Y < t.yMin-epsilon {
+				log.Logit("penetration is outside the vertical extents of the prism", i)
+			}
 			return true
 		}
 	}
@@ -825,7 +1138,7 @@ func newTri(parent *Tri, m *TriMesh, depth int, vi ...uint32) *Tri {
 	//t := Tri{depth: depth, vi: vi, children: []*Tri{}, mesh: m, faceIndex: fi}
 	t := Tri{parent: parent, Depth: depth, vi: vi, children: []*Tri{},
 		mesh: m, yMin: math.MaxFloat64, yMax: -math.MaxFloat64,
-		prismFaces: []*poly.ConvexPoly{nil, nil, nil, nil, nil},
+		PrismFaces: []*poly.ConvexPoly{nil, nil, nil, nil, nil},
 	}
 
 	t.calcCentre()
@@ -833,6 +1146,9 @@ func newTri(parent *Tri, m *TriMesh, depth int, vi ...uint32) *Tri {
 	t.addToTouches()
 
 	t.calcNormal()
+	if t.Normal.Y < 0 {
+		panic("triangle with downward normal")
+	}
 
 	return &t
 }
