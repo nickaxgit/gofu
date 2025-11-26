@@ -70,6 +70,14 @@ func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3, response *msg.Msg) *t
 	log.Logit("patch took", time.Since(ts).Milliseconds(), "ms")
 
 	ts = time.Now()
+	waterlines := []float64{game.landHeight * 0.71, game.landHeight * 0.41, 0.1, -game.landHeight * 0.52}
+
+	// //makes the water surface mesh messages - one for each waterline, into the message
+	land.FloodAndDrain(waterlines, response)
+	log.Logit("flood and drain took", time.Since(ts).Milliseconds(), "ms")
+	//land.Flood(-10000)
+
+	ts = time.Now()
 	land.Root.CalcVerticalExtents() //we need the y extents for occlusion culling
 	log.Logit("calced y extents took", time.Since(ts).Milliseconds(), "ms")
 
@@ -131,18 +139,12 @@ func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3, response *msg.Msg) *t
 	log.Logit("splitting took", time.Since(ts).Milliseconds())
 	//}
 
-	//	waterlines := []float64{game.landHeight * 0.71, game.landHeight * 0.41, 0.1, -game.landHeight * 0.52}
-
-	//makes the water surface mesh messages - one for each waterline, into the message
-	//land.FloodAndDrain(waterlines, response)
-	land.Flood(-1000)
-
 	//runwayMesh.WriteTo(message, 1)
 
 	//if t.Culled || t.Scorched || t.OnOrUnderWater() {
 	isLand := func(t *terrain.Tri) bool {
 
-		if t.Culled || t.Scorched || t.OnOrUnderWater() {
+		if t.Culled || t.Scorched || t.IsSubmerged() {
 			return false
 		}
 
@@ -159,11 +161,11 @@ func (game *Game) MakeLand(camPos *vec.V3, camDir *vec.V3, response *msg.Msg) *t
 	log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
 
 	///scorchedLand := land.Root.ToSimpleMesh(56, land, game.fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
-	//wireframe := land.Root.ToSimpleMesh(32, land, game.fire, "whiteWires", false, isLand)
+	wireframe := land.Root.ToSimpleMesh(32, land, game.fire, "whiteWires", false, isLand)
 
 	smallLandMesh.WriteTo(response, 1)
 	///scorchedLand.WriteTo(message, 1)
-	//wireframe.WriteTo(response, 1)
+	wireframe.WriteTo(response, 1)
 
 	return land
 }

@@ -381,6 +381,10 @@ func (p *V3) DistanceFromLine(a, b *V3) float64 {
 	return p.ClosestPointOnLine(a, b).DistanceFrom(p)
 }
 
+func (p *V3) DistanceSQ(b *V3) float64 {
+	return (p.X-b.X)*(p.X-b.X) + (p.Y-b.Y)*(p.Y-b.Y) + (p.Z-b.Z)*(p.Z-b.Z)
+}
+
 func (p *V3) DistanceFrom(b *V3) float64 {
 	return hypo3(p.X-b.X, p.Y-b.Y, p.Z-b.Z)
 }

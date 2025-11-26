@@ -883,12 +883,12 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 
 			if dev.LandTri != nil {
 				dev.LandTri.ProbeAll(ray, stats)
-				//	log.Logit(stats.String())
+				//log.Logit(stats.String())
 
 				if stats.NearestTri != nil {
 					msg := stats.NearestTri.EdgesAsMsg()
-					stats.NearestTri.PrismEdges(msg) //show the prism Hierarchy
-					terminator := float32(1e38)
+					stats.NearestTri.PrismEdges(msg)              //show the prism Hierarchy
+					terminator := float32(math.Inf(1))            //use positive infinity as terminator
 					msg.Write(terminator, terminator, terminator) //Terminator for vectors
 
 					dev.Send(msg)

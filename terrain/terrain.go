@@ -257,16 +257,16 @@ func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg) {
 	defer func() { land.flooding = false }()
 	land.flooding = true
 
-	snapped := 0
-	land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
+	//snapped := 0
+	//land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
 
-	snapped = 0
-	land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
+	//snapped = 0
+	//land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
 
-	for i, wl := range waterlines {
-		land.Flood(wl) //set the waterlevel of all land below this waterline
+	for i, wl := range waterlines { //work DOWN through the waterlines
+		land.Flood(wl) //set the waterlevel of all land below wl to wl (anything above is set to wl=-1000000
 
-		if i != len(waterlines)-1 {
+		if i != len(waterlines)-1 { //Don't drain the sea
 			for lake := 0; lake < 10; lake++ {
 				drained := false
 				for _, v := range land.verts {
@@ -307,7 +307,14 @@ func (t *Tri) shoreLines(levels []float64, snapped *int) {
 
 		for _, wl := range levels {
 			if yl.Y < wl && yh.Y > wl {
+
+				//f := (wl - yl.Y) / (yh.Y - yl.Y)
+				//yl.TweenInto(yl, yh, f) //move this vertex to the waterline
 				yl.Y = wl
+
+				if yl.Y == yh.Y {
+					log.Logit("hh??")
+				}
 				*snapped++
 				break
 			}

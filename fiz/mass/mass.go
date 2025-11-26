@@ -66,7 +66,7 @@ func VectorsAsMsg(masses []*Mass) *msg.Msg {
 		m.WriteVectorsTo(msg)
 	}
 
-	terminator := float32(1e38)
+	terminator := float32(math.Inf(1))
 	msg.Write(terminator, terminator, terminator) //Terminator for vectors
 
 	return msg

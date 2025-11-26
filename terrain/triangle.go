@@ -24,27 +24,34 @@ type tcs struct {
 }
 
 type vert struct {
-	p        *vec.V3
-	n        *vec.V3
-	uv       *vec.V2
-	wl       float64       //water level
-	acc      float64       //accumulated water (during a pass)
-	incount  int           //number of ferts flowing into this vert
-	touches  map[*Tri]bool //the triangles that touch this vertex (whos face normals contribute to the vertex normal)
-	occluded bool
+	p                  *vec.V3
+	n                  *vec.V3
+	uv                 *vec.V2
+	wl                 float64       //water level
+	acc                float64       //accumulated water (during a pass)
+	incount            int           //number of ferts flowing into this vert
+	touches            map[*Tri]bool //the triangles that touch this vertex (whos face normals contribute to the vertex normal)
+	occluded           bool
+	testedForOcclusion bool
 }
 
 type Tri struct {
-	parent     *Tri
-	Depth      int
-	vi         []uint32
-	children   []*Tri
-	mesh       *TriMesh //a reference to the mesh this tri is part of (that the vi's point into v's of)
-	Normal     *vec.V3
-	Scorched   bool //note this is not part of the fireInfo - it's a cache of which land triangles are burned out
-	Culled     bool
-	yMin       float64
-	yMax       float64
+	parent   *Tri
+	Depth    int
+	vi       []uint32
+	children []*Tri
+	mesh     *TriMesh //a reference to the mesh this tri is part of (that the vi's point into v's of)
+	Normal   *vec.V3
+	Scorched bool //note this is not part of the fireInfo - it's a cache of which land triangles are burned out
+	Culled   bool
+	occCount int //number of vertices occluded
+	xMin     float64
+	xMax     float64
+	yMin     float64
+	yMax     float64
+	zMin     float64
+	zMax     float64
+
 	PrismFaces []*poly.ConvexPoly //3 sides plus bottom and top
 	poly       *poly.ConvexPoly   // made/cached JIT
 	//shadow  *poly.ConvexPoly //the trinagle pojected onto y=0 JIT/cached for vprobe
@@ -167,6 +174,7 @@ func (t *Tri) MakePrisms() {
 
 }
 
+// if the water level at ANY vertes - is higher than the Y coords
 func (t *Tri) OnOrUnderWater() bool {
 	m := t.mesh
 	a := m.verts[t.vi[0]]
@@ -174,24 +182,26 @@ func (t *Tri) OnOrUnderWater() bool {
 	c := m.verts[t.vi[2]]
 
 	epsilon := 0.0001
-	if a.p.Y <= a.wl+epsilon && b.p.Y <= b.wl+epsilon && c.p.Y <= c.wl+epsilon { //if all verts are at water level
+	if a.wl >= a.p.Y-epsilon || b.wl >= b.p.Y-epsilon || c.wl >= c.p.Y-epsilon { //if all verts are at or under water level
+		//if a.p.Y <= a.wl+epsilon || b.p.Y <= b.wl+epsilon || c.p.Y <= c.wl+epsilon { //if all verts are at water level
+
 		return true
 	}
 	return false
 }
 
-// func (t *Tri) IsSubmerged() bool {
+func (t *Tri) IsSubmerged() bool {
 
-// 	m := t.mesh
-// 	a := m.verts[t.vi[0]]
-// 	b := m.verts[t.vi[1]]
-// 	c := m.verts[t.vi[2]]
+	m := t.mesh
+	a := m.verts[t.vi[0]]
+	b := m.verts[t.vi[1]]
+	c := m.verts[t.vi[2]]
 
-// 	if a.p.Y < a.wl && b.p.Y < b.wl && c.p.Y < c.wl { //if all verts are below water
-// 		return true
-// 	}
-// 	return false
-// }
+	if a.p.Y < a.wl && b.p.Y < b.wl && c.p.Y < c.wl { //if all verts are below water
+		return true
+	}
+	return false
+}
 
 func (t *Tri) getFacesInto(fis []uint16, p *uint32, test func(face *Tri) bool) {
 	if len(t.children) == 0 {
@@ -210,19 +220,33 @@ func (t *Tri) getFacesInto(fis []uint16, p *uint32, test func(face *Tri) bool) {
 	}
 }
 
-func (t *Tri) updateExtents(yMin float64, yMax float64) {
-	if yMin < t.yMin {
-		t.yMin = yMin
+func (t *Tri) updateExtents(p *vec.V3) { //yMin float64, yMax float64) {
+
+	if p.X < t.xMin {
+		t.xMin = p.X
 	}
-	if yMax > t.yMax {
-		t.yMax = yMax
+	if p.X > t.xMax {
+		t.xMax = p.X
+	}
+	if p.Y < t.yMin {
+		t.yMin = p.Y
+	}
+	if p.Y > t.yMax {
+		t.yMax = p.Y
+	}
+
+	if p.Z < t.zMin {
+		t.zMin = p.Z
+	}
+	if p.Z > t.zMax {
+		t.zMax = p.Z
 	}
 
 	if t.parent == nil && t.Depth > 0 {
 		log.Logit("ORPHANED TRIANGLE")
 	}
 	if t.parent != nil {
-		t.parent.updateExtents(yMin, yMax) //<bubble up and update all ancestors
+		t.parent.updateExtents(p) //<bubble up and update all ancestors
 	}
 }
 
@@ -496,7 +520,12 @@ func (t *Tri) getLeaves() []*Tri {
 	return leaves
 }
 
+// this might be *much* faster if we checked all 6 points of the prisms for occlusion recrsively
+// if a prism is fully occluded - all its children are too
 func (root *Tri) Occlude(camPos *vec.V3) {
+
+	viewpoint := camPos.Clone()
+	viewpoint.Y += 5 //
 
 	occluded := 0
 	//defining a slice once, and using/resetting a penetration count is faster
@@ -506,37 +535,61 @@ func (root *Tri) Occlude(camPos *vec.V3) {
 	deepestEver := 0
 	backfacing := 0
 
-	ray := ray.New(camPos, nowhereSpecial)
+	ray := ray.New(viewpoint, nowhereSpecial)
 
 	ts := time.Now()
 	leaves := root.getLeaves()
 
 	stats := NewProbeStats()
+
+	shortTarget := vec.NewVec3(0, 0, 0)
+	rd := vec.NewVec3(0, 0, 0)
 	for _, leaf := range leaves {
 
 		if leaf.poly == nil {
 			leaf.poly = newTrianglePoly(leaf) //cache the polygon
 		}
 
-		leaf.target = leaf.poly.Centre() //Highest().Clone()
-		leaf.target.Y += (leaf.target.DistanceFrom(leaf.poly.P[0]))
-
-		//leaf.target = leaf.centre.Clone()
-		//leaf.target.Y = leaf.yMax + 0.01
-
-		ray.PointAt(leaf.target)
+		//backFacecull test
+		ray.PointAt(leaf.centre)
 		if ray.GetDirection().Dot(leaf.Normal) > 0 {
 			//triangle is backfacing - it will be culled anyway
 			leaf.Culled = true
-			backfacing++
-			continue
-		}
+		} else {
+			//occlusion cull test
 
-		stats.hit = false //clear the hit (we acculumulate in the stats object)
-		root.probe(ray, stats, 0)
-		if stats.hit {
-			leaf.Culled = true
-			occluded++
+			for i := 0; i < 3; i++ {
+				v := leaf.mesh.verts[leaf.vi[i]]
+				if !v.testedForOcclusion {
+
+					ray.PointAt(v.p)
+					rd = ray.GetDirection()
+					shortTarget.X = ray.Origin.X + rd.X*.999
+					shortTarget.Y = ray.Origin.Y + rd.Y*.999
+					shortTarget.Z = ray.Origin.Z + rd.Z*.999
+
+					ray.PointAt(shortTarget)
+
+					stats.hit = false //clear the hit (we acculumulate in the stats object)
+
+					root.probe(ray, stats, 0)
+					if stats.hit {
+						v.occluded = true
+						occluded++
+					}
+					v.testedForOcclusion = true
+				}
+				if v.occluded {
+					leaf.occCount++
+					if leaf.occCount == 3 {
+						leaf.Culled = true
+						break
+					}
+					if leaf.occCount > 3 {
+						panic(fmt.Sprintf("occCount >3 on tri %v", leaf.vi))
+					}
+				}
+			}
 		}
 
 		totalDepth += stats.maxDepth
@@ -547,10 +600,10 @@ func (root *Tri) Occlude(camPos *vec.V3) {
 
 	}
 
-	avgDepth := float64(totalDepth) / float64(len(leaves))
+	avgDepth := float64(totalDepth) / float64(len(root.mesh.verts))
 	ms := time.Since(ts).Milliseconds()
 
-	log.Logit("occluded", occluded, " of ", len(leaves), " leaves",
+	log.Logit("occluded", occluded, " of ", len(root.mesh.verts), " verts",
 		" backfacing:", backfacing,
 		" max depth:", deepestEver,
 		" avg depth:", avgDepth,
@@ -560,7 +613,7 @@ func (root *Tri) Occlude(camPos *vec.V3) {
 
 }
 
-// PrismEdges - garthes the edges of this and all ancestor prismms into MSG as vectors for  debugging
+// PrismEdges - gathers the edges of this and all ancestor prisms into MSG as vectors for  debugging
 func (t *Tri) PrismEdges(msg *msg.Msg) {
 
 	//gather the (three) uprights from the sides
@@ -678,13 +731,18 @@ func (t *Tri) PrismEdges(msg *msg.Msg) {
 func (t *Tri) CalcVerticalExtents() { //called on the root triangle
 	if len(t.children) == 0 {
 		m := t.mesh
-		yMin := m.verts[t.vi[0]].p.Y
-		yMax := yMin
-		for _, vi := range t.vi[1:] {
-			yMin = math.Min(yMin, m.verts[vi].p.Y)
-			yMax = math.Max(yMax, m.verts[vi].p.Y)
+		//yMin := m.verts[t.vi[0]].p.Y
+		//yMax := yMin
+		for _, vi := range t.vi {
+			//yMin = math.Min(yMin, m.verts[vi].p.Y)
+			//yMax = math.Max(yMax, m.verts[vi].p.Y)
+			t.updateExtents(m.verts[vi].p) //recursively bubble up and update all ancestors extents
 		}
-		t.updateExtents(yMin, yMax) //recursively bubble up and update all ancestors extents
+		if t.yMax-t.yMin < 0.01 {
+			//log.Logit("flat triangle detected", t.yMax, t.yMin, t.Depth)
+		}
+
+		//t.updateExtents(yMin, yMax) //recursively bubble up and update all ancestors extents
 	} else {
 		for _, c := range t.children {
 			c.CalcVerticalExtents() //recursively drill down to leaf triangles
@@ -705,49 +763,41 @@ func (t *Tri) SplitIfNeeded(camPos *vec.V3, camDir *vec.V3, fov float64) {
 		return
 	}
 
-	//triCentre := t.centre()
-
-	//if t.hasVertexInFrontOf(pos,focus){
-	//if t.facesTowards(focus.sub(pos)) { //is the traingle forward facing ? (relative to the camera)
-
 	inFov := !t.allVertsLeftOrRightOfFov(camPos, camDir, fov)
 	if t.Depth < 5 || inFov {
 		//if t.Depth < 5 || t.Normal.Dot(camDir) < .2 { //is the traingle forward facing ? (relative to the camera)
 		//if t.normal.dot((t.centre().sub(pos)).normalise()) < 0.3 { //lower number here cull more backfacing tris
 
-		dist := camPos.DistanceFrom(t.centre)
-		//apud := (2 * t.area()) / (dist * dist)
-		//apud := (2 * t.area()) / (0.0005 * (dist * dist))
-		apud := (2 * t.area()) / (0.0002 * (dist * dist))
+		shouldBeSplitToLevel := 5.0
 
-		dp := camDir.Dot(t.centre.Sub(camPos).Normalise())
+		if t.Depth >= 5 {
+			distSQ := camPos.DistanceSQ(t.centre)
+			//dist := camPos.DistanceFrom(t.centre)
+
+			//apud := (2 * t.area()) / (0.0002 * (distSQ))
+			//splitPressure := distSQ / float64((t.Depth+1)*(t.Depth+1)*(t.Depth+1)*(t.Depth+1)) //area per unit distance squared
+			//splitPressure = float64(t.Depth/15) / ((dist+10)/(t.mesh.size *2)) // (t.mesh.size * 2)) //*(t.Depth)) //area per unit distance squared
+
+			//we want triangles at 3 metres split to level 15 - and those at 10,000 metres split to level 5
+			shouldBeSplitToLevel = 12 - math.Log10(distSQ/2) //)*2 // (dist*dist-9)/(2000*2000) // * (5-15) + 15
+
+			dp := camDir.Dot(t.centre.Sub(camPos).Normalise())
+			shouldBeSplitToLevel += dp * 4 //bring forward facing triangles forward up to 4 levels
+
+			//splitPressure *= (.1 + dp) // / distSQ //.Normalise())
+		}
 		//at a value of 1 (area per unit distance), a notional 100 square metre square, would require splitting when it was 10 metres away
-		if apud > 8-(dp*4) || t.Depth < 5 { //.001 is a about 1cm triangles at the horizon
-
-			//log.Logit("splitting", t.depth, apud, dist, t.area())
+		//if apud > 8-(dp*4) || t.Depth < 5 { //.001 is a about 1cm triangles at the horizon
+		if t.Depth < int(shouldBeSplitToLevel) {
 			t.split()
 			for _, c := range t.children {
 				c.SplitIfNeeded(camPos, camDir, fov) //recurse
 			}
 		}
-		//}
 
-		//} //else {
-		//		t.cull = true
-		//		}
-		//}
-	}
-
-	//}
-
-	if len(t.children) == 0 && t.Depth > 5 && t.Normal.Dot((t.centre.Sub(camPos)).Normalise()) > 0.2 {
-		//t.cull = true
-		//final triangle is backfacing - cull it
 	}
 
 }
-
-//}
 
 func (t *Tri) splitDownTo(level int) {
 
@@ -888,7 +938,13 @@ func (t *Tri) probe(ray *ray.Ray, stats *ProbeStats, depth int) {
 			stats.prismHits++
 			for _, ct := range t.children {
 
-				if ray.End.Y > ct.yMax && ray.Origin.Y > ct.yMax || ray.End.Y < ct.yMin && ray.Origin.Y < ct.yMin {
+				if ray.End.Y > ct.yMax && ray.Origin.Y > ct.yMax ||
+					ray.End.Y < ct.yMin && ray.Origin.Y < ct.yMin ||
+					ray.End.X > ct.xMax && ray.Origin.X > ct.xMax ||
+					ray.End.X < ct.xMin && ray.Origin.X < ct.xMin ||
+					ray.End.Z > ct.zMax && ray.Origin.Z > ct.zMax ||
+					ray.End.Z < ct.zMin && ray.Origin.Z < ct.zMin {
+					stats.skips++
 					continue
 				}
 
@@ -1137,7 +1193,10 @@ func newTri(parent *Tri, m *TriMesh, depth int, vi ...uint32) *Tri {
 
 	//t := Tri{depth: depth, vi: vi, children: []*Tri{}, mesh: m, faceIndex: fi}
 	t := Tri{parent: parent, Depth: depth, vi: vi, children: []*Tri{},
-		mesh: m, yMin: math.MaxFloat64, yMax: -math.MaxFloat64,
+		mesh: m,
+		xMin: math.MaxFloat64, xMax: -math.MaxFloat64,
+		yMin: math.MaxFloat64, yMax: -math.MaxFloat64,
+		zMin: math.MaxFloat64, zMax: -math.MaxFloat64,
 		PrismFaces: []*poly.ConvexPoly{nil, nil, nil, nil, nil},
 	}
 
@@ -1163,15 +1222,67 @@ func (t *Tri) ToSimpleMesh(id uint16, lm *TriMesh, fm *TriMesh, material string,
 		log.Logit("mesh too big - over 65535 verts")
 	}
 
+	lm.getNormals(asWater) //we must get normals (becuase it calculates them) before updating UVx's
+
 	wp := uint32(0)
 
 	t.getFacesInto(fis, &wp, faceTest) //populate Fis (recursivley from the root triangle)
+	fis = fis[:wp]                     //truncate at the write pointer
 
-	fis = fis[:wp] //truncate at the write pointer
+	//kill two birds with one stone - generate a subset of verts just for the face sets - and set all their Y's
 
-	normals := lm.getNormals(asWater) //we must get normals (becuase it calculates them) before updating UVx's
-	lm.updateUVxsFromNormals()
-	return mesh.NewFilledSimpleMesh(id, lm.getPositions(asWater), normals, lm.getUVs(), fis, material)
+	np := make([]float32, lm.VertCount()*3)  // new position
+	nn := make([]float32, lm.VertCount()*3)  // new normals
+	nuv := make([]float32, lm.VertCount()*2) // new Uvs
+
+	mapping := make(map[uint16]uint16) //map from old vert index to new vert index
+
+	for i := 0; i < int(wp); i++ {
+		fi := fis[i]
+		tfi, present := mapping[fi]
+		if !present {
+			v := lm.verts[fi]
+			v.uv.UpdateUVxFromNormal(v.n)
+
+			ni := uint16(len(mapping))
+			ni2 := ni * 2 //new index (for uv)
+			ni3 := ni * 3 //new index (for normal/pos)
+
+			if asWater {
+				nn[ni3], nn[ni3+1], nn[ni3+2] = 0, 1, 0
+			} else {
+				nn[ni3], nn[ni3+1], nn[ni3+2] = float32(v.n.X), float32(v.n.Y), float32(v.n.Z)
+			}
+
+			nuv[ni2], nuv[ni2+1] = float32(v.uv.X), float32(v.uv.Y)
+
+			np[ni3] = float32(v.p.X)
+			if asWater {
+				np[ni3+1] = float32(v.wl)
+			} else {
+				np[ni3+1] = float32(v.p.Y)
+			}
+			np[ni3+2] = float32(v.p.Z)
+
+			mapping[fi] = ni
+
+			fis[i] = ni //update the face index to point to the new vert index
+		} else {
+			fis[i] = uint16(tfi) //update the face index to point to the new vert index
+		}
+	}
+
+	np = np[0 : len(mapping)*3] //truncate to actual size
+	nn = nn[0 : len(mapping)*3]
+	nuv = nuv[0 : len(mapping)*2]
+
+	log.Logit(t.mesh.VertCount(), "verts reduced to", len(mapping), "for mesh", id)
+
+	//normals := lm.getNormals(asWater) //we must get normals (becuase it calculates them) before updating UVx's
+	//lm.updateUVxsFromNormals()
+
+	//return mesh.NewFilledSimpleMesh(id, lm.getPositions(asWater), normals, lm.getUVs(), fis, material)
+	return mesh.NewFilledSimpleMesh(id, np, nn, nuv, fis, material)
 
 }
 
