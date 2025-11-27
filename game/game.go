@@ -31,16 +31,16 @@ type Game struct { //the DATA of a game in progress - it can be entirely replace
 	Sounds []*sound.Sound
 
 	Running     bool
-	runwayStart *vec.V3
-	runwayEnd   *vec.V3
+	RunwayStart *vec.V3
+	RunwayEnd   *vec.V3
 	runwayWidth float64
 	stretchDir  bool
 	ZeroG       bool
 
-	fire       *terrain.TriMesh
-	landSize   float64   //size of land square
-	landHeight float64   //max height of land
-	kinks      []float64 //land bends
+	Fire       *terrain.TriMesh
+	LandSize   float64   //size of land square
+	LandHeight float64   //max height of land
+	Kinks      []float64 //land bends
 }
 
 var mutex = sync.RWMutex{}
@@ -63,9 +63,9 @@ func New(id uint32, name string) *Game {
 		Running:    false,
 		Masses:     []*mass.Mass{},
 		Things:     []*thing.Thing{},
-		landSize:   landSize,
-		landHeight: landHeight,
-		kinks:      kinks,
+		LandSize:   landSize,
+		LandHeight: landHeight,
+		Kinks:      kinks,
 	}
 
 	game.BuildFireMesh()
@@ -104,7 +104,7 @@ func AllRunning() []*Game {
 }
 
 func (game *Game) GetFire() *terrain.TriMesh {
-	return game.fire
+	return game.Fire
 }
 
 func (game *Game) MergeThing(t *thing.Thing, tm []*mass.Mass) *thing.Thing {
@@ -130,7 +130,7 @@ func (g *Game) DeleteLastMass() {
 }
 
 func (game *Game) Burn() {
-	game.fire.Burn(game.fire.Root)
+	game.Fire.Burn(game.Fire.Root)
 }
 
 func (game *Game) Save(filename string, selectedMasses map[*mass.Mass]bool) {
@@ -156,12 +156,12 @@ func (game *Game) Save(filename string, selectedMasses map[*mass.Mass]bool) {
 func (game *Game) landSizeFromByteBuffer(buff *bytes.Buffer) {
 	le := binary.LittleEndian
 
-	binary.Read(buff, le, &game.landSize)
-	binary.Read(buff, le, &game.landHeight)
+	binary.Read(buff, le, &game.LandSize)
+	binary.Read(buff, le, &game.LandHeight)
 	kinkCount := byte(0)
 	binary.Read(buff, le, &kinkCount)
-	game.kinks = make([]float64, kinkCount)
-	binary.Read(buff, le, &game.kinks)
+	game.Kinks = make([]float64, kinkCount)
+	binary.Read(buff, le, &game.Kinks)
 
 }
 
@@ -169,11 +169,11 @@ func landToBytes(s *Game) []byte {
 
 	buff := new(bytes.Buffer)
 	le := binary.LittleEndian
-	binary.Write(buff, le, s.landSize)
-	binary.Write(buff, le, s.landHeight)
-	kinkCount := byte(len(s.kinks))
+	binary.Write(buff, le, s.LandSize)
+	binary.Write(buff, le, s.LandHeight)
+	kinkCount := byte(len(s.Kinks))
 	binary.Write(buff, le, kinkCount)
-	binary.Write(buff, le, s.kinks)
+	binary.Write(buff, le, s.Kinks)
 
 	return buff.Bytes()
 }
@@ -211,14 +211,14 @@ func Load(filename string) *Game {
 }
 
 func (game *Game) SetRunway(start *vec.V3, vector *vec.V3, width float64) {
-	game.runwayStart = start
-	game.runwayEnd = start.Add(vector)
+	game.RunwayStart = start
+	game.RunwayEnd = start.Add(vector)
 	game.runwayWidth = width
 }
 
 func (game *Game) BuildFireMesh() *terrain.TriMesh {
-	game.fire = terrain.NewTriMesh("fire", 20000, game.landSize, game.kinks, game.landHeight)
-	return game.fire
+	game.Fire = terrain.NewTriMesh("fire", 20000, game.LandSize, game.Kinks, game.LandHeight)
+	return game.Fire
 }
 
 // func (game *State) MoveCameras() {
@@ -312,7 +312,7 @@ func (game *Game) RunEngines(activity *msg.Msg) {
 }
 
 func (g *Game) Ignite(position *vec.V3) {
-	g.fire.Ignite(position)
+	g.Fire.Ignite(position)
 }
 
 // pass vms as 0 to use actual mass velocities

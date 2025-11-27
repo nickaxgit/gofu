@@ -17,7 +17,8 @@ func StepWorldsForever() {
 	//every 100 ms step all worlds
 	for range time.Tick(time.Millisecond * 33) { //<<waits here  //30fps
 		//print(".") //<< this is the heartbeat
-		for _, game := range game.AllRunning() {
+		ar := game.AllRunning()
+		for _, game := range ar {
 
 			cvs, lands := device.ViewersOf(game) //game.ViewerscurrentViewers(game) //TODO optimise (cache this) - also shouldn't need to collect/pass lands
 			//game.UpdateCurrentPlayersAndViewers() //don't need to do this every cycle
@@ -48,7 +49,7 @@ func StepWorldsForever() {
 				viewer.SendCamera()
 				//viewer.SendLabels()
 
-				if viewer.ViewChangedSignificantly() {
+				if viewer.Land == nil || viewer.ViewChangedSignificantly() {
 
 					// go func() {
 					// 	if game.GetFire().Root.FireInfo == nil {
@@ -63,7 +64,8 @@ func StepWorldsForever() {
 
 					message := msg.Empty()
 					//use copies of the camera position/direction (as camera is potentially mutated on the main thread)
-					viewer.LandTri = game.MakeLand(viewer.Camera.Position.Clone(), viewer.Camera.Direction.Clone(), message).Root
+					viewer.MakeLand(game, message)
+
 					viewer.Send(message)
 					//}()
 				}
