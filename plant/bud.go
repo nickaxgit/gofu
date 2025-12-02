@@ -68,7 +68,6 @@ func GrowTree() *mesh.SimpleMesh {
 	stalk.addBud(&bud{twist: -.1, turn: -math.Pi / 5, grows: []*segmentType{leaf, leaf, leaf, stalk, leaf, stalk, stalk}, sproutAge: 9})
 
 	//stalk.addBud(&bud{twist: .1, direction: NewVec3(0, 1, -1).normalise(), grows: stalk, sproutAge: 9})
-
 	// trunk:=segment{segType:segmentType{name:"stalk"}}
 
 	trunk := NewSegment(nil, vec.NewVec3(0, 0, 0), vec.NewVec3(1, 0, 0), stalk, stalkGirth.GetY(100)) //segment{segType: stalk, age: 0, children: make([]*segment, 0)}

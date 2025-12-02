@@ -39,7 +39,7 @@ func (fm *TriMesh) Burn(ft *Tri) int {
 	if fi.flames > 0 {
 		fi.flames++
 		if fi.flames > int(fi.sparkAt) && fi.flames < int(fi.sparkAt)+10 {
-			fm.Ignite(ft.centre.Add(vec.NewVec3((rand.Float64()-0.5)*50, 0, (rand.Float64()-0.5)*50)))
+			fm.Ignite(ft.Centre.Add(vec.NewVec3((rand.Float64()-0.5)*50, 0, (rand.Float64()-0.5)*50)))
 		}
 		if fi.flames == 300 {
 			fi.flames = -1 //burnt out
@@ -59,7 +59,7 @@ func (tri *Tri) GetFlames(lm *TriMesh, fm *TriMesh, intoMesh *mesh.SimpleMesh, c
 	if tri.FireInfo.flames > 0 { //fTri.allBLTsAlight() { //fTri.flames > 0 {
 
 		if tri.FireInfo.landDepth < 10 { //sampling at level 10 is 'good enough' for flame base
-			p, t := lm.Root.VprobeLand(tri.centre) //TODO - do once and cache - also normal (for slope)
+			p, t := lm.Root.VprobeLand(tri.Centre) //TODO - do once and cache - also normal (for slope)
 			if t.Depth < 8 {
 				return 0
 			} //it's either very far away, or behind the camera
@@ -76,7 +76,7 @@ func (tri *Tri) GetFlames(lm *TriMesh, fm *TriMesh, intoMesh *mesh.SimpleMesh, c
 		}
 
 		//careful not to mutate the ftri centre
-		base := tri.centre.Clone()
+		base := tri.Centre.Clone()
 		base.Y = tri.FireInfo.y
 
 		intoMesh.Billboard(base, vec.Up, cam.Position, 4, 0, 8, 3, tcs) //triangular flame

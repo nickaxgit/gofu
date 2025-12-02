@@ -97,6 +97,10 @@ type Device struct {
 	warning     []*errorplus.Event //we collect warnings per request/device
 	NumWarnings uint32             //current count of warnings - we reuse the warnings in the slice to avoid allocations
 
+	nearTreeCount        int
+	treeTris             []*terrain.Tri //tris suitable for tree placement (level 10)
+	nearTreePositions    []float32      //x,z positions of near trees (centres of tree tris) - ready for sending
+	farTreeBillBoardMesh *mesh.SimpleMesh
 }
 
 var mutex = sync.RWMutex{}
@@ -288,6 +292,8 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	///scorchedLand.WriteTo(message, 1)
 	wireframe.WriteTo(response, 1)
 
+	device.GetTreesInto(response)
+
 }
 
 func Watching(p *player.Player) []*Device {
@@ -389,6 +395,10 @@ func New(id uint32, name string,
 		InMtx:          &sync.Mutex{},
 		mixers:         mixer.StandardMixers,
 		warning:        make([]*errorplus.Event, 10),
+		nearTreeCount : 0,
+		treeTris: make([]*terrain.Tri,5000), //tris suitable for tree placement (level 10)
+		nearTreePositions:    make([]float32, 500),      //x,z positions of near trees (centres of tree tris) - ready for sending
+		farTreeBillBoardMesh: simpleMesh.New()
 	}
 
 	//important
@@ -2132,4 +2142,139 @@ func Role(target *player.Player, device *Device) string {
 		return "Unknown role"
 	}
 
+}
+
+// func (dev *Device) FetchTrees(tri *Tri, depth int, positions []float32, billBoardMesh *mesh.SimpleMesh, camPos *vec.V3, camDir *vec.V3, ray *ray.Ray, hidden *int) {
+
+// 	mid := tri.centre
+// 	tcs := mesh.NewTcs(0, 1, 1, 0)
+
+// 	treeTop := vec.NewVec3(0, 0, 0) //
+// 	if tri.Depth == depth {
+// 		if !landMesh.scorchedAt(landMesh.Root, mid) && !tri.OnOrUnderWater(landMesh) {
+
+// 			toTree := mid.Sub(camPos).Normalise()
+// 			dotProd := toTree.Dot(camDir)
+
+// 			if mid.DistanceFrom(camPos) < 100 {
+// 				if dotProd > -0.2 { //trees in front of, or somewhat behind the camera
+// 					treeTop.SetFrom(mid)
+// 					treeTop.Y += 3
+
+// 					ray.PointAt(treeTop)
+
+// 					//check for occlusion (by the triangle it stands on)
+// 					//TODO - check against whole landscape (although these are nearby trees)
+// 					//NOTE Set an occluded flag on triangles and set once (check high and Low) - if the high point is occluded - no need to check low
+// 					//if tri.prismFaces[5].Probe(ray) {
+// 					if tri.poly.Probe(ray) {
+// 						*hidden++
+// 						return
+// 					}
+
+// 					//place a (instanced mesh) tree here
+// 					positions = append(positions, mid.AsFloat32s()...)
+// 				}
+// 			} else { //it's a faraway tree - only place it if the ground slopes towards the camera
+// 				if dotProd > .25 { //trees generally in front of the camera}
+// 					if toTree.Dot(tri.Normal) < 0 { //if the triangle slopes towards camera
+// 						billBoardMesh.Billboard(mid, up, camPos, 20, 20, 20, 4, tcs) //billboard tree
+// 					}
+
+// 				}
+// 			}
+// 		}
+// 	} else {
+// 		//for _, c := range t.children {
+// 		for i := 0; i < tri.childCount; i++ {
+// 			landMesh.FetchTrees(tri.children[i], depth, positions, billBoardMesh, camPos, camDir, ray, hidden)
+// 		}
+// 	}
+
+// }
+
+func (dev *Device) PlaceTrees() int {
+
+	occludedTrees := 0
+	wp := 0
+	dev.Land.Root.Flatten(10, dev.treeTris, &wp) //get all triangles at depth 10  -*potential* tree sites
+
+	ray := ray.New(dev.Camera.Position, vec.NoWhereSpecial) //set up *one* ray for firing at the treetops (reuse it!)
+	treeTop := vec.NewVec3(0, 0, 0)                         //scratch
+	toTree := vec.NewVec3(0, 0, 0)
+
+	stats := terrain.NewProbeStats()
+	
+	dev.nearTreeCount = 0
+	dev.farTreeBillBoardMesh.Reset()
+	
+
+
+	for i := 0; i < wp; i++ { //_, tri := range tris {
+		tri := dev.treeTris[i]
+		mid := tri.Centre
+		tcs := mesh.NewTcs(0, 1, 1, 0)
+
+		if !dev.Land.ScorchedAt(dev.Land.Root, mid) && !tri.OnOrUnderWater(dev.Land) {
+
+			toTree.SubInto(mid, dev.Camera.Position)
+			toTree.NormaliseInPlace()
+			dotProd := toTree.Dot(dev.Camera.Direction)
+
+			if mid.DistanceFrom(dev.Camera.Position) < 100 {
+				if dotProd > -0.2 { //trees in front of, or somewhat behind the camera
+					treeTop.SetFrom(mid)
+					treeTop.Y += 3
+
+					ray.PointAt(treeTop)
+
+					//check for occlusion (by the triangle it stands on)
+					//TODO - check against whole landscape (although these are nearby trees)
+
+					stats.Hit = false
+					dev.Land.Root.Probe(dev.Land, ray, stats, 0)
+					if stats.Hit {
+						occludedTrees++
+						continue
+					}
+
+					//place a (instanced mesh) tree here
+					wp := dev.nearTreeCount * 3
+					dev.nearTreePositions[wp] = float32(mid.X)
+					dev.nearTreePositions[wp+1] = float32(mid.Y)
+					dev.nearTreePositions[wp+2] = float32(mid.Z)
+					dev.nearTreeCount++
+
+				}
+			} else { //it's a faraway tree - only place it if the ground slopes towards the camera
+				//todo - occlusion cull far trees too
+				if dotProd > .25 { //trees generally in front of the camera}
+					if toTree.Dot(tri.Normal) < 0 { //if the triangle slopes towards camera
+						dev.farTreeBillBoardMesh.Billboard(mid, dev.Camera.Up, dev.Camera.Position, 20, 20, 20, 4, tcs) //billboard tree
+					}
+
+				}
+			}
+		}
+	}
+
+	return occludedTrees
+
+}
+
+func (dev *Device) GetTreesInto(message *msg.Msg) {
+
+	//TODO only reposition/resend trees in new positions (most trees do not need resending)
+	//need to do trees after waterlines so we don't get trees underwater
+
+	occludedTrees := dev.PlaceTrees() //place trees on non occluded, level 10, triangles infront of the camera
+	log.Logit("Placed trees - occluded:", occludedTrees, "near trees:", dev.nearTreeCount, "far trees:")
+	//near trees (mesh intances)
+	message.Write(msg.PositionInstances,
+		uint16(dev.nearTreeCount),                    //number on instances (near trees)
+		dev.nearTreePositions[0:dev.nearTreeCount*3], //Slice of XYZ float32's
+	)
+
+	//far trees (billboards)
+	dev.farTreeBillBoardMesh.WriteTo(message, 1)
 }

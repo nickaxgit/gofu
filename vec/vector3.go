@@ -89,6 +89,19 @@ func (dst *V3) SubInto(a, b *V3) *V3 {
 	return dst
 }
 
+func (v *V3) NormaliseInPlace() *V3 {
+	l := v.Length()
+	if l == 0 {
+		panic("can't normalise 0 vector")
+		//return v
+	}
+	reciprocal := 1.0 / l //three multiplications is faster than one division
+	v.X *= reciprocal
+	v.Y *= reciprocal
+	v.Z *= reciprocal
+	return v
+}
+
 // MulInto mutates dst to be a*s
 // func (dst *V3) MulInto(a *V3, s float64) *V3 {
 // 	// dst = a * s

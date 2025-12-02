@@ -4,7 +4,7 @@ import (
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/mesh"
-	"github.com/nickax/gofu/ray"
+	//"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/vec"
 	"math"
 )
@@ -258,14 +258,15 @@ func (m *TriMesh) addVert(p *vec.V3, u float64, v float64) uint32 {
 
 // }
 
-func (m *TriMesh) updateUVxsFromNormals() {
+//now done within ToSimpleMesh (only for verts actually used in faces)
+// func (m *TriMesh) updateUVxsFromNormals() {
 
-	for i := 0; i < m.VertCount(); i++ {
-		v := m.verts[i]
-		v.uv.UpdateUVxFromNormal(v.n)
-	}
+// 	for i := 0; i < m.VertCount(); i++ {
+// 		v := m.verts[i]
+// 		v.uv.UpdateUVxFromNormal(v.n)
+// 	}
 
-}
+// }
 
 func (m *TriMesh) VertCount() int {
 
@@ -383,7 +384,7 @@ func (mesh *TriMesh) getYLowHigh(tri *Tri) (low *vec.V3, high *vec.V3) {
 
 }
 
-func (mesh *TriMesh) scorchedAt(tri *Tri, p *vec.V3) bool {
+func (mesh *TriMesh) ScorchedAt(tri *Tri, p *vec.V3) bool {
 	if tri.childCount == 0 {
 		return tri.Scorched //reached a leaf - return sorched value
 	} else {
@@ -391,60 +392,11 @@ func (mesh *TriMesh) scorchedAt(tri *Tri, p *vec.V3) bool {
 		for i := 0; i < tri.childCount; i++ {
 			//if c.prismFaces[5].Contains(p) {
 			if tri.children[i].contains2D(p) {
-				return mesh.scorchedAt(tri.children[i], p)
+				return mesh.ScorchedAt(tri.children[i], p)
 			}
 		}
 		return false
 	}
-}
-
-func (landMesh *TriMesh) FetchTrees(tri *Tri, depth int, positions []float32, billBoardMesh *mesh.SimpleMesh, camPos *vec.V3, camDir *vec.V3, ray *ray.Ray, hidden *int) {
-
-	mid := tri.centre
-	tcs := mesh.NewTcs(0, 1, 1, 0)
-
-	treeTop := vec.NewVec3(0, 0, 0) //
-	if tri.Depth == depth {
-		if !landMesh.scorchedAt(landMesh.Root, mid) && !tri.OnOrUnderWater(landMesh) {
-
-			toTree := mid.Sub(camPos).Normalise()
-			dotProd := toTree.Dot(camDir)
-
-			if mid.DistanceFrom(camPos) < 100 {
-				if dotProd > -0.2 { //trees in front of, or somewhat behind the camera
-					treeTop.SetFrom(mid)
-					treeTop.Y += 3
-
-					ray.PointAt(treeTop)
-
-					//check for occlusion (by the triangle it stands on)
-					//TODO - check against whole landscape (although these are nearby trees)
-					//NOTE Set an occluded flag on triangles and set once (check high and Low) - if the high point is occluded - no need to check low
-					//if tri.prismFaces[5].Probe(ray) {
-					if tri.poly.Probe(ray) {
-						*hidden++
-						return
-					}
-
-					//place a (instanced mesh) tree here
-					positions = append(positions, mid.AsFloat32s()...)
-				}
-			} else { //it's a faraway tree - only place it if the ground slopes towards the camera
-				if dotProd > .25 { //trees generally in front of the camera}
-					if toTree.Dot(tri.Normal) < 0 { //if the triangle slopes towards camera
-						billBoardMesh.Billboard(mid, up, camPos, 20, 20, 20, 4, tcs) //billboard tree
-					}
-
-				}
-			}
-		}
-	} else {
-		//for _, c := range t.children {
-		for i := 0; i < tri.childCount; i++ {
-			landMesh.FetchTrees(tri.children[i], depth, positions, billBoardMesh, camPos, camDir, ray, hidden)
-		}
-	}
-
 }
 
 func (mesh *TriMesh) shoreLines(tri *Tri, levels []float64, snapped *int) {

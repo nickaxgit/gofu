@@ -18,6 +18,12 @@ type SimpleMesh struct {
 	fwp          uint16
 }
 
+func (m *SimpleMesh) Reset() {
+	m.vwp = 0
+	m.fwp = 0
+
+}
+
 type Tcs struct {
 	left, top, right, bottom float32
 }
@@ -136,25 +142,46 @@ func NewFilledSimpleMesh(id uint16, p []float32, n []float32, uv []float32, fi [
 
 func (sm *SimpleMesh) AddVert(p *vec.V3, n *vec.V3, u float32, v float32) uint16 {
 
-	sm.p = append(sm.p, p.AsFloat32s()...)
-	sm.n = append(sm.n, n.AsFloat32s()...)
-	sm.uv = append(sm.uv, u, v)
+	//sm.p = append(sm.p, p.AsFloat32s()...)
 
-	return uint16(len(sm.p)/3) - 1
+	wp3 := int(sm.vwp) * 3
+	wp2 := int(sm.vwp) * 2
+	sm.p[wp3] = float32(p.X) //:vwp+3] = pappend(sm.p, p.AsFloat32s()...)
+	sm.p[wp3+1] = float32(p.Y)
+	sm.p[wp3+2] = float32(p.Z)
+	//sm.vwp += 3
+
+	//sm.n = append(sm.n, n.AsFloat32s()...)
+	sm.n[wp3] = float32(n.X) //:vwp+3] = pappend(sm.n, n.AsFloat32s()...)
+	sm.n[wp3+1] = float32(n.Y)
+	sm.n[wp3+2] = float32(n.Z)
+
+	//sm.uv = append(sm.uv, u, v)
+	sm.uv[wp2] = u //:vwp+2] = pappend(sm.uv, u, v)
+	sm.uv[wp2+1] = v
+
+	sm.vwp += 1
+
+	return sm.vwp - 1
 
 }
 
 func (sm *SimpleMesh) VertCount() uint16 {
-	return uint16(len(sm.p) / 3)
+	return sm.vwp
 }
 
 func (sm *SimpleMesh) FaceCount() uint16 {
-	return uint16(len(sm.fi) / 3)
+	return sm.fwp
 }
 
 func (sm *SimpleMesh) AddFace(v1, v2, v3 uint16) {
 
-	sm.fi = append(sm.fi, v1, v2, v3)
+	wp3 := uint16(sm.fwp * 3)
+	sm.fi[wp3] = v1
+	sm.fi[wp3+1] = v2
+	sm.fi[wp3+2] = v3
+	sm.fwp += 1
+	//sm.fi = append(sm.fi, v1, v2, v3)
 
 }
 

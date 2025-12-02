@@ -49,7 +49,7 @@ type Tri struct {
 	PrismFaces []*poly.ConvexPoly //3 sides plus bottom and top
 	poly       *poly.ConvexPoly   // made/cached JIT
 	//shadow  *poly.ConvexPoly //the trinagle pojected onto y=0 JIT/cached for vprobe
-	centre   *vec.V3
+	Centre   *vec.V3
 	FireInfo *fireInfo //nil for land triangles
 
 }
@@ -334,7 +334,7 @@ func (parent *Tri) addChild(mesh *TriMesh, vi ...uint32) *Tri {
 // scorch - recurse through all land triangles flagging them as scorched by checking their centres in the fire mesh
 func (tri *Tri) Scorch(fire *TriMesh) {
 	if tri.childCount == 0 && !tri.Culled {
-		if fire.scorchedAt(fire.Root, tri.centre) {
+		if fire.ScorchedAt(fire.Root, tri.Centre) {
 			tri.Scorched = true
 		}
 	}
@@ -469,6 +469,18 @@ func (tri *Tri) countChildren(count *int) {
 
 }
 
+func (tri *Tri) Flatten(depth int, into []*Tri, wp *int) {
+	if tri.Depth == depth {
+		into[*wp] = tri
+		*wp++
+	}
+	for i := 0; i < tri.childCount; i++ {
+		if tri.children[i].Depth <= depth {
+			tri.children[i].Flatten(depth, into, wp)
+		}
+	}
+
+}
 func (tri *Tri) getLeaves() []*Tri {
 	leaves := []*Tri{}
 	if tri.childCount == 0 {
@@ -514,7 +526,7 @@ func (tri *Tri) Occlude(mesh *TriMesh, camPos *vec.V3) {
 		// }
 
 		//backFacecull test
-		ray.PointAt(leaf.centre)
+		ray.PointAt(leaf.Centre)
 		if ray.GetDirection().Dot(leaf.Normal) > 0 {
 			//triangle is backfacing - it will be culled anyway
 			leaf.Culled = true
@@ -533,10 +545,10 @@ func (tri *Tri) Occlude(mesh *TriMesh, camPos *vec.V3) {
 
 					ray.PointAt(shortTarget)
 
-					stats.hit = false //clear the hit (we acculumulate in the stats object)
+					stats.Hit = false //clear the hit (we acculumulate in the stats object)
 
-					tri.probe(mesh, ray, stats, 0)
-					if stats.hit {
+					tri.Probe(mesh, ray, stats, 0)
+					if stats.Hit {
 						v.occluded = true
 						occluded++
 					}
@@ -735,7 +747,7 @@ func (tri *Tri) SplitIfNeeded(mesh *TriMesh, camPos *vec.V3, camDir *vec.V3, fov
 		shouldBeSplitToLevel := 5.0
 
 		if tri.Depth >= 5 {
-			distSQ := camPos.DistanceSQ(tri.centre)
+			distSQ := camPos.DistanceSQ(tri.Centre)
 			//dist := camPos.DistanceFrom(t.centre)
 
 			//apud := (2 * t.area()) / (0.0002 * (distSQ))
@@ -745,7 +757,7 @@ func (tri *Tri) SplitIfNeeded(mesh *TriMesh, camPos *vec.V3, camDir *vec.V3, fov
 			//we want triangles at 3 metres split to level 15 - and those at 10,000 metres split to level 5
 			shouldBeSplitToLevel = 12 - math.Log10(distSQ/2) //)*2 // (dist*dist-9)/(2000*2000) // * (5-15) + 15
 
-			dp := camDir.Dot(tri.centre.Sub(camPos).Normalise())
+			dp := camDir.Dot(tri.Centre.Sub(camPos).Normalise())
 			if dp < 0.1 {
 				dp = 0.1
 			} //don't penalise *too* much for being behind
@@ -832,12 +844,16 @@ func (tri *Tri) split(mesh *TriMesh) {
 
 func (tri *Tri) calcCentre(mesh *TriMesh) *vec.V3 {
 	v := mesh.verts
-	tri.centre = vec.NewVec3(0, 0, 0)
-	tri.centre.AddInto(v[tri.vi[0]].p, v[tri.vi[1]].p, v[tri.vi[2]].p)
-	tri.centre.MulIn(float64(1.0 / 3.0))
+	tc := tri.Centre
+	if tc == nil {
+		tri.Centre = vec.NewVec3(0, 0, 0)
+	}
+	tc.X, tc.Y, tc.Z = 0, 0, 0
+	tri.Centre.AddInto(v[tri.vi[0]].p, v[tri.vi[1]].p, v[tri.vi[2]].p)
+	tri.Centre.MulIn(float64(1.0 / 3.0))
 	//t.centre.Y += 0.1
 
-	return tri.centre
+	return tri.Centre
 }
 
 func (tri *Tri) area(mesh *TriMesh) float64 {
@@ -850,7 +866,7 @@ func (tri *Tri) area(mesh *TriMesh) float64 {
 
 // returns the deepest (i.e. childless/leaf) triangle intersected by the ray from p0 to p1
 // maintaining a count, and populating the slice of penetrations by refererence is easier to get your head around than appending slices (possibly faster too)
-func (tri *Tri) probe(mesh *TriMesh, ray *ray.Ray, stats *ProbeStats, depth int) {
+func (tri *Tri) Probe(mesh *TriMesh, ray *ray.Ray, stats *ProbeStats, depth int) {
 
 	if depth > stats.maxDepth {
 		stats.maxDepth = depth
@@ -874,7 +890,7 @@ func (tri *Tri) probe(mesh *TriMesh, ray *ray.Ray, stats *ProbeStats, depth int)
 
 		if tri.poly.Probe(ray) {
 			stats.leafHits++
-			stats.hit = true //exit signal
+			stats.Hit = true //exit signal
 			//pen := ray.Intersect.Clone()
 			//*done = true
 		} else {
@@ -903,8 +919,8 @@ func (tri *Tri) probe(mesh *TriMesh, ray *ray.Ray, stats *ProbeStats, depth int)
 					continue
 				}
 
-				ct.probe(mesh, ray, stats, depth+1)
-				if stats.hit {
+				ct.Probe(mesh, ray, stats, depth+1)
+				if stats.Hit {
 					return
 				}
 			}
@@ -919,7 +935,7 @@ func (tri *Tri) probe(mesh *TriMesh, ray *ray.Ray, stats *ProbeStats, depth int)
 }
 
 type ProbeStats struct {
-	hit           bool //used in occlusiuon cull
+	Hit           bool //used in occlusiuon cull
 	leafHits      int
 	leafMisses    int
 	prismHits     int
