@@ -187,18 +187,21 @@ func (sm *SimpleMesh) AddFace(v1, v2, v3 uint16) {
 
 func (sm *SimpleMesh) WriteTo(message *msg.Msg, maxInstances uint16) {
 
+	if sm.vwp == 0 || sm.fwp == 0 {
+		panic("Attempt to write empty mesh")
+	}
 	wp := message.WritePointer()
 	numPadBytes := 4 - ((wp + 1) % 4) + 1
 	padBytes := make([]byte, numPadBytes)
 	message.Write(msg.Mesh, sm.id, //0,1,2
-		uint32(len(sm.p)/3),  //number of vertices 3,4,5,6
-		uint32(len(sm.fi)/3), //number of faces 7,8,9,10
-		byte(numPadBytes),    //11, because buffers are now in a single message - we need variable padding to align the float arrays
-		padBytes,             //0 pad bytes are awkward - so we will pad with 1,2,3 or 4 bytes as needed		               //because buffers are now in a single message - we need variable padding to align the float arrays
-		sm.p,                 //vertex positions (slice of Float32, 3 per vert)
-		sm.n,                 //vertex normals (slice of Float32, 3 per vert)
-		sm.uv,                //uv coordinates (slice of Float32, 2 per vert)
-		sm.fi,                //faces (slice of Uint16, 3 per face)
+		uint32(sm.vwp),        //number of vertices 3,4,5,6
+		uint32(sm.fwp),        //number of faces 7,8,9,10
+		byte(numPadBytes),     //11, because buffers are now in a single message - we need variable padding to align the float arrays
+		padBytes,              //0 pad bytes are awkward - so we will pad with 1,2,3 or 4 bytes as needed		               //because buffers are now in a single message - we need variable padding to align the float arrays
+		sm.p[0:(sm.vwp-1)*3],  //vertex positions (slice of Float32, 3 per vert)
+		sm.n[0:(sm.vwp-1)*3],  //vertex normals (slice of Float32, 3 per vert)
+		sm.uv[0:(sm.vwp-1)*2], //uv coordinates (slice of Float32, 2 per vert)
+		sm.fi[0:(sm.fwp-1)*3], //faces (slice of Uint16, 3 per face)
 		sm.materialName,
 		maxInstances,
 	)

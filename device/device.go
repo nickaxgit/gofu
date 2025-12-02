@@ -38,6 +38,7 @@ import (
 	"github.com/nickax/gofu/crypto"
 	"github.com/nickax/gofu/fiz/mixer"
 	"github.com/nickax/gofu/persist"
+	"github.com/nickax/gofu/plant"
 	"github.com/nickax/gofu/terrain"
 	"github.com/nickax/gofu/vec"
 )
@@ -384,21 +385,21 @@ func New(id uint32, name string,
 		mode:         editing,
 
 		//Socket:         socket,
-		Grid:           grid.New(gridOrigin, gridX, gridY),
-		cursor:         vec.NewVec2(0, 0),
-		grab:           nil,
-		keys:           make(map[string]bool),     //which keys are pressed
-		selectedMasses: make(map[*mass.Mass]bool), //which masses are selected, values are the order in which they were selected
-		boundValues:    make(map[string]*float64, 0),
-		controls:       make(map[input.ControlInput]float64),
-		mtx:            &sync.Mutex{},
-		InMtx:          &sync.Mutex{},
-		mixers:         mixer.StandardMixers,
-		warning:        make([]*errorplus.Event, 10),
-		nearTreeCount : 0,
-		treeTris: make([]*terrain.Tri,5000), //tris suitable for tree placement (level 10)
-		nearTreePositions:    make([]float32, 500),      //x,z positions of near trees (centres of tree tris) - ready for sending
-		farTreeBillBoardMesh: simpleMesh.New()
+		Grid:                 grid.New(gridOrigin, gridX, gridY),
+		cursor:               vec.NewVec2(0, 0),
+		grab:                 nil,
+		keys:                 make(map[string]bool),     //which keys are pressed
+		selectedMasses:       make(map[*mass.Mass]bool), //which masses are selected, values are the order in which they were selected
+		boundValues:          make(map[string]*float64, 0),
+		controls:             make(map[input.ControlInput]float64),
+		mtx:                  &sync.Mutex{},
+		InMtx:                &sync.Mutex{},
+		mixers:               mixer.StandardMixers,
+		warning:              make([]*errorplus.Event, 10),
+		nearTreeCount:        0,
+		treeTris:             make([]*terrain.Tri, 5000), //tris suitable for tree placement (level 10)
+		nearTreePositions:    make([]float32, 500),       //x,z positions of near trees (centres of tree tris) - ready for sending
+		farTreeBillBoardMesh: mesh.New(105, "tree", 4000, 1000),
 	}
 
 	//important
@@ -1937,6 +1938,12 @@ func (dev *Device) startIn(game *game.Game) {
 	dev.SendLabelSets()
 	dev.SendMasses(game.Masses)
 
+	treeMesh := plant.GrowTree()
+
+	tm := msg.Empty()
+	treeMesh.WriteTo(tm, 1000) //prep for 1000 near trees
+	dev.Send(tm)               //send the tree mesh
+
 	dev.primaryControls = dev.Owner
 	dev.sendGameId(game.Id) //game id starts it running
 
@@ -2204,11 +2211,9 @@ func (dev *Device) PlaceTrees() int {
 	toTree := vec.NewVec3(0, 0, 0)
 
 	stats := terrain.NewProbeStats()
-	
+
 	dev.nearTreeCount = 0
 	dev.farTreeBillBoardMesh.Reset()
-	
-
 
 	for i := 0; i < wp; i++ { //_, tri := range tris {
 		tri := dev.treeTris[i]

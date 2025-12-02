@@ -844,14 +844,13 @@ func (tri *Tri) split(mesh *TriMesh) {
 
 func (tri *Tri) calcCentre(mesh *TriMesh) *vec.V3 {
 	v := mesh.verts
-	tc := tri.Centre
-	if tc == nil {
+
+	if tri.Centre == nil {
 		tri.Centre = vec.NewVec3(0, 0, 0)
 	}
-	tc.X, tc.Y, tc.Z = 0, 0, 0
+	tri.Centre.X, tri.Centre.Y, tri.Centre.Z = 0, 0, 0
 	tri.Centre.AddInto(v[tri.vi[0]].p, v[tri.vi[1]].p, v[tri.vi[2]].p)
 	tri.Centre.MulIn(float64(1.0 / 3.0))
-	//t.centre.Y += 0.1
 
 	return tri.Centre
 }
