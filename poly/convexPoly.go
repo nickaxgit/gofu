@@ -20,8 +20,9 @@ type ConvexPoly struct {
 	normal *vec.V3
 	cp     *vec.V3 //crossProduct
 	//	pcp     float64 //y or plane normal component of previous cross product
-	epsilon float64
-	cpn     float64 //length of the normal component of the cross product
+	epsilon    float64
+	cpn        float64 //length of the normal component of the cross product
+	PointCount int
 }
 
 func (p *ConvexPoly) Highest() *vec.V3 {
@@ -139,12 +140,21 @@ func (poly *ConvexPoly) fromEdge(p *vec.V3, r float64) float64 {
 }
 
 func (poly *ConvexPoly) AddPointAt(x, y, z float64) {
+
 	poly.AddPoint(vec.NewVec3(x, y, z))
+
 }
 
 func (poly *ConvexPoly) AddPoint(p *vec.V3) {
-	poly.P = append(poly.P, p)
-	if len(poly.P) == 3 {
+	if poly.PointCount < len(poly.P) {
+		poly.P[poly.PointCount] = p
+	} else {
+		poly.P = append(poly.P, p)
+
+	}
+	poly.PointCount++
+
+	if poly.PointCount == 3 {
 		poly.Plane = plane.NewFromPoints(poly.P[0], poly.P[1], poly.P[2])
 		poly.normal = poly.Plane.GetNormal()
 	}

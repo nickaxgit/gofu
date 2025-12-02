@@ -54,12 +54,17 @@ type Tri struct {
 
 }
 
-func newTrianglePoly(t *Tri, mesh *TriMesh) *poly.ConvexPoly {
-	poly := poly.NewConvexPoly()
-	for i := 0; i < 3; i++ {
-		poly.AddPoint(mesh.verts[t.vi[i]].p)
+func (t *Tri) updateTrianglePoly(mesh *TriMesh) {
+
+	if t.poly == nil {
+		t.poly = poly.NewConvexPoly()
+	} else {
+		t.poly.PointCount = 0 //reset
 	}
-	return poly
+	for i := 0; i < 3; i++ {
+		t.poly.AddPoint(mesh.verts[t.vi[i]].p)
+	}
+
 }
 
 func (tri *Tri) reset() {
@@ -72,11 +77,18 @@ func (tri *Tri) reset() {
 	tri.xMin = math.MaxFloat64
 	tri.zMax = -math.MaxFloat64
 	tri.zMin = math.MaxFloat64
-	if tri.Depth > 0 {
-		tri.poly = nil //DONT reset the root poly (it's never re-created)
-	}
 
-	for _, c := range tri.children {
+	// for i := 0; i < 5; i++ {
+	// 	if tri.PrismFaces[i] != nil {
+	// 		tri.PrismFaces[i].PointCount = 0
+	// 	}
+	// }
+
+	// if tri.poly != nil {
+	// 	tri.poly.PointCount = 0 //DONT reset the root poly (it's never re-created)
+	// }
+
+	for _, c := range tri.children { //Reset *all* children (not just childcount - which is now zero)
 		c.reset()
 	}
 }
@@ -125,16 +137,22 @@ func (tri *Tri) Plough(mesh *TriMesh, runwayStart *vec.V3, runwayEnd *vec.V3, ru
 
 func (tri *Tri) MakePrisms(mesh *TriMesh) {
 
-	//let the Leaves have prisms (for debugginh)
-	if tri.childCount == 0 {
-		return //leaf triangles don't need prisms (it's cheaper and more accurate to test against the triangle itself)
+	if tri.PrismFaces[0] == nil {
+		tri.PrismFaces = make([]*poly.ConvexPoly, 5) //3 sides + top + bottom
+		for i := 0; i < 5; i++ {
+			tri.PrismFaces[i] = poly.NewConvexPoly()
+		}
+	} else {
+		for i := 0; i < 5; i++ {
+			tri.PrismFaces[i].PointCount = 0 //reset/reuse
+		}
 	}
 
-	//check winding !
 	for i, v := range tri.vi {
 		vp := mesh.verts[v].p
 		vpn := mesh.verts[tri.vi[(i+1)%3]].p
-		poly := poly.NewConvexPoly()
+
+		poly := tri.PrismFaces[i]
 		//poly.addPointAt(vp.x, t.yMax, vp.z)
 
 		//TODO endcaps and sides could share vec3 verts
@@ -264,9 +282,9 @@ func newVert(p *vec.V3, u, v float64) *vert {
 // 		tri.flat = &poly.ConvexPoly{}
 // 		for _, vi := range tri.vi {
 // 			tri.flat.AddPoint(tri.mesh.verts[vi].p)
-// 		}
 // 	}
 // 	return tri.flat.Contains(p)
+// 		}
 // }
 
 func (tri *Tri) find2D(p *vec.V3) *Tri {
@@ -491,9 +509,9 @@ func (tri *Tri) Occlude(mesh *TriMesh, camPos *vec.V3) {
 	rd := vec.NewVec3(0, 0, 0)
 	for _, leaf := range leaves {
 
-		if leaf.poly == nil {
-			leaf.poly = newTrianglePoly(leaf, mesh) //cache the polygon
-		}
+		// if leaf.poly == nil {
+		// 	leaf.poly = newTrianglePoly(leaf, mesh) //cache the polygon
+		// }
 
 		//backFacecull test
 		ray.PointAt(leaf.centre)
@@ -545,10 +563,10 @@ func (tri *Tri) Occlude(mesh *TriMesh, camPos *vec.V3) {
 
 	}
 
-	avgDepth := float64(totalDepth) / float64(len(mesh.verts))
+	avgDepth := float64(totalDepth) / float64(mesh.VertCount())
 	ms := time.Since(ts).Milliseconds()
 
-	log.Logit("occluded", occluded, " of ", len(mesh.verts), " verts",
+	log.Logit("occluded", occluded, " of ", mesh.VertCount(), " verts",
 		" backfacing:", backfacing,
 		" max depth:", deepestEver,
 		" avg depth:", avgDepth,
@@ -728,7 +746,10 @@ func (tri *Tri) SplitIfNeeded(mesh *TriMesh, camPos *vec.V3, camDir *vec.V3, fov
 			shouldBeSplitToLevel = 12 - math.Log10(distSQ/2) //)*2 // (dist*dist-9)/(2000*2000) // * (5-15) + 15
 
 			dp := camDir.Dot(tri.centre.Sub(camPos).Normalise())
-			shouldBeSplitToLevel += dp * 4 //bring forward facing triangles forward up to 4 levels
+			if dp < 0.1 {
+				dp = 0.1
+			} //don't penalise *too* much for being behind
+			shouldBeSplitToLevel += dp * 4 //bring front and centre triangles forward up to 4 levels
 
 			//splitPressure *= (.1 + dp) // / distSQ //.Normalise())
 		}
@@ -837,9 +858,9 @@ func (tri *Tri) probe(mesh *TriMesh, ray *ray.Ray, stats *ProbeStats, depth int)
 
 	if tri.childCount == 0 {
 
-		if tri.poly == nil {
-			tri.poly = newTrianglePoly(tri, mesh) //cache the polygon
-		}
+		//if tri.poly == nil {
+		//	tri.poly = newTrianglePoly(tri, mesh) //cache the polygon
+		//}
 
 		if tri.Culled {
 			stats.skippedCulled++
@@ -942,9 +963,9 @@ func (S *ProbeStats) String() string {
 func (tri *Tri) ProbeAll(mesh *TriMesh, ray *ray.Ray, stats *ProbeStats) {
 
 	if tri.childCount == 0 {
-		if tri.poly == nil {
-			tri.poly = newTrianglePoly(tri, mesh) //cache the polygon
-		}
+		//if tri.poly == nil {
+		//	tri.poly = newTrianglePoly(tri, mesh) //cache the polygon
+		//}
 
 		if tri.Culled {
 			stats.skippedCulled++
@@ -1020,7 +1041,9 @@ func (tri *Tri) probePrism(ray *ray.Ray) bool {
 	//for all five sides of the prism - check for a penetration
 	for i, s := range tri.PrismFaces {
 		if s == nil {
-			panic("nil prism face")
+			log.Logit("nil prism face in probePrism", i)
+			return false
+			//panic("nil prism face")
 		}
 		if s.Probe(ray) {
 			if ray.Intersect.Y > tri.yMax+epsilon || ray.Intersect.Y < tri.yMin-epsilon {
@@ -1091,7 +1114,7 @@ func (tri *Tri) calcNormal(mesh *TriMesh) *vec.V3 {
 
 	v := mesh.verts
 
-	numMeshVerts := uint32(len(v))
+	numMeshVerts := uint32(mesh.VertCount())
 	if tri.vi[0] >= numMeshVerts || tri.vi[1] >= numMeshVerts || tri.vi[2] >= numMeshVerts {
 		panic("index out of range in tri.normal")
 	}
@@ -1110,13 +1133,6 @@ func (tri *Tri) calcNormal(mesh *TriMesh) *vec.V3 {
 	return n2
 }
 
-func abs(a float64) float64 {
-	if a < 0 {
-		return -a
-	}
-	return a
-}
-
 func (parent *Tri) ReUse(childIndex int, mesh *TriMesh, vi ...uint32) *Tri {
 	child := parent.children[childIndex]
 	child.vi = vi
@@ -1125,9 +1141,10 @@ func (parent *Tri) ReUse(childIndex int, mesh *TriMesh, vi ...uint32) *Tri {
 		panic("reused child triangle has wrong depth")
 	}
 
-	child.poly = newTrianglePoly(child, mesh)
+	//child.poly.PointCount=0 // = newTrianglePoly(child, mesh)
 
 	child.calcCentre(mesh)
+	child.updateTrianglePoly(mesh)
 	//add this traingle to its verts list of triangles
 	child.addToTouches(mesh)
 
@@ -1164,7 +1181,8 @@ func newTri(parent *Tri, m *TriMesh, vi ...uint32) *Tri {
 		PrismFaces: []*poly.ConvexPoly{nil, nil, nil, nil, nil},
 	}
 
-	t.poly = newTrianglePoly(t, m)
+	//t.poly = newTrianglePoly(t, m)
+	t.updateTrianglePoly(m)
 
 	t.calcCentre(m)
 	//add this traingle to its verts list of triangles

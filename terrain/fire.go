@@ -14,7 +14,7 @@ func (fm *TriMesh) Ignite(firePos *vec.V3) {
 
 	result := fm.Root.splitUntil(fm, firePos, 10)
 	if result != nil { // are we on the map ?
-		if len(result.children) > 0 {
+		if result.childCount > 0 {
 			log.Logit("Igniting a non-leaf triangle at depth", result.Depth)
 		}
 		if result.FireInfo == nil {

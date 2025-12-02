@@ -155,6 +155,8 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	camPos := device.Camera.Position.Clone()
 	camDir := device.Camera.Direction.Clone()
 
+	device.lastCam = device.Camera.Clone() //store this as the new old position
+
 	if device.Land == nil {
 		device.Land = terrain.NewTriMesh("land", 65000, game.LandSize, game.Kinks, game.LandHeight)
 	} else {

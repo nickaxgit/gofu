@@ -41,12 +41,12 @@ type fireInfo struct {
 // return the normals of the verts specified in vis (vertices we've added)
 func (m *TriMesh) getNormals(asWater bool) []float32 {
 
-	vc := uint32(len(m.verts))
+	vc := m.VertCount()
 	//for every new vertex, reset the normal to zero, then add the normals of the faces it touches
 	n := make([]float32, vc*3) //position x,y,z
 
 	if asWater {
-		for i := range m.verts {
+		for i := 0; i < vc; i++ { //} range m.verts {
 			n[i*3+0] = 0
 			n[i*3+1] = 1
 			n[i*3+2] = 0
@@ -54,9 +54,9 @@ func (m *TriMesh) getNormals(asWater bool) []float32 {
 		return n
 
 	}
-	//big vertex index (in the huge mesh) to small vertex index (in the new sub mesh)
-	for i, v := range m.verts {
-		//for i, v := range m.verts {
+
+	for i := 0; i < vc; i++ {
+		v := m.verts[i]
 
 		if len(v.touches) > 0 {
 
@@ -75,6 +75,10 @@ func (m *TriMesh) getNormals(asWater bool) []float32 {
 			n[i*3+2] = float32(vn.Z)
 
 		} else {
+			n[i*3] = float32(0)
+			n[i*3+1] = float32(1)
+			n[i*3+2] = float32(0)
+
 			log.Logit("vert", i, "of", m.name, " touches no tris")
 		}
 	}
@@ -87,13 +91,15 @@ func (mesh *TriMesh) Reset() {
 
 	clear(mesh.midpoints) //empties the map preserving capacity
 
-	for i, v := range mesh.verts {
+	//preserve the first three verts (the root triangle)
+	for i := 0; i < 3; i++ {
+		v := mesh.verts[i]
+
 		clear(v.touches)
-		if i < 3 {
-			v.wl = 0
-			v.occluded = false
-			v.testedForOcclusion = false
-		}
+		v.wl = 0
+		v.occluded = false
+		v.testedForOcclusion = false
+
 	}
 
 	mesh.nextFreeVert = 3 //beacuse we start again at the root triangle
@@ -212,6 +218,8 @@ func (m *TriMesh) addVert(p *vec.V3, u float64, v float64) uint32 {
 		vert.occluded = false
 		vert.testedForOcclusion = false
 		vert.wl = 0
+		clear(vert.touches)
+
 		//vert.touches = make(map[*Tri]bool, 6)
 
 		//vert.incount = 0
@@ -251,26 +259,28 @@ func (m *TriMesh) addVert(p *vec.V3, u float64, v float64) uint32 {
 // }
 
 func (m *TriMesh) updateUVxsFromNormals() {
-	for _, v := range m.verts {
+
+	for i := 0; i < m.VertCount(); i++ {
+		v := m.verts[i]
 		v.uv.UpdateUVxFromNormal(v.n)
 	}
 
 }
 
-func (m *TriMesh) VertCount() uint32 {
+func (m *TriMesh) VertCount() int {
 
-	return uint32(m.nextFreeVert)
+	return int(m.nextFreeVert)
 
-	//return uint32(len(m.verts))
 }
 
 func (m *TriMesh) getUVs() []float32 {
 
-	vc := uint32(len(m.verts))
+	vc := m.VertCount()
 	uvs := make([]float32, vc*2)
 
 	//big vertex index (in the huge mesh) to small vertex index (in the new sub mesh)
-	for i, v := range m.verts {
+	for i := 0; i < vc; i++ {
+		v := m.verts[i]
 		uvs[i*2] = float32(v.uv.GetX())
 		uvs[i*2+1] = float32(v.uv.GetY())
 	}
@@ -281,10 +291,10 @@ func (m *TriMesh) getUVs() []float32 {
 
 func (m *TriMesh) getPositions(asWater bool) []float32 {
 
-	vc := uint32(len(m.verts))
+	vc := m.VertCount()
 	p := make([]float32, 0, vc*3) //position x,y,z
 
-	for i := 0; i < int(m.nextFreeVert); i++ { //, j := range m.verts {
+	for i := 0; i < vc; i++ {
 		j := m.verts[i]
 		if asWater {
 			v := []float32{float32(j.p.X), float32(j.wl), float32(j.p.Z)}
@@ -471,8 +481,7 @@ func (mesh *TriMesh) shoreLines(tri *Tri, levels []float64, snapped *int) {
 
 func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material string, asWater bool, faceTest func(face *Tri, mesh *TriMesh) bool) *mesh.SimpleMesh {
 
-	//vc := uint32(len(lm.verts)) //vertex count
-	vc := uint32(len(lm.verts))  //vertex count
+	vc := lm.VertCount()
 	fis := make([]uint16, vc*10) //there will actually be many less faces than verts - but we need 3 uints per face
 
 	if vc >= math.MaxUint16 {
@@ -562,7 +571,10 @@ func (mesh *TriMesh) getFacesInto(tri *Tri, fis []uint16, p *uint32, test func(f
 }
 
 func (m *TriMesh) Flood(wl float64) {
-	for _, v := range m.verts {
+
+	vc := m.VertCount()
+	for i := 0; i < vc; i++ {
+		v := m.verts[i]
 		if v.p.Y <= wl {
 			v.wl = wl
 
@@ -578,7 +590,7 @@ func (m *TriMesh) drain(v *vert, wl float64, count *int) {
 	deep := -1000000.0
 	for f := range v.touches {
 
-		if len(f.children) == 0 {
+		if f.childCount == 0 {
 			a := m.verts[f.vi[0]]
 			b := m.verts[f.vi[1]]
 			c := m.verts[f.vi[2]]
