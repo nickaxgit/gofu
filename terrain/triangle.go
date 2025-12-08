@@ -6,13 +6,15 @@ import (
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/poly"
 	"github.com/nickax/gofu/ray"
+
 	"github.com/nickax/gofu/vec"
+
 	//"github.com/nickax/gofu/cam"
 
 	"fmt"
 	"math"
 	"math/rand/v2"
-	"time"
+	//	"time"
 )
 
 var up = vec.NewVec3(0, 1, 0)
@@ -67,54 +69,28 @@ func (t *Tri) updateTrianglePoly(mesh *TriMesh) {
 
 }
 
-func (tri *Tri) reset() {
-	tri.childCount = 0
-	tri.Culled = false
-	tri.occCount = 0
-	tri.yMax = -math.MaxFloat64
-	tri.yMin = math.MaxFloat64
-	tri.xMax = -math.MaxFloat64
-	tri.xMin = math.MaxFloat64
-	tri.zMax = -math.MaxFloat64
-	tri.zMin = math.MaxFloat64
+// func (tri *Tri) NewBottomCap(mesh *TriMesh, y float64) *poly.ConvexPoly {
+// 	poly := poly.NewConvexPoly()
+// 	//for _, v := range t.vi {
+// 	for i := len(tri.vi) - 1; i >= 0; i-- {
+// 		//poly.AddPoint(tri.mesh.verts[v].p.Add(vec.NewVec3(0, y, 0)))
+// 		p := mesh.verts[tri.vi[i]].p.Clone()
+// 		p.Y = y
+// 		poly.AddPoint(p)
+// 	}
+// 	return poly
+// }
 
-	// for i := 0; i < 5; i++ {
-	// 	if tri.PrismFaces[i] != nil {
-	// 		tri.PrismFaces[i].PointCount = 0
-	// 	}
-	// }
-
-	// if tri.poly != nil {
-	// 	tri.poly.PointCount = 0 //DONT reset the root poly (it's never re-created)
-	// }
-
-	for _, c := range tri.children { //Reset *all* children (not just childcount - which is now zero)
-		c.reset()
-	}
-}
-
-func (tri *Tri) NewBottomCap(mesh *TriMesh, y float64) *poly.ConvexPoly {
-	poly := poly.NewConvexPoly()
-	//for _, v := range t.vi {
-	for i := len(tri.vi) - 1; i >= 0; i-- {
-		//poly.AddPoint(tri.mesh.verts[v].p.Add(vec.NewVec3(0, y, 0)))
-		p := mesh.verts[tri.vi[i]].p.Clone()
-		p.Y = y
-		poly.AddPoint(p)
-	}
-	return poly
-}
-
-func (tri *Tri) NewTopCap(mesh *TriMesh, y float64) *poly.ConvexPoly {
-	poly := poly.NewConvexPoly()
-	for _, v := range tri.vi {
-		//poly.AddPoint(tri.mesh.verts[v].p.Add(vec.NewVec3(0, y, 0)))
-		p := mesh.verts[v].p.Clone()
-		p.Y = y
-		poly.AddPoint(p)
-	}
-	return poly
-}
+// func (tri *Tri) NewTopCap(mesh *TriMesh, y float64) *poly.ConvexPoly {
+// 	poly := poly.NewConvexPoly()
+// 	for _, v := range tri.vi {
+// 		//poly.AddPoint(tri.mesh.verts[v].p.Add(vec.NewVec3(0, y, 0)))
+// 		p := mesh.verts[v].p.Clone()
+// 		p.Y = y
+// 		poly.AddPoint(p)
+// 	}
+// 	return poly
+// }
 
 func (tri *Tri) Plough(mesh *TriMesh, runwayStart *vec.V3, runwayEnd *vec.V3, runwayWidth float64) {
 
@@ -144,7 +120,7 @@ func (tri *Tri) MakePrisms(mesh *TriMesh) {
 		}
 	} else {
 		for i := 0; i < 5; i++ {
-			tri.PrismFaces[i].PointCount = 0 //reset/reuse
+			tri.PrismFaces[i].PointCount = 0 //reset/reuse polys
 		}
 	}
 
@@ -185,13 +161,14 @@ func (tri *Tri) MakePrisms(mesh *TriMesh) {
 
 	//make endcaps
 
-	tri.PrismFaces[3] = tri.NewTopCap(mesh, tri.yMax) //top
+	//top cap
+	tri.PrismFaces[3].Cap(mesh.verts[tri.vi[0]].p.Clone(), mesh.verts[tri.vi[1]].p.Clone(), mesh.verts[tri.vi[2]].p.Clone(), tri.yMax)
+
 	if tri.PrismFaces[3].Plane.GetNormal().Y < 0 {
 		panic("top cap normal incorrect")
 	}
-	//tri.prismFaces[5] = newTrianglePoly(tri)
 
-	tri.PrismFaces[4] = tri.NewBottomCap(mesh, tri.yMin) //bottom
+	tri.PrismFaces[4].Cap(mesh.verts[tri.vi[2]].p.Clone(), mesh.verts[tri.vi[1]].p.Clone(), mesh.verts[tri.vi[0]].p.Clone(), tri.yMin)
 	if tri.PrismFaces[4].Plane.GetNormal().Y > 0 {
 		panic("bottom cap normal incorrect")
 	}
@@ -470,6 +447,11 @@ func (tri *Tri) countChildren(count *int) {
 }
 
 func (tri *Tri) Flatten(depth int, into []*Tri, wp *int) {
+	if *wp >= len(into) {
+		panic("Triangle Flatten overflow")
+
+	}
+
 	if tri.Depth == depth {
 		into[*wp] = tri
 		*wp++
@@ -508,11 +490,11 @@ func (tri *Tri) Occlude(mesh *TriMesh, camPos *vec.V3) {
 	totalDepth := 0
 	maxDepth := 0 //how deep did we go (in any one recursion)
 	deepestEver := 0
-	backfacing := 0
+	//backfacing := 0
 
 	ray := ray.New(viewpoint, nowhereSpecial)
 
-	ts := time.Now()
+	//ts := time.Now()
 	leaves := tri.getLeaves()
 
 	stats := NewProbeStats()
@@ -575,16 +557,16 @@ func (tri *Tri) Occlude(mesh *TriMesh, camPos *vec.V3) {
 
 	}
 
-	avgDepth := float64(totalDepth) / float64(mesh.VertCount())
-	ms := time.Since(ts).Milliseconds()
+	// avgDepth := float64(totalDepth) / float64(mesh.VertCount())
+	// ms := time.Since(ts).Milliseconds()
 
-	log.Logit("occluded", occluded, " of ", mesh.VertCount(), " verts",
-		" backfacing:", backfacing,
-		" max depth:", deepestEver,
-		" avg depth:", avgDepth,
-		" time:", ms, "ms",
-	)
-	log.Logit(stats.String())
+	// log.Logit("occluded", occluded, " of ", mesh.VertCount(), " verts",
+	// 	" backfacing:", backfacing,
+	// 	" max depth:", deepestEver,
+	// 	" avg depth:", avgDepth,
+	// 	" time:", ms, "ms",
+	// )
+	// log.Logit(stats.String())
 
 }
 
@@ -702,16 +684,21 @@ func (tri *Tri) PrismEdges(msg *msg.Msg) {
 // 	}
 // }
 
+func (t *Tri) CheckPrismExtents() {
+	if t.PrismFaces[3].P[0].Y != t.yMax {
+		panic("prism top cap YMax mismatch")
+	}
+	for i := 0; i < t.childCount; i++ {
+		t.children[i].CheckPrismExtents()
+	}
+}
+
 // drill down from the land root triangle - bubbling up and calculating y extents for all ancestors of all leaf triangles
-func (tri *Tri) CalcVerticalExtents(mesh *TriMesh) { //called on the root triangle
+func (tri *Tri) CalcVerticalExtents(m *TriMesh) { //called on the root triangle
 	if tri.childCount == 0 {
-		m := mesh
-		//yMin := m.verts[t.vi[0]].p.Y
-		//yMax := yMin
+
 		for _, vi := range tri.vi {
-			//yMin = math.Min(yMin, m.verts[vi].p.Y)
-			//yMax = math.Max(yMax, m.verts[vi].p.Y)
-			tri.updateExtents(m.verts[vi].p) //recursively bubble up and update all ancestors extents
+			tri.updateExtents(m.verts[vi].p) //recursively bubble up and update/expand all ancestors extents
 		}
 		if tri.yMax-tri.yMin < 0.01 {
 			//log.Logit("flat triangle detected", t.yMax, t.yMin, t.Depth)
@@ -721,7 +708,7 @@ func (tri *Tri) CalcVerticalExtents(mesh *TriMesh) { //called on the root triang
 	} else {
 		//for _, c := range t.children {
 		for i := 0; i < tri.childCount; i++ {
-			tri.children[i].CalcVerticalExtents(mesh) //recursively drill down to leaf triangles
+			tri.children[i].CalcVerticalExtents(m) //recursively drill down to leaf triangles
 		}
 	}
 }
@@ -758,8 +745,8 @@ func (tri *Tri) SplitIfNeeded(mesh *TriMesh, camPos *vec.V3, camDir *vec.V3, fov
 			shouldBeSplitToLevel = 12 - math.Log10(distSQ/2) //)*2 // (dist*dist-9)/(2000*2000) // * (5-15) + 15
 
 			dp := camDir.Dot(tri.Centre.Sub(camPos).Normalise())
-			if dp < 0.1 {
-				dp = 0.1
+			if dp < 0.25 { //was 0.1
+				dp = 0.25
 			} //don't penalise *too* much for being behind
 			shouldBeSplitToLevel += dp * 4 //bring front and centre triangles forward up to 4 levels
 
@@ -779,13 +766,20 @@ func (tri *Tri) SplitIfNeeded(mesh *TriMesh, camPos *vec.V3, camDir *vec.V3, fov
 
 }
 
-func (tri *Tri) splitDownTo(mesh *TriMesh, level int) {
+func (tri *Tri) CountTris(count *int) {
+	*count += tri.childCount
+	for i := 0; i < tri.childCount; i++ {
+		tri.children[i].CountTris(count)
+	}
+}
+
+func (tri *Tri) SplitDownTo(mesh *TriMesh, level int) {
 
 	if tri.Depth < level {
 		tri.split(mesh)
 		//for _, c := range t.children {
 		for i := 0; i < tri.childCount; i++ {
-			tri.children[i].splitDownTo(mesh, level) //recurse
+			tri.children[i].SplitDownTo(mesh, level) //recurse
 		}
 	}
 
@@ -1061,8 +1055,11 @@ func (tri *Tri) probePrism(ray *ray.Ray) bool {
 			//panic("nil prism face")
 		}
 		if s.Probe(ray) {
-			if ray.Intersect.Y > tri.yMax+epsilon || ray.Intersect.Y < tri.yMin-epsilon {
-				log.Logit("penetration is outside the vertical extents of the prism", i)
+			if ray.Intersect.Y > tri.yMax+epsilon {
+				log.Logit("penetration is above the vertical extents of the prism", i, "by", ray.Intersect.Y-tri.yMax, "depth:", tri.Depth)
+			}
+			if ray.Intersect.Y < tri.yMin-epsilon {
+				log.Logit("penetration is below the vertical extents of the prism", i, "by", tri.yMin-ray.Intersect.Y)
 			}
 			return true
 		}
@@ -1129,7 +1126,7 @@ func (tri *Tri) calcNormal(mesh *TriMesh) *vec.V3 {
 
 	v := mesh.verts
 
-	numMeshVerts := uint32(mesh.VertCount())
+	numMeshVerts := uint32(mesh.VertexCount)
 	if tri.vi[0] >= numMeshVerts || tri.vi[1] >= numMeshVerts || tri.vi[2] >= numMeshVerts {
 		panic("index out of range in tri.normal")
 	}
@@ -1149,8 +1146,25 @@ func (tri *Tri) calcNormal(mesh *TriMesh) *vec.V3 {
 }
 
 func (parent *Tri) ReUse(childIndex int, mesh *TriMesh, vi ...uint32) *Tri {
+
+	// done in reset()
+	// 	tri.childCount = 0
+	// tri.Culled = false
+	// tri.occCount = 0
+	// tri.yMax = -math.MaxFloat64
+	// tri.yMin = math.MaxFloat64
+	// tri.xMax = -math.MaxFloat64
+	// tri.xMin = math.MaxFloat64
+	// tri.zMax = -math.MaxFloat64
+	// tri.zMin = math.MaxFloat64
+
 	child := parent.children[childIndex]
-	child.vi = vi
+
+	if child.yMax > -math.MaxFloat64 {
+		panic("child triangle yMax not reset")
+	}
+
+	child.vi = vi //set new vertices
 
 	if child.Depth != parent.Depth+1 {
 		panic("reused child triangle has wrong depth")
@@ -1168,6 +1182,24 @@ func (parent *Tri) ReUse(childIndex int, mesh *TriMesh, vi ...uint32) *Tri {
 		panic("triangle with downward normal")
 	}
 	return child
+}
+
+// reset the triangle heirarchy for reuse - see also tri.ReUse()
+func (t *Tri) Reset() {
+	t.childCount = 0
+	t.Culled = false
+	t.occCount = 0
+	t.yMax = -math.MaxFloat64
+	t.yMin = math.MaxFloat64
+	t.xMax = -math.MaxFloat64
+	t.xMin = math.MaxFloat64
+	t.zMax = -math.MaxFloat64
+	t.zMin = math.MaxFloat64
+
+	for i := range t.children {
+		t.children[i].Reset()
+	}
+
 }
 
 func newTri(parent *Tri, m *TriMesh, vi ...uint32) *Tri {

@@ -43,6 +43,9 @@ import (
 	"github.com/nickax/gofu/vec"
 )
 
+const maxNearTrees = 500
+const maxFarTrees = 15000
+
 type Device struct {
 	Id        uint32
 	Name      string
@@ -98,10 +101,15 @@ type Device struct {
 	warning     []*errorplus.Event //we collect warnings per request/device
 	NumWarnings uint32             //current count of warnings - we reuse the warnings in the slice to avoid allocations
 
-	nearTreeCount        int
-	treeTris             []*terrain.Tri //tris suitable for tree placement (level 10)
-	nearTreePositions    []float32      //x,z positions of near trees (centres of tree tris) - ready for sending
-	farTreeBillBoardMesh *mesh.SimpleMesh
+	nearTreeCount     int
+	treeTris          []*terrain.Tri //tris suitable for tree placement (level 10) (to avoid reallocation)
+	nearTreePositions []float32      //x,z positions of near trees (centres of tree tris) - ready for sending
+
+	farTreeCount     int
+	farTreePositions []float32 //x,z positions of far trees (centres of tree tris) - ready for sending
+
+	makingland bool
+	//farTreeBillBoardMesh *mesh.SimpleMesh
 }
 
 var mutex = sync.RWMutex{}
@@ -156,9 +164,16 @@ func OwnedBy(player *player.Player) []*Device {
 
 // Makeland - generates lands,scorched land, water and trees for the given camera position and direction (into Message)
 func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
+	//land is 40km wide
+	//splitting to level 12 = / 4096 = ~10m triangles (for tree placement)
+	//4096 * 4096 /2 = 8 million tree sites
+
+	device.makingland = true
+	defer func() { device.makingland = false }()
 
 	camPos := device.Camera.Position.Clone()
 	camDir := device.Camera.Direction.Clone()
+	log.Logit(camDir.X)
 
 	device.lastCam = device.Camera.Clone() //store this as the new old position
 
@@ -178,7 +193,7 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	rs.Y = 0
 	re.Y = 0
 
-	log.Logit(land.VertCount(), " verts")
+	log.Logit(land.VertexCount, " verts")
 
 	ts = time.Now()
 	seed := uint64(0) //uint64(time.Now().Nanosecond())
@@ -188,8 +203,13 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//size := player.state.landSize
 	//(rnGen.Float64()-.5)*maxHeight
 
-	land.Root.SplitIfNeeded(land, camPos, camDir, 0.4) //split the triangle into 4 recursively
+	land.Root.SplitDownTo(land, 8)
+	//land.Root.SplitIfNeeded(land, camPos, camDir, 0.4) //split the triangle into 4 recursively
 	log.Logit("splitting to focus took", time.Since(ts).Milliseconds(), "ms")
+
+	triCount := 0
+	land.Root.CountTris(&triCount)
+	log.Logit("land has", triCount, "tris after focus split")
 
 	ts = time.Now()
 	land.Root.Patch(land)
@@ -210,6 +230,8 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	ts = time.Now()
 	land.Root.MakePrisms(land) //we want to construct volumes once for each triangle - not repeatedly during occlusion culling
 	log.Logit("made prisms took", time.Since(ts).Milliseconds(), "ms")
+
+	land.Root.CheckPrismExtents()
 
 	ts = time.Now()
 	land.Root.Occlude(land, camPos)
@@ -292,9 +314,11 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	smallLandMesh.WriteTo(response, 1)
 	///scorchedLand.WriteTo(message, 1)
 	wireframe.WriteTo(response, 1)
-
+	response.Align() //align to dword boundary
+	log.Logit("response (before trees) is ", response.Buff.Len(), " bytes long")
 	device.GetTreesInto(response)
 
+	log.Logit("response is ", response.Buff.Len(), " bytes long")
 }
 
 func Watching(p *player.Player) []*Device {
@@ -385,21 +409,23 @@ func New(id uint32, name string,
 		mode:         editing,
 
 		//Socket:         socket,
-		Grid:                 grid.New(gridOrigin, gridX, gridY),
-		cursor:               vec.NewVec2(0, 0),
-		grab:                 nil,
-		keys:                 make(map[string]bool),     //which keys are pressed
-		selectedMasses:       make(map[*mass.Mass]bool), //which masses are selected, values are the order in which they were selected
-		boundValues:          make(map[string]*float64, 0),
-		controls:             make(map[input.ControlInput]float64),
-		mtx:                  &sync.Mutex{},
-		InMtx:                &sync.Mutex{},
-		mixers:               mixer.StandardMixers,
-		warning:              make([]*errorplus.Event, 10),
-		nearTreeCount:        0,
-		treeTris:             make([]*terrain.Tri, 5000), //tris suitable for tree placement (level 10)
-		nearTreePositions:    make([]float32, 500),       //x,z positions of near trees (centres of tree tris) - ready for sending
-		farTreeBillBoardMesh: mesh.New(105, "tree", 4000, 1000),
+		Grid:              grid.New(gridOrigin, gridX, gridY),
+		cursor:            vec.NewVec2(0, 0),
+		grab:              nil,
+		keys:              make(map[string]bool),     //which keys are pressed
+		selectedMasses:    make(map[*mass.Mass]bool), //which masses are selected, values are the order in which they were selected
+		boundValues:       make(map[string]*float64, 0),
+		controls:          make(map[input.ControlInput]float64),
+		mtx:               &sync.Mutex{},
+		InMtx:             &sync.Mutex{},
+		mixers:            mixer.StandardMixers,
+		warning:           make([]*errorplus.Event, 10),
+		nearTreeCount:     0,
+		treeTris:          make([]*terrain.Tri, (maxFarTrees/4 + maxNearTrees)), //tris suitable for tree placement (level 10)
+		nearTreePositions: make([]float32, maxNearTrees*3),                      //x,z positions of near trees (centres of tree tris) - ready for sending
+		farTreePositions:  make([]float32, maxFarTrees*3),                       //x,z positions of far trees (centres of tree tris) - ready for sending
+
+		//farTreeBillBoardMesh: mesh.New(105, "tree", 8000, 2000), //2 faces per tree - room for 1k trees
 	}
 
 	//important
@@ -1020,39 +1046,43 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 
 	case "mm": //mouse move
 
-		dev.movedSinceMouseDown = true
+		if dev.makingland {
+			log.Logit("MM while makingland")
+		} else {
+			dev.movedSinceMouseDown = true
 
-		dev.buttons = byte(ibm.Payload[0])
-		dev.Camera.FarPos = vec.NewVec3(ibm.Payload[1], ibm.Payload[2], ibm.Payload[3])
+			dev.buttons = byte(ibm.Payload[0])
+			dev.Camera.FarPos = vec.NewVec3(ibm.Payload[1], ibm.Payload[2], ibm.Payload[3])
 
-		deltaX := (dev.cursor.X - ibm.Payload[4]) * 1000 //cursor uintt are normalised -1 to +1
-		deltaY := (dev.cursor.Y - ibm.Payload[5]) * 1000
-		delta := math.Sqrt(deltaX*deltaX + deltaY*deltaY)
+			deltaX := (dev.cursor.X - ibm.Payload[4]) * 1000 //cursor uintt are normalised -1 to +1
+			deltaY := (dev.cursor.Y - ibm.Payload[5]) * 1000
+			delta := math.Sqrt(deltaX*deltaX + deltaY*deltaY)
 
-		dev.cursor.X = ibm.Payload[4]
-		dev.cursor.Y = ibm.Payload[5]
+			dev.cursor.X = ibm.Payload[4]
+			dev.cursor.Y = ibm.Payload[5]
 
-		//find and highlight the deepest leaf triangle
-		if delta > 2 {
-			stats := terrain.NewProbeStats()
-			ray := ray.New(dev.Camera.Position, dev.Camera.FarPos)
+			//find and highlight the deepest leaf triangle
+			if delta > 2 {
+				stats := terrain.NewProbeStats()
+				ray := ray.New(dev.Camera.Position, dev.Camera.FarPos)
 
-			if dev.Land != nil {
-				dev.Land.Root.ProbeAll(dev.Land, ray, stats)
-				//log.Logit(stats.String())
+				if dev.Land != nil {
+					dev.Land.Root.ProbeAll(dev.Land, ray, stats)
+					//log.Logit(stats.String())
 
-				if stats.NearestTri != nil {
-					msg := stats.NearestTri.EdgesAsMsg(dev.Land)
-					stats.NearestTri.PrismEdges(msg)              //show the prism Hierarchy
-					terminator := float32(math.Inf(1))            //use positive infinity as terminator
-					msg.Write(terminator, terminator, terminator) //Terminator for vectors
+					if stats.NearestTri != nil {
+						msg := stats.NearestTri.EdgesAsMsg(dev.Land)
+						stats.NearestTri.PrismEdges(msg)              //show the prism Hierarchy
+						terminator := float32(math.Inf(1))            //use positive infinity as terminator
+						msg.Write(terminator, terminator, terminator) //Terminator for vectors
 
-					dev.Send(msg)
+						dev.Send(msg)
+					}
 				}
 			}
-		}
 
-		dev.processMouseMove(gm) //*isRunning, masses, things)
+			dev.processMouseMove(gm) //*isRunning, masses, things)
+		}
 
 	case "mu":
 
@@ -1938,11 +1968,22 @@ func (dev *Device) startIn(game *game.Game) {
 	dev.SendLabelSets()
 	dev.SendMasses(game.Masses)
 
-	treeMesh := plant.GrowTree()
+	treeMesh := plant.GrowTree(100) //mesh id
 
 	tm := msg.Empty()
-	treeMesh.WriteTo(tm, 1000) //prep for 1000 near trees
-	dev.Send(tm)               //send the tree mesh
+	treeMesh.WriteTo(tm, maxNearTrees) //prep for 500 near trees
+	dev.Send(tm)                       //send the tree mesh
+
+	bbm := msg.Empty()
+	qbb := mesh.New(105, "tree", 4, 2)                               //quad billboard
+	qbb.AddVert(vec.NewVec3(-.5, 0, 0), vec.NewVec3(0, 0, -1), 0, 0) //BL
+	qbb.AddVert(vec.NewVec3(.5, 0, 0), vec.NewVec3(0, 0, -1), 1, 0)  //BR
+	qbb.AddVert(vec.NewVec3(.5, 1, 0), vec.NewVec3(0, 0, -1), 1, 1)  //TR
+	qbb.AddVert(vec.NewVec3(-.5, 1, 0), vec.NewVec3(0, 0, -1), 0, 1) //TL
+	qbb.AddFace(0, 1, 2)
+	qbb.AddFace(0, 2, 3)
+	qbb.WriteTo(bbm, maxFarTrees) //prep for 5000 far (billboarded) trees
+	dev.Send(bbm)
 
 	dev.primaryControls = dev.Owner
 	dev.sendGameId(game.Id) //game id starts it running
@@ -2204,7 +2245,7 @@ func (dev *Device) PlaceTrees() int {
 
 	occludedTrees := 0
 	wp := 0
-	dev.Land.Root.Flatten(10, dev.treeTris, &wp) //get all triangles at depth 10  -*potential* tree sites
+	dev.Land.Root.Flatten(6, dev.treeTris, &wp) //get all triangles at depth 10  -*potential* tree sites
 
 	ray := ray.New(dev.Camera.Position, vec.NoWhereSpecial) //set up *one* ray for firing at the treetops (reuse it!)
 	treeTop := vec.NewVec3(0, 0, 0)                         //scratch
@@ -2212,52 +2253,95 @@ func (dev *Device) PlaceTrees() int {
 
 	stats := terrain.NewProbeStats()
 
-	dev.nearTreeCount = 0
-	dev.farTreeBillBoardMesh.Reset()
+	dev.nearTreeCount = 0 //track the number of positions we will need to send
+	dev.farTreeCount = 0
+	//dev.farTreeBillBoardMesh.Reset()
 
 	for i := 0; i < wp; i++ { //_, tri := range tris {
 		tri := dev.treeTris[i]
-		mid := tri.Centre
-		tcs := mesh.NewTcs(0, 1, 1, 0)
+		if tri.IsSubmerged(dev.Land) {
+			continue
+		} //no trees underwater
+		//mid := tri.Centre
+		points := tri.MeshPoints(dev.Land, 6) //divide the level 6 triangles 6 further times (yeilding 28 points each)
+		//tcs := mesh.NewTcs(0, 1, 1, 0)
 
-		if !dev.Land.ScorchedAt(dev.Land.Root, mid) && !tri.OnOrUnderWater(dev.Land) {
+		for _, plot := range points {
 
-			toTree.SubInto(mid, dev.Camera.Position)
-			toTree.NormaliseInPlace()
-			dotProd := toTree.Dot(dev.Camera.Direction)
+			if !dev.Land.ScorchedAt(dev.Land.Root, plot) {
 
-			if mid.DistanceFrom(dev.Camera.Position) < 100 {
-				if dotProd > -0.2 { //trees in front of, or somewhat behind the camera
-					treeTop.SetFrom(mid)
-					treeTop.Y += 3
-
-					ray.PointAt(treeTop)
-
-					//check for occlusion (by the triangle it stands on)
-					//TODO - check against whole landscape (although these are nearby trees)
-
-					stats.Hit = false
-					dev.Land.Root.Probe(dev.Land, ray, stats, 0)
-					if stats.Hit {
-						occludedTrees++
-						continue
-					}
-
-					//place a (instanced mesh) tree here
-					wp := dev.nearTreeCount * 3
-					dev.nearTreePositions[wp] = float32(mid.X)
-					dev.nearTreePositions[wp+1] = float32(mid.Y)
-					dev.nearTreePositions[wp+2] = float32(mid.Z)
-					dev.nearTreeCount++
-
+				d := plot.DistanceFrom(dev.Camera.Position)
+				if d > 5000 {
+					continue
 				}
-			} else { //it's a faraway tree - only place it if the ground slopes towards the camera
-				//todo - occlusion cull far trees too
-				if dotProd > .25 { //trees generally in front of the camera}
-					if toTree.Dot(tri.Normal) < 0 { //if the triangle slopes towards camera
-						dev.farTreeBillBoardMesh.Billboard(mid, dev.Camera.Up, dev.Camera.Position, 20, 20, 20, 4, tcs) //billboard tree
-					}
+				surfacePoint, _ := dev.Land.Root.VprobeLand(plot)
+				if surfacePoint == nil {
+					continue
+				} //should not happen (but does)
 
+				toTree.SubInto(surfacePoint, dev.Camera.Position)
+				toTree.NormaliseInPlace()
+				dotProd := toTree.Dot(dev.Camera.Direction)
+
+				if d < 500 {
+					if dotProd > -0.2 { //trees in front of, or somewhat behind the camera
+
+						treeTop.SetFrom(surfacePoint)
+						treeTop.Y += 3
+
+						ray.PointAt(treeTop)
+
+						//check for occlusion (by the triangle it stands on)
+						//TODO - check against whole landscape (although these are nearby trees)
+
+						stats.Hit = false
+						dev.Land.Root.Probe(dev.Land, ray, stats, 0)
+						if stats.Hit {
+							occludedTrees++
+							continue
+						}
+
+						if dev.nearTreeCount < maxNearTrees {
+							//place a (instanced mesh) tree here
+							wp := dev.nearTreeCount * 3
+							dev.nearTreePositions[wp] = float32(surfacePoint.X)
+							dev.nearTreePositions[wp+1] = float32(surfacePoint.Y)
+							dev.nearTreePositions[wp+2] = float32(surfacePoint.Z)
+							dev.nearTreeCount++
+						} else {
+							log.Logit("Max near trees reached")
+						}
+
+					}
+				} else { //it's a faraway tree - only place it if the ground slopes towards the camera
+					//todo - occlusion cull far trees too
+					if dotProd > .35 { //trees generally in front of the camera}
+						if toTree.Dot(tri.Normal) < 0 { //if the triangle slopes towards camera
+
+							stats.Hit = false
+							treeTop.SetFrom(surfacePoint)
+							treeTop.Y += 6
+							ray.PointAt(treeTop)
+
+							dev.Land.Root.Probe(dev.Land, ray, stats, 0)
+							if stats.Hit {
+								occludedTrees++
+								continue
+							}
+
+							if dev.farTreeCount < maxFarTrees {
+								wp := dev.farTreeCount * 3
+								dev.farTreePositions[wp] = float32(surfacePoint.X)
+								dev.farTreePositions[wp+1] = float32(surfacePoint.Y)
+								dev.farTreePositions[wp+2] = float32(surfacePoint.Z)
+
+								dev.farTreeCount++
+
+							} else {
+								log.Logit("Max far trees reached")
+							}
+						}
+					}
 				}
 			}
 		}
@@ -2273,13 +2357,24 @@ func (dev *Device) GetTreesInto(message *msg.Msg) {
 	//need to do trees after waterlines so we don't get trees underwater
 
 	occludedTrees := dev.PlaceTrees() //place trees on non occluded, level 10, triangles infront of the camera
-	log.Logit("Placed trees - occluded:", occludedTrees, "near trees:", dev.nearTreeCount, "far trees:")
+	log.Logit("Placed trees - occluded:", occludedTrees, "near trees:", dev.nearTreeCount, "far trees:", dev.farTreeCount)
 	//near trees (mesh intances)
-	message.Write(msg.PositionInstances,
-		uint16(dev.nearTreeCount),                    //number on instances (near trees)
+	message.Write(msg.PositionInstances, uint16(100),
+		uint16(0),                 //from
+		uint16(dev.nearTreeCount), //to (we position a subset)
+		byte(0),                   //padding for dword alignemnt
 		dev.nearTreePositions[0:dev.nearTreeCount*3], //Slice of XYZ float32's
 	)
 
-	//far trees (billboards)
-	dev.farTreeBillBoardMesh.WriteTo(message, 1)
+	message.Write(msg.PositionInstances, uint16(105),
+		uint16(0),                //from
+		uint16(dev.farTreeCount), //to (we position a subset)
+		byte(0),                  //padding for dword alignemnt
+		dev.farTreePositions[0:dev.farTreeCount*3], //Slice of XYZ float32's
+	)
+
+	// //far trees (billboards)
+	// if dev.farTreeBillBoardMesh.FaceCount() > 0 {
+	// 	dev.farTreeBillBoardMesh.WriteTo(message, 1)
+	// }
 }

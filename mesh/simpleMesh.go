@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"fmt"
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/vec"
 	"math"
@@ -137,7 +138,26 @@ func (sm *SimpleMesh) Billboard(p *vec.V3, up *vec.V3, camPos *vec.V3, widthBott
 // }
 
 func NewFilledSimpleMesh(id uint16, p []float32, n []float32, uv []float32, fi []uint16, materialName string) *SimpleMesh {
-	return &SimpleMesh{id: id, pad: 0, p: p, n: n, uv: uv, fi: fi, materialName: materialName, vwp: uint16(len(p) / 3), fwp: uint16(len(fi) / 3)}
+
+	if len(fi)%3 != 0 {
+		panic(fmt.Sprintf("Warning: Mesh %d has %d indices, which is not divisible by 3.\n", id, len(fi)))
+	}
+	if len(p)%3 != 0 {
+		panic(fmt.Sprintf("Warning: Mesh %d has %d p[] length not divisible by 3.\n", id, len(p)))
+	}
+
+	vwp := uint16(len(p) / 3)
+	fwp := uint16(len(fi) / 3)
+
+	// SAFETY CHECK: Ensure n and uv are large enough for the vertices
+	// WriteTo will panic if these are too short
+	if len(n) < int(vwp)*3 {
+		panic(fmt.Sprintf("Mesh %d: Position count (%d) requires %d normals, but only %d provided", id, len(p), int(vwp)*3, len(n)))
+	}
+	if len(uv) < int(vwp)*2 {
+		panic(fmt.Sprintf("Mesh %d: Position count (%d) requires %d UVs, but only %d provided", id, len(p), int(vwp)*2, len(uv)))
+	}
+	return &SimpleMesh{id: id, pad: 0, p: p, n: n, uv: uv, fi: fi, materialName: materialName, vwp: vwp, fwp: fwp}
 }
 
 func (sm *SimpleMesh) AddVert(p *vec.V3, n *vec.V3, u float32, v float32) uint16 {
@@ -185,23 +205,43 @@ func (sm *SimpleMesh) AddFace(v1, v2, v3 uint16) {
 
 }
 
+func (sm *SimpleMesh) check() {
+	for _, idx := range sm.fi {
+		if idx >= sm.vwp {
+			panic(fmt.Sprintf("Mesh %d has invalid face index %d (vert count %d)", sm.id, idx, sm.vwp))
+		}
+	}
+}
+
 func (sm *SimpleMesh) WriteTo(message *msg.Msg, maxInstances uint16) {
+
+	sm.check()
 
 	if sm.vwp == 0 || sm.fwp == 0 {
 		panic("Attempt to write empty mesh")
 	}
-	wp := message.WritePointer()
-	numPadBytes := 4 - ((wp + 1) % 4) + 1
-	padBytes := make([]byte, numPadBytes)
-	message.Write(msg.Mesh, sm.id, //0,1,2
-		uint32(sm.vwp),        //number of vertices 3,4,5,6
-		uint32(sm.fwp),        //number of faces 7,8,9,10
-		byte(numPadBytes),     //11, because buffers are now in a single message - we need variable padding to align the float arrays
-		padBytes,              //0 pad bytes are awkward - so we will pad with 1,2,3 or 4 bytes as needed		               //because buffers are now in a single message - we need variable padding to align the float arrays
-		sm.p[0:(sm.vwp-1)*3],  //vertex positions (slice of Float32, 3 per vert)
-		sm.n[0:(sm.vwp-1)*3],  //vertex normals (slice of Float32, 3 per vert)
-		sm.uv[0:(sm.vwp-1)*2], //uv coordinates (slice of Float32, 2 per vert)
-		sm.fi[0:(sm.fwp-1)*3], //faces (slice of Uint16, 3 per face)
+	if sm.vwp > 65530 {
+		panic("Mesh has too many vertices " + fmt.Sprint(sm.vwp))
+	}
+	//wp := message.WritePointer()
+	//numPadBytes := 4 - ((wp + 1) % 4) + 1
+	//padBytes := make([]byte, numPadBytes)
+
+	message.Align()
+	message.Write(msg.Mesh, //it's a mesh (byte)
+		sm.id,                    //mesh id (uint16)
+		uint32(sm.vwp),           //number of vertices (vertex write pointer)
+		uint32(sm.fwp),           //number of faces (face write pointer)
+		byte(111),                //single padding byte to align arrays to dword boundary
+		int32(1),                 //DWORD marker for position data
+		sm.p[0:(int(sm.vwp))*3],  //it is VITAL to cast VWP before multiplying (or it silently wraps within the uint16)!!!!
+		int32(2),                 //marker for normal
+		sm.n[0:(int(sm.vwp))*3],  //vertex normals (slice of Float32, 3 per vert)
+		int32(3),                 //marker for uv
+		sm.uv[0:(int(sm.vwp))*2], //uv coordinates (slice of Float32, 2 per vert)
+		int32(4),                 //marker for faces (this is recevied correctly)
+		sm.fi[0:(int(sm.fwp))*3], //faces (slice of Uint16, 3 per face)
+		byte(123),                //check byte (magic number)
 		sm.materialName,
 		maxInstances,
 	)

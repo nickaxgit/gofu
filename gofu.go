@@ -205,6 +205,8 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 		case websocket.TextMessage:
 
 			if dev != nil {
+
+				dev.InMtx.Lock()
 				dev.ClearWarnings()
 
 				var jsonMessage jsonmsg.Msg
@@ -214,6 +216,7 @@ func upgradeToWebSocketAndListenForever(w http.ResponseWriter, r *http.Request) 
 				}
 
 				evt = dev.ProcessStructuredMsg(&jsonMessage, response)
+				dev.InMtx.Unlock()
 
 			}
 		default:

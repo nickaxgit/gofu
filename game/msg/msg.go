@@ -116,6 +116,16 @@ func readString(buff *bytes.Buffer, target *string) {
 	//return string(s)
 }
 
+// Align - add NOP padding bytes to align next message to dword boundary
+func (m *Msg) Align() {
+
+	pad := (4 - (m.Buff.Len() % 4)) % 4
+	for i := 0; i < pad; i++ {
+		binary.Write(m.Buff, le, byte(255))
+	}
+
+}
+
 func writeString(buff *bytes.Buffer, s string) {
 	binary.Write(buff, le, uint16(len(s))) //write the length of the string
 	binary.Write(buff, le, []byte(s))      //write the string

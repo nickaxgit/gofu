@@ -52,7 +52,7 @@ type segment struct { //of a plant/tree
 // 	return sm
 
 // }
-func GrowTree() *mesh.SimpleMesh {
+func GrowTree(meshId uint16) *mesh.SimpleMesh {
 
 	// segmentTypes:=make(map[string]*segmentType, 0)
 
@@ -73,10 +73,10 @@ func GrowTree() *mesh.SimpleMesh {
 	trunk := NewSegment(nil, vec.NewVec3(0, 0, 0), vec.NewVec3(1, 0, 0), stalk, stalkGirth.GetY(100)) //segment{segType: stalk, age: 0, children: make([]*segment, 0)}
 
 	sprouts := 0
-	trunk.grow(100, &sprouts, 0)
+	trunk.grow(120, &sprouts, 0)
 	log.Logit("sprouts", sprouts)
 
-	m := mesh.New(100, "atlas", 3000, 1000) //newLandMesh("tree", 20000, 10, 100, 100, kinks)
+	m := mesh.New(meshId, "atlas", 10000, 3000) //newLandMesh("tree", 20000, 10, 100, 100, kinks)
 	//trunk.getBillBoardedMesh(m)                             //uses the meshes internal vert and face write pointer (vwp,fwp)
 	trunk.getTubularMesh(m)
 
@@ -152,26 +152,26 @@ func (seg *segment) grow(age float64, sprouts *int, depth int) {
 	}
 }
 
-func (seg *segment) getBillBoardedMesh(m *mesh.SimpleMesh) {
+// func (seg *segment) getBillBoardedMesh(m *mesh.SimpleMesh) {
 
-	//uv := newVec2(0, 0)
-	//po := m.addVert(seg.p, seg.xAxis, uv) //parent origin
-	//n:=NewVec3(0,0,-1)
+// 	//uv := newVec2(0, 0)
+// 	//po := m.addVert(seg.p, seg.xAxis, uv) //parent origin
+// 	//n:=NewVec3(0,0,-1)
 
-	campos := vec.NewVec3(0, 0, -10) //turn billboards to a virtual camera 10metres away
-	for _, child := range seg.children {
+// 	campos := vec.NewVec3(0, 0, -10) //turn billboards to a virtual camera 10metres away
+// 	for _, child := range seg.children {
 
-		//co := m.addVert(child.p, child.xAxis, uv)
-		//sw := m.addVert(child.p.add(seg.xAxis.multiply(1)), seg.zAxis, uv)
-		//m.addFace(po, co, sw)
+// 		//co := m.addVert(child.p, child.xAxis, uv)
+// 		//sw := m.addVert(child.p.add(seg.xAxis.multiply(1)), seg.zAxis, uv)
+// 		//m.addFace(po, co, sw)
 
-		//NB: width and heights are determined by the non-normalised 'up' vector
-		m.Billboard(seg.p, child.p.Sub(seg.p), campos, seg.radius, child.radius, 1, 4, child.segType.tcs)
+// 		//NB: width and heights are determined by the non-normalised 'up' vector
+// 		m.Billboard(seg.p, child.p.Sub(seg.p), campos, seg.radius, child.radius, 1, 4, child.segType.tcs)
 
-		child.getBillBoardedMesh(m) //recurse
-	}
+// 		child.getBillBoardedMesh(m) //recurse
+// 	}
 
-}
+// }
 
 func (seg *segment) getTubularMesh(m *mesh.SimpleMesh) {
 

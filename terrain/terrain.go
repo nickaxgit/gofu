@@ -5,16 +5,17 @@ import (
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/mesh"
 	//"github.com/nickax/gofu/ray"
+	"fmt"
 	"github.com/nickax/gofu/vec"
 	"math"
 )
 
 type TriMesh struct {
-	name         string
-	Root         *Tri
-	verts        []*vert //{}
-	nextFreeVert uint32
-	fi           []uint32 //{} //face indices
+	name        string
+	Root        *Tri
+	verts       []*vert  //{}
+	VertexCount int      //uint32
+	fi          []uint32 //{} //face indices
 
 	midpoints map[uint64]uint32 //compound key of the two endpoints of an edge, map contains the index of its midpoint vertex
 
@@ -38,15 +39,40 @@ type fireInfo struct {
 	normal       *vec.V3
 }
 
+func (tri *Tri) MeshPoints(mesh *TriMesh, subdivisions int) []*vec.V3 {
+	points := []*vec.V3{}
+	step := 1.0 / float64(subdivisions)
+	for i := 0; i <= subdivisions; i++ {
+		for j := 0; j <= subdivisions-i; j++ {
+			u := float64(i) * step
+			v := float64(j) * step
+			w := 1.0 - u - v
+			p := tri.BarycentricInterpolate(mesh, u, v, w)
+			points = append(points, p)
+		}
+	}
+	return points
+}
+
+func (t *Tri) BarycentricInterpolate(m *TriMesh, u, v, w float64) *vec.V3 {
+	a := m.verts[t.vi[0]].p
+	b := m.verts[t.vi[1]].p
+	c := m.verts[t.vi[2]].p
+	p := vec.NewVec3(0, 0, 0)
+	p.X = a.X*u + b.X*v + c.X*w
+	p.Y = a.Y*u + b.Y*v + c.Y*w
+	p.Z = a.Z*u + b.Z*v + c.Z*w
+	return p
+}
+
 // return the normals of the verts specified in vis (vertices we've added)
 func (m *TriMesh) getNormals(asWater bool) []float32 {
 
-	vc := m.VertCount()
 	//for every new vertex, reset the normal to zero, then add the normals of the faces it touches
-	n := make([]float32, vc*3) //position x,y,z
+	n := make([]float32, m.VertexCount*3) //position x,y,z
 
 	if asWater {
-		for i := 0; i < vc; i++ { //} range m.verts {
+		for i := 0; i < m.VertexCount; i++ { //} range m.verts {
 			n[i*3+0] = 0
 			n[i*3+1] = 1
 			n[i*3+2] = 0
@@ -55,7 +81,7 @@ func (m *TriMesh) getNormals(asWater bool) []float32 {
 
 	}
 
-	for i := 0; i < vc; i++ {
+	for i := 0; i < m.VertexCount; i++ {
 		v := m.verts[i]
 
 		if len(v.touches) > 0 {
@@ -102,10 +128,9 @@ func (mesh *TriMesh) Reset() {
 
 	}
 
-	mesh.nextFreeVert = 3 //beacuse we start again at the root triangle
-	mesh.Root.reset()
+	mesh.VertexCount = 3 //beacuse we start again at the root triangle
 
-	//v.wl
+	mesh.Root.Reset()
 
 }
 func NewTriMesh(name string, maxFaces uint16, size float64, kinks []float64, height float64) *TriMesh {
@@ -207,8 +232,8 @@ func (m *TriMesh) addVert(p *vec.V3, u float64, v float64) uint32 {
 	var vert *vert
 
 	// Check if we have an existing vert to reuse
-	if m.nextFreeVert < uint32(len(m.verts)) {
-		vert = m.verts[m.nextFreeVert]
+	if m.VertexCount < len(m.verts) {
+		vert = m.verts[m.VertexCount]
 		// Overwrite existing data
 		// Note: We assume p is a new vector or we copy it.
 		// If p is a pointer to a vector that changes, we might need p.Clone() or *vert.p = *p
@@ -230,8 +255,8 @@ func (m *TriMesh) addVert(p *vec.V3, u float64, v float64) uint32 {
 		m.verts = append(m.verts, vert)
 	}
 
-	idx := uint32(m.nextFreeVert)
-	m.nextFreeVert++
+	idx := uint32(m.VertexCount)
+	m.VertexCount++
 	return idx
 }
 
@@ -268,15 +293,9 @@ func (m *TriMesh) addVert(p *vec.V3, u float64, v float64) uint32 {
 
 // }
 
-func (m *TriMesh) VertCount() int {
-
-	return int(m.nextFreeVert)
-
-}
-
 func (m *TriMesh) getUVs() []float32 {
 
-	vc := m.VertCount()
+	vc := m.VertexCount
 	uvs := make([]float32, vc*2)
 
 	//big vertex index (in the huge mesh) to small vertex index (in the new sub mesh)
@@ -292,7 +311,7 @@ func (m *TriMesh) getUVs() []float32 {
 
 func (m *TriMesh) getPositions(asWater bool) []float32 {
 
-	vc := m.VertCount()
+	vc := m.VertexCount
 	p := make([]float32, 0, vc*3) //position x,y,z
 
 	for i := 0; i < vc; i++ {
@@ -352,8 +371,12 @@ func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg) {
 		funcIsWater := func(t *Tri, m *TriMesh) bool { return t.OnOrUnderWater(m) }
 		waterMesh := land.ToSimpleMesh(land.Root, uint16(4+i), nil, "water", true, funcIsWater)
 
-		log.Logit("water mesh at wl", wl, " has ", waterMesh.FaceCount(), " faces and ", waterMesh.VertCount(), " verts")
-		waterMesh.WriteTo(response, 1)
+		if waterMesh.FaceCount() > 0 {
+			log.Logit("water mesh at wl", wl, " has ", waterMesh.FaceCount(), " faces and ", waterMesh.VertCount(), " verts")
+			waterMesh.WriteTo(response, 1)
+		} else {
+			log.Logit("water mesh at wl", wl, i, " is empty")
+		}
 
 	}
 
@@ -433,11 +456,11 @@ func (mesh *TriMesh) shoreLines(tri *Tri, levels []float64, snapped *int) {
 
 func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material string, asWater bool, faceTest func(face *Tri, mesh *TriMesh) bool) *mesh.SimpleMesh {
 
-	vc := lm.VertCount()
+	vc := lm.VertexCount
 	fis := make([]uint16, vc*10) //there will actually be many less faces than verts - but we need 3 uints per face
 
 	if vc >= math.MaxUint16 {
-		log.Logit("mesh too big - over 65535 verts")
+		panic("mesh too big - over 65535 verts")
 	}
 
 	lm.getNormals(asWater) //we must get normals (becuase it calculates them) before updating UVx's
@@ -449,9 +472,9 @@ func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material strin
 
 	//kill two birds with one stone - generate a subset of verts just for the face sets - and set all their Y's
 
-	np := make([]float32, lm.VertCount()*3)  // new position
-	nn := make([]float32, lm.VertCount()*3)  // new normals
-	nuv := make([]float32, lm.VertCount()*2) // new Uvs
+	np := make([]float32, lm.VertexCount*3)  // new position
+	nn := make([]float32, lm.VertexCount*3)  // new normals
+	nuv := make([]float32, lm.VertexCount*2) // new Uvs
 
 	mapping := make(map[uint16]uint16) //map from old vert index to new vert index
 
@@ -490,11 +513,14 @@ func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material strin
 		}
 	}
 
+	if len(mapping) > 60000 {
+		panic("large mesh:" + fmt.Sprint(len(mapping)) + "verts for mesh" + fmt.Sprint(id))
+	}
 	np = np[0 : len(mapping)*3] //truncate to actual size
 	nn = nn[0 : len(mapping)*3]
 	nuv = nuv[0 : len(mapping)*2]
 
-	log.Logit(lm.VertCount(), "verts reduced to", len(mapping), "for mesh", id)
+	log.Logit(lm.VertexCount, "verts reduced to", len(mapping), "for mesh", id)
 
 	//normals := lm.getNormals(asWater) //we must get normals (becuase it calculates them) before updating UVx's
 	//lm.updateUVxsFromNormals()
@@ -524,8 +550,7 @@ func (mesh *TriMesh) getFacesInto(tri *Tri, fis []uint16, p *uint32, test func(f
 
 func (m *TriMesh) Flood(wl float64) {
 
-	vc := m.VertCount()
-	for i := 0; i < vc; i++ {
+	for i := 0; i < m.VertexCount; i++ {
 		v := m.verts[i]
 		if v.p.Y <= wl {
 			v.wl = wl

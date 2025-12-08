@@ -145,6 +145,16 @@ func (poly *ConvexPoly) AddPointAt(x, y, z float64) {
 
 }
 
+func (poly *ConvexPoly) Cap(a, b, c *vec.V3, y float64) {
+	a.Y = y
+	b.Y = y
+	c.Y = y
+	poly.AddPoint(a)
+	poly.AddPoint(b)
+	poly.AddPoint(c)
+
+}
+
 func (poly *ConvexPoly) AddPoint(p *vec.V3) {
 	if poly.PointCount < len(poly.P) {
 		poly.P[poly.PointCount] = p
@@ -153,6 +163,10 @@ func (poly *ConvexPoly) AddPoint(p *vec.V3) {
 
 	}
 	poly.PointCount++
+
+	if poly.PointCount > 4 {
+		panic("convexPoly beyond a quadrilateral")
+	}
 
 	if poly.PointCount == 3 {
 		poly.Plane = plane.NewFromPoints(poly.P[0], poly.P[1], poly.P[2])
@@ -178,7 +192,7 @@ func (poly *ConvexPoly) Probe(ray *ray.Ray) bool {
 	if poly.Plane.ProbeLine(ray) { //will return false for backfacing triangles
 		//if poly.Contains(ray.GetIntersect()) {
 		if ray.Intersect.X == 0 && ray.Intersect.Y == 0 && ray.Intersect.Z == 0 {
-			//log.Logit("ray intersect not set - did you forget to call ray.GetIntersect()?")
+			log.Logit("ray intersect not set - did you forget to call ray.GetIntersect()?")
 		}
 		if poly.Contains3D(ray.Intersect) {
 			return true

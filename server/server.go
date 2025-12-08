@@ -62,11 +62,12 @@ func StepWorldsForever() {
 					// }()
 					//go func() {
 
+					//if viewer.Land == nil {
 					message := msg.Empty()
 					//use copies of the camera position/direction (as camera is potentially mutated on the main thread)
 					viewer.MakeLand(game, message)
-
 					viewer.Send(message)
+					//}
 					//}()
 				}
 
