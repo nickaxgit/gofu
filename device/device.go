@@ -180,7 +180,7 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	if device.Land == nil {
 		device.Land = terrain.NewTriMesh("land", 65000, game.LandSize, game.Kinks, game.LandHeight)
 	} else {
-		device.Land.Reset()
+		//device.Land.Reset()
 	}
 
 	land := device.Land
@@ -203,8 +203,8 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//size := player.state.landSize
 	//(rnGen.Float64()-.5)*maxHeight
 
-	land.Root.SplitDownTo(land, 8)
-	//land.Root.SplitIfNeeded(land, camPos, camDir, 0.4) //split the triangle into 4 recursively
+	//land.Root.SplitDownTo(land, 8)
+	land.Root.SplitIfNeeded(land, camPos, camDir, 0.4) //split the triangle into 4 recursively
 	log.Logit("splitting to focus took", time.Since(ts).Milliseconds(), "ms")
 
 	triCount := 0
@@ -219,7 +219,7 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	waterlines := []float64{game.LandHeight * 0.71, game.LandHeight * 0.41, 0.1, -game.LandHeight * 0.52}
 
 	// //makes the water surface mesh messages - one for each waterline, into the message
-	land.FloodAndDrain(waterlines, response)
+	land.FloodAndDrain(waterlines, response, camPos)
 	log.Logit("flood and drain took", time.Since(ts).Milliseconds(), "ms")
 	//land.Flood(-10000)
 
@@ -231,11 +231,9 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	land.Root.MakePrisms(land) //we want to construct volumes once for each triangle - not repeatedly during occlusion culling
 	log.Logit("made prisms took", time.Since(ts).Milliseconds(), "ms")
 
-	land.Root.CheckPrismExtents()
-
-	ts = time.Now()
-	land.Root.Occlude(land, camPos)
-	log.Logit("occlude took", time.Since(ts).Milliseconds(), "ms")
+	//ts = time.Now()
+	//land.Root.Occlude(land, camPos)
+	//log.Logit("occlude took", time.Since(ts).Milliseconds(), "ms")
 
 	// culled, kept := 0, 0
 	// ts = time.Now()
@@ -292,7 +290,7 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//if t.Culled || t.Scorched || t.OnOrUnderWater() {
 	isLand := func(t *terrain.Tri, mesh *terrain.TriMesh) bool {
 
-		if t.Culled || t.Scorched || t.IsSubmerged(mesh) {
+		if t.Scorched || t.IsSubmerged(mesh) {
 			return false
 		}
 
@@ -304,12 +302,12 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//land.Root.Scorch(game.fire) //update the scorched state of non culled leaf triangles
 	log.Logit("scorching took", time.Since(ts).Milliseconds(), "ms")
 
-	smallLandMesh := land.ToSimpleMesh(land.Root, 2, game.Fire, "land", false, isLand)
+	smallLandMesh := land.ToSimpleMesh(land.Root, 2, game.Fire, "land", false, isLand, camPos)
 	log.Logit("converted land mesh in", time.Since(ts).Milliseconds(), "ms")
 	log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
 
 	///scorchedLand := land.Root.ToSimpleMesh(56, land, game.Fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
-	wireframe := land.ToSimpleMesh(land.Root, 32, game.Fire, "whiteWires", false, isLand)
+	wireframe := land.ToSimpleMesh(land.Root, 32, game.Fire, "whiteWires", false, isLand, camPos)
 
 	smallLandMesh.WriteTo(response, 1)
 	///scorchedLand.WriteTo(message, 1)
@@ -2316,7 +2314,7 @@ func (dev *Device) PlaceTrees() int {
 				} else { //it's a faraway tree - only place it if the ground slopes towards the camera
 					//todo - occlusion cull far trees too
 					if dotProd > .35 { //trees generally in front of the camera}
-						if toTree.Dot(tri.Normal) < 0 { //if the triangle slopes towards camera
+						if toTree.Dot(&tri.Normal) < 0 { //if the triangle slopes towards camera
 
 							stats.Hit = false
 							treeTop.SetFrom(surfacePoint)

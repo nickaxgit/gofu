@@ -59,7 +59,7 @@ func (tri *Tri) GetFlames(lm *TriMesh, fm *TriMesh, intoMesh *mesh.SimpleMesh, c
 	if tri.FireInfo.flames > 0 { //fTri.allBLTsAlight() { //fTri.flames > 0 {
 
 		if tri.FireInfo.landDepth < 10 { //sampling at level 10 is 'good enough' for flame base
-			p, t := lm.Root.VprobeLand(tri.Centre) //TODO - do once and cache - also normal (for slope)
+			p, t := lm.Root.VprobeLand(&tri.Centre) //TODO - do once and cache - also normal (for slope)
 			if t.Depth < 8 {
 				return 0
 			} //it's either very far away, or behind the camera

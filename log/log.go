@@ -1,11 +1,8 @@
 package log
 
 import (
-	"log"
-)
-
-import (
 	"fmt"
+	"log"
 )
 
 func Logit(v ...interface{}) {

@@ -375,7 +375,7 @@ func (m *Mass) RegenFromMaster(transform func(p *vec.V3) *vec.V3) {
 
 func (m *Mass) ResolvePenetration(depth float64, impact *vec.V3, surface *terrain.Tri) {
 	v := m.P.Sub(m.Op)
-	vr := v.Reflect(surface.Normal)
+	vr := v.Reflect(&surface.Normal)
 
 	if depth > 0.1 {
 		log.Logit("deep penetration", v.Length()*30, "m/s")
@@ -383,7 +383,7 @@ func (m *Mass) ResolvePenetration(depth float64, impact *vec.V3, surface *terrai
 
 	m.P.Y = impact.Y + m.R
 
-	vr = vr.Sub(surface.Normal.Multiply(vr.Dot(surface.Normal) * .8)) //kill 80% of the vertical velocity (20% bounce)
+	vr = vr.Sub(surface.Normal.Multiply(vr.Dot(&surface.Normal) * .8)) //kill 80% of the vertical velocity (20% bounce)
 
 	if m.Axle != nil {
 		axle := m.Axle.P.Sub(m.P).Normalise()

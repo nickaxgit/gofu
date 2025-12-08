@@ -6,6 +6,7 @@ import (
 	"github.com/nickax/gofu/mesh"
 	//"github.com/nickax/gofu/ray"
 	"fmt"
+	"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/vec"
 	"math"
 )
@@ -13,9 +14,9 @@ import (
 type TriMesh struct {
 	name        string
 	Root        *Tri
-	verts       []*vert  //{}
-	VertexCount int      //uint32
-	fi          []uint32 //{} //face indices
+	verts       []*vert //{}
+	VertexCount int     //uint32
+	//fi          []uint32 //{} //face indices
 
 	midpoints map[uint64]uint32 //compound key of the two endpoints of an edge, map contains the index of its midpoint vertex
 
@@ -91,7 +92,7 @@ func (m *TriMesh) getNormals(asWater bool) []float32 {
 			//usually 6 0- can be 5 - or even 3 at edges and 1 in conrners
 			for t := range v.touches { //for every face this vertex touches
 				if t.childCount == 0 { //ony include bottom level traingles in the normal calculation
-					v.n.AddIn(t.Normal)
+					v.n.AddIn(&t.Normal)
 				}
 			}
 
@@ -115,6 +116,7 @@ func (m *TriMesh) getNormals(asWater bool) []float32 {
 
 func (mesh *TriMesh) Reset() {
 
+	panic("dont call this")
 	clear(mesh.midpoints) //empties the map preserving capacity
 
 	//preserve the first three verts (the root triangle)
@@ -123,8 +125,8 @@ func (mesh *TriMesh) Reset() {
 
 		clear(v.touches)
 		v.wl = 0
-		v.occluded = false
-		v.testedForOcclusion = false
+		//v.occluded = false
+		//v.testedForOcclusion = false
 
 	}
 
@@ -147,8 +149,8 @@ func NewTriMesh(name string, maxFaces uint16, size float64, kinks []float64, hei
 	mesh.addVert(vec.NewVec3(-size, 0, -size), 0, 0) //near left
 	mesh.addVert(vec.NewVec3(0, 0, size), 0, 0)      //far, far away
 
-	mesh.Root = newTri(nil, mesh, 0, 1, 2) //make the root triangle
-	return mesh                            //&TriMesh{name: name, Root: root, verts: []*vert{}, midpoints: make(map[uint64]uint32, maxFaces*3), size: size, kinks: kinks, height: height}
+	mesh.Root = newTri(nil, mesh, [3]uint32{0, 1, 2}) //make the root triangle
+	return mesh                                       //&TriMesh{name: name, Root: root, verts: []*vert{}, midpoints: make(map[uint64]uint32, maxFaces*3), size: size, kinks: kinks, height: height}
 }
 
 func (m *TriMesh) midpoint(v1 uint32, v2 uint32) uint32 {
@@ -240,8 +242,8 @@ func (m *TriMesh) addVert(p *vec.V3, u float64, v float64) uint32 {
 		vert.p = p
 		vert.uv.X = u
 		vert.uv.Y = v
-		vert.occluded = false
-		vert.testedForOcclusion = false
+		//vert.occluded = false
+		//vert.testedForOcclusion = false
 		vert.wl = 0
 		clear(vert.touches)
 
@@ -330,7 +332,7 @@ func (m *TriMesh) getPositions(asWater bool) []float32 {
 }
 
 // FloodAndDrain - adds the water surface meshes (to the msg)
-func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg) {
+func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg, campos *vec.V3) {
 
 	if land.flooding {
 		panic("concurrent flooding detected!")
@@ -369,7 +371,7 @@ func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg) {
 		}
 
 		funcIsWater := func(t *Tri, m *TriMesh) bool { return t.OnOrUnderWater(m) }
-		waterMesh := land.ToSimpleMesh(land.Root, uint16(4+i), nil, "water", true, funcIsWater)
+		waterMesh := land.ToSimpleMesh(land.Root, uint16(4+i), nil, "water", true, funcIsWater, campos)
 
 		if waterMesh.FaceCount() > 0 {
 			log.Logit("water mesh at wl", wl, " has ", waterMesh.FaceCount(), " faces and ", waterMesh.VertCount(), " verts")
@@ -454,7 +456,7 @@ func (mesh *TriMesh) shoreLines(tri *Tri, levels []float64, snapped *int) {
 
 }
 
-func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material string, asWater bool, faceTest func(face *Tri, mesh *TriMesh) bool) *mesh.SimpleMesh {
+func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material string, asWater bool, faceTest func(face *Tri, mesh *TriMesh) bool, camPos *vec.V3) *mesh.SimpleMesh {
 
 	vc := lm.VertexCount
 	fis := make([]uint16, vc*10) //there will actually be many less faces than verts - but we need 3 uints per face
@@ -467,8 +469,15 @@ func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material strin
 
 	wp := uint32(0)
 
-	lm.getFacesInto(tri, fis, &wp, faceTest) //populate Fis (recursivley from the root triangle)
-	fis = fis[:wp]                           //truncate at the write pointer
+	viewpoint := camPos.Clone()
+	viewpoint.Y += 5
+	ray := ray.New(viewpoint, nowhereSpecial)
+	votc := make(map[uint32]bool) //verts occlusion test cache TODO reuse/clear (place on device)
+
+	stats := NewProbeStats()
+
+	lm.getFacesInto(tri, fis, &wp, faceTest, ray, votc, stats) //populate Fis (recursivley from the root triangle)
+	fis = fis[:wp]                                             //truncate at the write pointer
 
 	//kill two birds with one stone - generate a subset of verts just for the face sets - and set all their Y's
 
@@ -530,21 +539,24 @@ func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material strin
 
 }
 
-func (mesh *TriMesh) getFacesInto(tri *Tri, fis []uint16, p *uint32, test func(face *Tri, m *TriMesh) bool) {
+func (mesh *TriMesh) getFacesInto(tri *Tri, fis []uint16, p *uint32, test func(face *Tri, m *TriMesh) bool, ray *ray.Ray, votc map[uint32]bool, probeStats *ProbeStats) {
 	if tri.childCount == 0 {
 		j := *p
 		if test(tri, mesh) {
-			fis[j] = uint16(tri.vi[0])
-			fis[j+1] = uint16(tri.vi[1])
-			fis[j+2] = uint16(tri.vi[2])
-			*p += 3
+			if !tri.occludedOrBackFacing(probeStats, ray, mesh, votc) {
+				fis[j] = uint16(tri.vi[0])
+				fis[j+1] = uint16(tri.vi[1])
+				fis[j+2] = uint16(tri.vi[2])
+				*p += 3
+			}
 		} else {
 			//log.Logit("tri rejected at depth", t.Depth)
 		}
 	}
 	//for _, c := range t.children {
 	for i := 0; i < tri.childCount; i++ {
-		mesh.getFacesInto(tri.children[i], fis, p, test)
+		//todo - test the topface of the prism for occlusion - don't recurse if occluded
+		mesh.getFacesInto(tri.children[i], fis, p, test, ray, votc, probeStats)
 	}
 }
 
@@ -633,3 +645,43 @@ func (m *TriMesh) drain(v *vert, wl float64, count *int) {
 // 	}
 
 // }
+type ProbeStats struct {
+	Hit           bool //used in occlusiuon cull
+	leafHits      int
+	leafMisses    int
+	prismHits     int
+	prismMisses   int
+	skips         int
+	nearestHit    *vec.V3
+	NearestTri    *Tri
+	skippedCulled int
+	maxDepth      int
+	SDist         float64 //smallest distance found sofar (start big) - used if ProbeAll()
+}
+
+func NewProbeStats() *ProbeStats {
+	return &ProbeStats{
+		SDist: math.MaxFloat64,
+	}
+}
+
+func (S *ProbeStats) String() string {
+	return fmt.Sprintf(`
+		leaf hits: %d
+		leaf misses: %d
+		prism hits: %d
+		prism misses: %d 
+		skips over/unders: %d 
+		nearest hit dist: %.2f
+		skipped culled: %d
+		`,
+		S.leafHits,
+		S.leafMisses,
+		S.prismHits,
+		S.prismMisses,
+		S.skips,
+		S.SDist,
+		S.skippedCulled,
+	)
+
+}

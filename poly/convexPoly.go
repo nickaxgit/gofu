@@ -2,8 +2,6 @@ package poly
 
 import (
 	"github.com/nickax/gofu/log"
-	//"fmt"
-	//"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/plane"
 	"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/vec"
