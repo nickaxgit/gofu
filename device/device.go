@@ -195,7 +195,6 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 
 	log.Logit(land.VertexCount, " verts")
 
-	ts = time.Now()
 	seed := uint64(0) //uint64(time.Now().Nanosecond())
 	log.Logit("seed:" + strconv.FormatUint(seed, 10))
 
@@ -203,8 +202,10 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//size := player.state.landSize
 	//(rnGen.Float64()-.5)*maxHeight
 
-	//land.Root.SplitDownTo(land, 8)
-	land.Root.SplitIfNeeded(land, camPos, camDir, 0.4) //split the triangle into 4 recursively
+	ts = time.Now()
+	land.Root.SplitDownTo(land, 10)
+
+	//land.Root.SplitIfNeeded(land, camPos, camDir, 0.4) //split the triangle into 4 recursively
 	log.Logit("splitting to focus took", time.Since(ts).Milliseconds(), "ms")
 
 	triCount := 0
