@@ -78,7 +78,8 @@ func tests() {
 		poly.AddPointAt(10, 2, 0)
 		poly.AddPointAt(-10, 3, 0)
 		ray := ray.New(vec.NewVec3(-10, 1000, 0), vec.NewVec3(-10, -1000, 0)) //fire a vertical ray through a vertex
-		return poly.Probe(ray)
+		hit, _ := poly.Probe(ray)
+		return hit
 
 	}, true, "poly vertex probe failed")
 
@@ -88,7 +89,8 @@ func tests() {
 		poly.AddPointAt(10, 2, 0)
 		poly.AddPointAt(-10, 3, 0)
 		ray := ray.New(vec.NewVec3(-11, 1000, 0), vec.NewVec3(-10, -1000, 0))
-		return poly.Probe(ray)
+		hit, _ := poly.Probe(ray)
+		return hit
 
 	}, false, "poly extended edge vertex probe failed (should be outside)")
 
@@ -98,7 +100,8 @@ func tests() {
 		poly.AddPointAt(-20, 1762, 39)
 		poly.AddPointAt(0, 1762, 0)
 		poly.AddPointAt(-39, 1762, 0)
-		return poly.Probe(ray)
+		hit, _ := poly.Probe(ray)
+		return hit
 	}, true, "Should be inside")
 
 	//logit(len(facePens.pens))

@@ -10,7 +10,7 @@ import (
 type Sound struct {
 	name      string
 	handle    uint16
-	position  *vec.V3
+	position  vec.V3
 	volume    float32
 	loop      bool
 	playAfter uint16 //parent sound handle
@@ -19,7 +19,7 @@ type Sound struct {
 }
 
 // New creates a new sound and adds it to the sounds slice, returning the sound created
-func New(sounds []*Sound, name string, position *vec.V3, volume float32, loop bool, playAfter *Sound, durationSeconds int) *Sound {
+func New(sounds []*Sound, name string, position vec.V3, volume float32, loop bool, playAfter *Sound, durationSeconds int) *Sound {
 
 	handle := nextFreeSlotIn(sounds)
 

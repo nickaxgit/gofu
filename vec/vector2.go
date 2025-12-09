@@ -9,7 +9,7 @@ type V2 struct {
 	Y float64
 }
 
-func (uv *V2) UpdateUVxFromNormal(n *V3) {
+func (uv *V2) UpdateUVxFromNormal(n V3) {
 	uv.X = math.Atan2(n.X, n.Z) / float64(6.28)
 }
 

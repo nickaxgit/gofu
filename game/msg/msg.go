@@ -155,7 +155,7 @@ func (msg *Msg) WritePointer() int {
 // 	return value
 // }
 
-func writeVec3(buff *bytes.Buffer, v *vec.V3) {
+func writeVec3(buff *bytes.Buffer, v vec.V3) {
 
 	binary.Write(buff, le, float32(v.X))
 	binary.Write(buff, le, float32(v.Y))
@@ -179,8 +179,10 @@ func write(buff *bytes.Buffer, values ...any) {
 		switch any(v).(type) {
 		case string:
 			writeString(buff, any(v).(string))
-		case *vec.V3:
-			writeVec3(buff, any(v).(*vec.V3))
+		// case *vec.V3:
+		// 	writeVec3(buff, any(v).(*vec.V3))
+		case vec.V3:
+			writeVec3(buff, any(v).(vec.V3))
 		case *vec.V2:
 			writeVec2(buff, any(v).(*vec.V2))
 		case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32, []uint16, []uint8, MsgEnum:

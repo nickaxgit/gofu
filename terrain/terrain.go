@@ -11,6 +11,34 @@ import (
 	"math"
 )
 
+// feels like the collector may be an unnecesssary step
+// can't splitifnecessary generate the plants and simplemesh faces directly ? - doing the occlusion and backface culling there too ?
+// even writing the faces directly to the message ?
+// patching is a problem - may need to integrate
+type Collector struct {
+	triangles  [10000]*Tri
+	plants     [100000]Plant
+	TriCount   int
+	PlantCount int
+}
+
+func (c *Collector) reset() {
+	c.TriCount = 0
+	c.PlantCount = 0
+}
+
+func (c *Collector) AddTri(t *Tri) {
+	c.triangles[c.TriCount] = t
+	c.TriCount++
+}
+
+func (c *Collector) AddPlants(p []Plant) {
+	for _, pl := range p {
+		c.plants[c.PlantCount] = pl
+		c.PlantCount++
+	}
+}
+
 type TriMesh struct {
 	name        string
 	Root        *Tri
@@ -40,8 +68,8 @@ type fireInfo struct {
 	normal       *vec.V3
 }
 
-func (tri *Tri) MeshPoints(mesh *TriMesh, subdivisions int) []*vec.V3 {
-	points := []*vec.V3{}
+func (tri *Tri) MeshPoints(mesh *TriMesh, subdivisions int) []vec.V3 {
+	points := []vec.V3{}
 	step := 1.0 / float64(subdivisions)
 	for i := 0; i <= subdivisions; i++ {
 		for j := 0; j <= subdivisions-i; j++ {
@@ -55,7 +83,7 @@ func (tri *Tri) MeshPoints(mesh *TriMesh, subdivisions int) []*vec.V3 {
 	return points
 }
 
-func (t *Tri) BarycentricInterpolate(m *TriMesh, u, v, w float64) *vec.V3 {
+func (t *Tri) BarycentricInterpolate(m *TriMesh, u, v, w float64) vec.V3 {
 	a := m.verts[t.vi[0]].p
 	b := m.verts[t.vi[1]].p
 	c := m.verts[t.vi[2]].p
@@ -64,6 +92,31 @@ func (t *Tri) BarycentricInterpolate(m *TriMesh, u, v, w float64) *vec.V3 {
 	p.Y = a.Y*u + b.Y*v + c.Y*w
 	p.Z = a.Z*u + b.Z*v + c.Z*w
 	return p
+}
+
+func (land *TriMesh) GetTreesInto(message *msg.Msg) {
+
+	occludedTrees := dev.ViewingPlayer.Game.PlaceTrees() //place trees on non occluded, level 10, triangles infront of the camera
+	log.Logit("Placed trees - occluded:", occludedTrees, "near trees:", dev.nearTreeCount, "far trees:", dev.farTreeCount)
+	//near trees (mesh intances)
+	message.Write(msg.PositionInstances, uint16(100),
+		uint16(0),                 //from
+		uint16(dev.nearTreeCount), //to (we position a subset)
+		byte(0),                   //padding for dword alignemnt
+		dev.nearTreePositions[0:dev.nearTreeCount*3], //Slice of XYZ float32's
+	)
+
+	message.Write(msg.PositionInstances, uint16(105),
+		uint16(0),                //from
+		uint16(dev.farTreeCount), //to (we position a subset)
+		byte(0),                  //padding for dword alignemnt
+		dev.farTreePositions[0:dev.farTreeCount*3], //Slice of XYZ float32's
+	)
+
+	// //far trees (billboards)
+	// if dev.farTreeBillBoardMesh.FaceCount() > 0 {
+	// 	dev.farTreeBillBoardMesh.WriteTo(message, 1)
+	// }
 }
 
 // return the normals of the verts specified in vis (vertices we've added)
@@ -92,7 +145,7 @@ func (m *TriMesh) getNormals(asWater bool) []float32 {
 			//usually 6 0- can be 5 - or even 3 at edges and 1 in conrners
 			for t := range v.touches { //for every face this vertex touches
 				if t.childCount == 0 { //ony include bottom level traingles in the normal calculation
-					v.n.AddIn(&t.Normal)
+					v.n.AddIn(t.Normal)
 				}
 			}
 
@@ -229,7 +282,7 @@ func (m *TriMesh) splitEdge(a, b uint32, dy float64, depth int) uint32 {
 	return vi
 }
 
-func (m *TriMesh) addVert(p *vec.V3, u float64, v float64) uint32 {
+func (m *TriMesh) addVert(p vec.V3, u float64, v float64) uint32 {
 
 	var vert *vert
 
@@ -332,7 +385,7 @@ func (m *TriMesh) getPositions(asWater bool) []float32 {
 }
 
 // FloodAndDrain - adds the water surface meshes (to the msg)
-func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg, campos *vec.V3) {
+func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg, campos vec.V3) {
 
 	if land.flooding {
 		panic("concurrent flooding detected!")
@@ -405,11 +458,11 @@ func (mesh *TriMesh) getYLowHigh(tri *Tri) (low *vec.V3, high *vec.V3) {
 		yl = c
 	}
 
-	return yl.p, yh.p
+	return &yl.p, &yh.p
 
 }
 
-func (mesh *TriMesh) ScorchedAt(tri *Tri, p *vec.V3) bool {
+func (mesh *TriMesh) ScorchedAt(tri *Tri, p vec.V3) bool {
 	if tri.childCount == 0 {
 		return tri.Scorched //reached a leaf - return sorched value
 	} else {
@@ -456,10 +509,10 @@ func (mesh *TriMesh) shoreLines(tri *Tri, levels []float64, snapped *int) {
 
 }
 
-func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material string, asWater bool, faceTest func(face *Tri, mesh *TriMesh) bool, camPos *vec.V3) *mesh.SimpleMesh {
+func (lm *TriMesh) ToSimpleMesh(collector *Collector, id uint16, fm *TriMesh, material string, asWater bool, faceTest func(face *Tri, mesh *TriMesh) bool, camPos vec.V3) *mesh.SimpleMesh {
 
 	vc := lm.VertexCount
-	fis := make([]uint16, vc*10) //there will actually be many less faces than verts - but we need 3 uints per face
+	fis := make([]uint16, vc*4) //there will actually be many less faces than verts - but we need 3 uints per face
 
 	if vc >= math.MaxUint16 {
 		panic("mesh too big - over 65535 verts")
@@ -476,8 +529,8 @@ func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material strin
 
 	stats := NewProbeStats()
 
-	lm.getFacesInto(tri, fis, &wp, faceTest, ray, votc, stats) //populate Fis (recursivley from the root triangle)
-	fis = fis[:wp]                                             //truncate at the write pointer
+	lm.getFacesInto(collector, fis, &wp, faceTest, ray, votc, stats) //populate Fis (recursivley from the root triangle)
+	fis = fis[:wp]                                                   //truncate at the write pointer
 
 	//kill two birds with one stone - generate a subset of verts just for the face sets - and set all their Y's
 
@@ -539,8 +592,10 @@ func (lm *TriMesh) ToSimpleMesh(tri *Tri, id uint16, fm *TriMesh, material strin
 
 }
 
-func (mesh *TriMesh) getFacesInto(tri *Tri, fis []uint16, p *uint32, test func(face *Tri, m *TriMesh) bool, ray *ray.Ray, votc map[uint32]bool, probeStats *ProbeStats) {
-	if tri.childCount == 0 {
+func (mesh *TriMesh) getFacesInto(collector *Collector, fis []uint16, p *uint32, test func(face *Tri, m *TriMesh) bool, ray ray.Ray, votc map[uint32]bool, probeStats *ProbeStats) {
+
+	for i := 0; i < len(collector.triangles); i++ {
+		tri := collector.triangles[i]
 		j := *p
 		if test(tri, mesh) {
 			if !tri.occludedOrBackFacing(probeStats, ray, mesh, votc) {
@@ -554,10 +609,10 @@ func (mesh *TriMesh) getFacesInto(tri *Tri, fis []uint16, p *uint32, test func(f
 		}
 	}
 	//for _, c := range t.children {
-	for i := 0; i < tri.childCount; i++ {
-		//todo - test the topface of the prism for occlusion - don't recurse if occluded
-		mesh.getFacesInto(tri.children[i], fis, p, test, ray, votc, probeStats)
-	}
+	// for i := 0; i < tri.childCount; i++ {
+	// 	//todo - test the topface of the prism for occlusion - don't recurse if occluded
+	// 	mesh.getFacesInto(tri.children[i], fis, p, test, ray, votc, probeStats)
+	// }
 }
 
 func (m *TriMesh) Flood(wl float64) {
@@ -652,7 +707,7 @@ type ProbeStats struct {
 	prismHits     int
 	prismMisses   int
 	skips         int
-	nearestHit    *vec.V3
+	nearestHit    vec.V3
 	NearestTri    *Tri
 	skippedCulled int
 	maxDepth      int

@@ -51,7 +51,7 @@ func New(index int32, m1 *mass.Mass, m2 *mass.Mass, collideable byte, restLength
 
 // }
 
-func (s *Spring) closestPointTo(p *vec.V3) *vec.V3 {
+func (s *Spring) closestPointTo(p vec.V3) vec.V3 {
 	return p.ClosestPointOnLine(s.M1.P, s.M2.P)
 
 }
@@ -135,12 +135,12 @@ func (s *Spring) distanceFrom(p *vec.V3) float64 {
 
 }
 
-func (s *Spring) direction() *vec.V3 {
+func (s *Spring) direction() vec.V3 {
 	v := s.M2.P.Sub(s.M1.P)
 	return v.Normalise()
 }
 
-func (s *Spring) SetVelocity(v *vec.V3) {
+func (s *Spring) SetVelocity(v vec.V3) {
 
 	if s.M1.Fixed || s.M2.Fixed {
 		if v.LengthSq() > 0 {
@@ -150,7 +150,7 @@ func (s *Spring) SetVelocity(v *vec.V3) {
 	s.M1.SetVelocity(v)
 	s.M2.SetVelocity(v)
 }
-func (s *Spring) Translate(v *vec.V3) {
+func (s *Spring) Translate(v vec.V3) {
 	s.M1.P.AddIn(v)
 	s.M2.P.AddIn(v)
 	s.M1.Op.AddIn(v) //important
@@ -174,7 +174,7 @@ func (spring *Spring) WriteTo(msg *msg.Msg) {
 
 }
 
-func ClosestSpringToRay(springs []*Spring, ray *ray.Ray) (*Spring, float64) {
+func ClosestSpringToRay(springs []*Spring, ray ray.Ray) (*Spring, float64) {
 
 	closestDistance := float64(1000)
 	var closestSpring *Spring = nil

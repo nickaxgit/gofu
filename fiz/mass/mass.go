@@ -23,13 +23,13 @@ import (
 type Mass struct {
 	Index       int32
 	ThingIndex  uint32 //not persisted - set (from springs) after loading
-	P           *vec.V3
+	P           vec.V3
 	transformOf *Mass
 	R           float64
 	Fixed       bool
 	IsCoin      bool
 	Collideable bool
-	Op          *vec.V3
+	Op          vec.V3
 	//	v           *vec.V3 //"velocity" - the change in position of this mass
 	//Enabled bool
 	//selected         bool //needs to be per player - see player.selectedMasses map
@@ -41,10 +41,10 @@ type Mass struct {
 	//aoaRads          float64 //(additional) angle of attack
 	WingArea float64
 	//dihedralDegrees  float64
-	lift       *vec.V3
+	lift       vec.V3
 	thrust     float64
 	AoaDegrees float64
-	drag       *vec.V3
+	drag       vec.V3
 	Flip       bool //?
 
 	Section float64 //airfoil section - actually just a byte but we bind a slider to it so it has to be a float64
@@ -73,19 +73,19 @@ func VectorsAsMsg(masses []*Mass) *msg.Msg {
 
 }
 
-func (m *Mass) Contains(p *vec.V3) bool {
+func (m *Mass) Contains(p vec.V3) bool {
 	return m.P.DistanceFrom(p) <= m.R
 }
 
-func (m *Mass) SetVelocity(v *vec.V3) {
+func (m *Mass) SetVelocity(v vec.V3) {
 	m.Op = m.P.Sub(v)
 }
 
-func (m *Mass) GetVelocity() *vec.V3 {
+func (m *Mass) GetVelocity() vec.V3 {
 	return m.P.Sub(m.Op)
 }
 
-func FindAt(masses []*Mass, p *vec.V3, tol float64) *Mass {
+func FindAt(masses []*Mass, p vec.V3, tol float64) *Mass {
 	for _, m := range masses {
 		if m.WithinDistanceOf(p, tol) {
 			return m
@@ -128,7 +128,7 @@ func (m *Mass) SetIndex(i int32) {
 	m.Index = i
 }
 
-func New(index int32, p *vec.V3, r float64, fixed bool, isCoin bool, collideable bool, transFormOf *Mass) *Mass {
+func New(index int32, p vec.V3, r float64, fixed bool, isCoin bool, collideable bool, transFormOf *Mass) *Mass {
 
 	return &Mass{Index: index,
 		P: p, R: r, Fixed: fixed, IsCoin: isCoin,
@@ -153,7 +153,7 @@ func (m *Mass) overlaps(masses []*Mass) *Mass {
 	return nil
 
 }
-func (m *Mass) WithinDistanceOf(p *vec.V3, tol float64) bool {
+func (m *Mass) WithinDistanceOf(p vec.V3, tol float64) bool {
 	return m.P.DistanceFrom(p) <= tol
 }
 func NewFromMsg(massesSoFar []*Mass, msg *msg.Msg, withDetail byte) *Mass {
@@ -161,7 +161,7 @@ func NewFromMsg(massesSoFar []*Mass, msg *msg.Msg, withDetail byte) *Mass {
 	var idx int32 = 0
 	msg.Read(&idx)
 
-	p := &vec.V3{}
+	p := vec.V3{}
 	msg.Read(p) //read the mass position (note p is a pointer)
 
 	m := New(idx, p, 0, false, false, false, nil)
@@ -318,7 +318,7 @@ func (m *Mass) WriteInto(msg *msg.Msg, withDetail bool, selected byte) {
 
 }
 
-func (m *Mass) RegenFromMaster(transform func(p *vec.V3) *vec.V3) {
+func (m *Mass) RegenFromMaster(transform func(p vec.V3) vec.V3) {
 	if m.transformOf != nil {
 		m.P = transform(m.transformOf.P)
 	}
@@ -373,9 +373,9 @@ func (m *Mass) RegenFromMaster(transform func(p *vec.V3) *vec.V3) {
 // b.P.subIn(resolve.multiply((1 - ratio) * share))
 //}
 
-func (m *Mass) ResolvePenetration(depth float64, impact *vec.V3, surface *terrain.Tri) {
+func (m *Mass) ResolvePenetration(depth float64, impact vec.V3, surface *terrain.Tri) {
 	v := m.P.Sub(m.Op)
-	vr := v.Reflect(&surface.Normal)
+	vr := v.Reflect(surface.Normal)
 
 	if depth > 0.1 {
 		log.Logit("deep penetration", v.Length()*30, "m/s")
@@ -383,7 +383,7 @@ func (m *Mass) ResolvePenetration(depth float64, impact *vec.V3, surface *terrai
 
 	m.P.Y = impact.Y + m.R
 
-	vr = vr.Sub(surface.Normal.Multiply(vr.Dot(&surface.Normal) * .8)) //kill 80% of the vertical velocity (20% bounce)
+	vr = vr.Sub(surface.Normal.Multiply(vr.Dot(surface.Normal) * .8)) //kill 80% of the vertical velocity (20% bounce)
 
 	if m.Axle != nil {
 		axle := m.Axle.P.Sub(m.P).Normalise()
@@ -427,7 +427,7 @@ func (m *Mass) WriteVectorsTo(msg *msg.Msg) {
 		msg.Write(m.P, quarter, colors.Orange)
 	}
 
-	if m.lift != nil {
+	if m.lift.IsNonZero() {
 
 		//trailing edge
 
@@ -533,7 +533,7 @@ func MassesAsMsg(masses []*Mass, withDetail bool, playerSelected map[*Mass]bool)
 
 }
 
-func ClosestMassToRay(masses []*Mass, exclude *Mass, ray *ray.Ray) (m *Mass, distance float64) {
+func ClosestMassToRay(masses []*Mass, exclude *Mass, ray ray.Ray) (m *Mass, distance float64) {
 
 	closestDistance := float64(1000)
 	var closestMass *Mass = nil

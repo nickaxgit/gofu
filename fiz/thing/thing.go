@@ -36,16 +36,16 @@ type Thing struct {
 	cameras map[string]*cam.Camera //Additional *initial* (named) position, direction and up in vehicle space
 
 	meshName     string
-	MeshOffset   *vec.V3
-	MeshScale    *vec.V3
-	MeshRotation *vec.V3 //axis/angle
+	MeshOffset   vec.V3
+	MeshScale    vec.V3
+	MeshRotation vec.V3 //axis/angle
 	//masses     map[*mass.Mass]bool //all the masses in the thing (once) (used for applying lift)
 	MeshVisibility byte
 
 	Engines []*engine.Engine //multiple engines
 
 	heading       float64 //heading of the thing (for turn rate calculation)
-	lastTelemPos  *vec.V3
+	lastTelemPos  vec.V3
 	lastTelemTime time.Time
 	telemetry     *msg.Msg
 }
@@ -178,11 +178,11 @@ func (thing *Thing) DeleteSpring(s *spring.Spring) {
 
 }
 
-func (thing *Thing) Focus() *vec.V3 {
+func (thing *Thing) Focus() vec.V3 {
 	return thing.Springs[0].M2.P
 }
 
-func (thing *Thing) Forward() *vec.V3 {
+func (thing *Thing) Forward() vec.V3 {
 
 	o := thing.Om.P
 	f := thing.Fm.P
@@ -190,7 +190,7 @@ func (thing *Thing) Forward() *vec.V3 {
 
 }
 
-func (thing *Thing) Right() *vec.V3 {
+func (thing *Thing) Right() vec.V3 {
 	o := thing.Om.P
 	r := thing.Rm.P
 	return r.Sub(o).Normalise()
@@ -223,13 +223,13 @@ func (thing *Thing) FindSpringActuator(act actuator.ActuatorEnum) *spring.Spring
 	return nil
 }
 
-func (thing *Thing) SetVelocity(v *vec.V3) {
+func (thing *Thing) SetVelocity(v vec.V3) {
 	for _, s := range thing.Springs {
 		s.SetVelocity(v)
 	}
 }
 
-func (thing *Thing) Translate(v *vec.V3) {
+func (thing *Thing) Translate(v vec.V3) {
 	for _, s := range thing.Springs {
 		s.Translate(v)
 
@@ -269,7 +269,7 @@ func ThingsFromMsg(m *msg.Msg, masses []*mass.Mass) []*Thing {
 	return things
 }
 
-func (thing *Thing) CentreOfMass() (*vec.V3, float64) {
+func (thing *Thing) CentreOfMass() (vec.V3, float64) {
 
 	cg := vec.NewVec3(0, 0, 0)
 	tm := 0.0
@@ -280,11 +280,11 @@ func (thing *Thing) CentreOfMass() (*vec.V3, float64) {
 		cg.AddIn(s.M2.P.Multiply(s.M2.MassKG()))
 	}
 
-	return cg.Divide(tm), tm //return centre of mass and total mass
+	return cg.DivIn(tm), tm //return centre of mass and total mass
 
 }
 
-func (thing *Thing) addFace(p ...*vec.V3) {
+func (thing *Thing) addFace(p ...vec.V3) {
 	f := poly.NewConvexPolyFromVecs(p)
 	thing.faces = append(thing.faces, f)
 }

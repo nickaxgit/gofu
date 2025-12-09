@@ -22,11 +22,11 @@ type Event struct {
 	Err      error
 	Severity Severity
 	Msg      string
-	gid      uint32  //game id
-	pid      uint32  //player id
-	did      uint32  //device id
-	vid      uint32  //vehicle id - index (in global assets)
-	velocity *vec.V3 //velocity at time of error/event
+	gid      uint32 //game id
+	pid      uint32 //player id
+	did      uint32 //device id
+	vid      uint32 //vehicle id - index (in global assets)
+	velocity vec.V3 //velocity at time of error/event
 	time     time.Time
 	Extra    string
 	stack    []byte
@@ -62,7 +62,7 @@ func Log(e *Event) {
 	}
 }
 
-func (e *Event) AddContext(gid uint32, pid uint32, did uint32, vid uint32, velocity *vec.V3) {
+func (e *Event) AddContext(gid uint32, pid uint32, did uint32, vid uint32, velocity vec.V3) {
 	e.gid = gid
 	e.pid = pid
 	e.did = did

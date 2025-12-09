@@ -67,26 +67,23 @@ type Device struct {
 	highlit      highlitType
 	currentThing *thing.Thing
 	mode         ModeEnum
-	Land         *terrain.TriMesh //terrain is generated JIT for each viewer
-	Grid         *grid.Grid
 
-	gridPos      *vec.V3
-	zOff         float64 //offset from the grid (along the grid normal)
-	spacePos     *vec.V3
+	Grid *grid.Grid
+
 	springCursor *mass.Mass
 
 	selectedMasses map[*mass.Mass]bool
-	massStartPos   map[*mass.Mass]*vec.V3 //for dragging - we record the start positions
-	moveStart      *vec.V3                //for dragging
+	massStartPos   map[*mass.Mass]vec.V3 //for dragging - we record the start positions
+	moveStart      vec.V3                //for dragging
 	//higlitMass     *mass.Mass
 
 	downCam     *cam.Camera
-	downGridPos *vec.V3 //where were we when they pressed the mouse button down
+	downGridPos vec.V3 //where were we when they pressed the mouse button down
 	//downCamPos  *vec3
 
 	cursor   *vec.V2 //current mouse pos in normalised screen coords (-1/+1)
 	grab     *vec.V2 //where we moused down in normalised screen coords (-1/+1)
-	meshGrab *vec.V3 //a 'source' point on the mesh - we will translate to some target point
+	meshGrab vec.V3  //a 'source' point on the mesh - we will translate to some target point
 
 	//mouseDown     bool
 	buttons             byte
@@ -109,6 +106,7 @@ type Device struct {
 	farTreePositions []float32 //x,z positions of far trees (centres of tree tris) - ready for sending
 
 	makingland bool
+	terrain.Collector
 	//farTreeBillBoardMesh *mesh.SimpleMesh
 }
 
@@ -131,25 +129,23 @@ func Set(d *Device) {
 	devices[d.Id] = d
 }
 
-func ViewersOf(game *game.Game) (viewers []*Device, landRoots []*terrain.Tri) {
+func ViewersOf(game *game.Game) []*Device {
 
 	current := []*Device{}
-	lands := []*terrain.Tri{}
+	//lands := []*terrain.Tri{}
 
 	for _, d := range devices {
 		if d.WebSocket != nil {
 			if d.ViewingPlayer != player.None {
 				if d.ViewingPlayer.Game == game {
 					current = append(current, d)
-					if d.Land != nil {
-						lands = append(lands, d.Land.Root)
-					}
 				}
 			}
 		}
 	}
-	return current, lands
+	return current
 }
+
 func OwnedBy(player *player.Player) []*Device {
 	mutex.RLock()
 	defer mutex.RUnlock()
@@ -168,6 +164,8 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//splitting to level 12 = / 4096 = ~10m triangles (for tree placement)
 	//4096 * 4096 /2 = 8 million tree sites
 
+	land := game.Land
+
 	device.makingland = true
 	defer func() { device.makingland = false }()
 
@@ -177,13 +175,12 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 
 	device.lastCam = device.Camera.Clone() //store this as the new old position
 
-	if device.Land == nil {
-		device.Land = terrain.NewTriMesh("land", 65000, game.LandSize, game.Kinks, game.LandHeight)
+	if land == nil {
+		game.Land = terrain.NewTriMesh("land", 65000, game.LandSize, game.Kinks, game.LandHeight)
+		land = game.Land
 	} else {
 		//device.Land.Reset()
 	}
-
-	land := device.Land
 
 	//note - runway is projected onto y=0 up to here
 
@@ -203,14 +200,15 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//(rnGen.Float64()-.5)*maxHeight
 
 	ts = time.Now()
-	land.Root.SplitDownTo(land, 10)
+	//land.Root.SplitDownTo(land, 10)
 
-	//land.Root.SplitIfNeeded(land, camPos, camDir, 0.4) //split the triangle into 4 recursively
+	land.Root.SplitIfNeeded(land, camPos, camDir, 0.4, &device.Collector) //split the triangle into 4 recursively - collect leafTriangles (those deep enough for this PoV) and plants
 	log.Logit("splitting to focus took", time.Since(ts).Milliseconds(), "ms")
 
 	triCount := 0
 	land.Root.CountTris(&triCount)
 	log.Logit("land has", triCount, "tris after focus split")
+	log.Logit("collected ", device.Collector.TriCount, " tris and ", device.Collector.PlantCount, " plants")
 
 	ts = time.Now()
 	land.Root.Patch(land)
@@ -231,23 +229,6 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	ts = time.Now()
 	land.Root.MakePrisms(land) //we want to construct volumes once for each triangle - not repeatedly during occlusion culling
 	log.Logit("made prisms took", time.Since(ts).Milliseconds(), "ms")
-
-	//ts = time.Now()
-	//land.Root.Occlude(land, camPos)
-	//log.Logit("occlude took", time.Since(ts).Milliseconds(), "ms")
-
-	// culled, kept := 0, 0
-	// ts = time.Now()
-	// land.Root.OccludeVerts(camPos) //TODO- only occlude verts in view frustum
-	// log.Logit("occlude verts took", time.Since(ts).Milliseconds(), "ms")
-
-	// ts = time.Now()
-	// land.Root.OcclusionCull(&culled, &kept)
-	// log.Logit("occlusion cull took", time.Since(ts).Milliseconds(), "ms")
-
-	//	log.Logit("culled:", culled, " kept:", kept, " tris")
-
-	//patch convert and send
 
 	//groundPosition, groundTriangle := land.Root.VprobeLand(camPos)
 
@@ -303,19 +284,19 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//land.Root.Scorch(game.fire) //update the scorched state of non culled leaf triangles
 	log.Logit("scorching took", time.Since(ts).Milliseconds(), "ms")
 
-	smallLandMesh := land.ToSimpleMesh(land.Root, 2, game.Fire, "land", false, isLand, camPos)
+	smallLandMesh := land.ToSimpleMesh(&device.Collector, 2, game.Fire, "land", false, isLand, camPos)
 	log.Logit("converted land mesh in", time.Since(ts).Milliseconds(), "ms")
 	log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
 
 	///scorchedLand := land.Root.ToSimpleMesh(56, land, game.Fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
-	wireframe := land.ToSimpleMesh(land.Root, 32, game.Fire, "whiteWires", false, isLand, camPos)
+	wireframe := land.ToSimpleMesh(&device.Collector, 32, game.Fire, "whiteWires", false, isLand, camPos)
 
 	smallLandMesh.WriteTo(response, 1)
 	///scorchedLand.WriteTo(message, 1)
 	wireframe.WriteTo(response, 1)
 	response.Align() //align to dword boundary
 	log.Logit("response (before trees) is ", response.Buff.Len(), " bytes long")
-	device.GetTreesInto(response)
+	land.GetTreesInto(response)
 
 	log.Logit("response is ", response.Buff.Len(), " bytes long")
 }
@@ -399,8 +380,8 @@ func New(id uint32, name string,
 		WebSocket:         ws,
 		pov:               "none",
 		Camera:            cam.New(vec.NewVec3(0, 0, 0), vec.NewVec3(1, 0, 0), vec.NewVec3(0, 1, 0)), //default camera if none found
-		gridPos:           vec.NewVec3(0, 0, 0),
-		spacePos:          vec.NewVec3(0, 0, 0),
+		//gridPos:           vec.NewVec3(0, 0, 0),
+		//spacePos:          vec.NewVec3(0, 0, 0),
 
 		highlit: highlitType{nil, nil, nil},
 		//springStart:    nil,
@@ -530,15 +511,17 @@ func (dev *Device) clearContextMenu() {
 }
 
 // writes the flames visible to this viewer, to the message
-func (dev *Device) GetFlames(fire *terrain.TriMesh, message *msg.Msg) {
+func (dev *Device) GetFlames(land *terrain.TriMesh, fire *terrain.TriMesh, message *msg.Msg) {
 
 	tcs := mesh.NewTcs(0, 1, 1, 0)                    //texture atlas coordinates
 	flameMesh := mesh.New(201, "flame", 10000, 30000) //10k faces, 30k verts
 
 	//adds a flame billboard to the flamemesh for every (bespoke) view triangle that sits on on globally burning triangle
-	fire.Root.GetFlames(dev.Land, fire, flameMesh, dev.Camera, tcs)
+	fire.Root.GetFlames(land, fire, flameMesh, dev.Camera, tcs)
 
-	flameMesh.WriteTo(message, 1)
+	if flameMesh.FaceCount() > 0 {
+		flameMesh.WriteTo(message, 1)
+	}
 
 }
 
@@ -614,7 +597,7 @@ func (dev *Device) processMouseMove(game *game.Game) { //isRunning bool, masses 
 			}
 
 			//mutates the viewers gridPos and spacePos (by reference)
-			dev.Grid.UpdateGridPosAndSpacePos(dev.Camera, dev.zOff, dev.gridPos, dev.spacePos)
+			dev.Grid.UpdateGridPosAndSpacePos(dev.Camera) //, dev.zOff, dev.gridPos, dev.spacePos)
 
 			pickRay := ray.New(dev.Camera.Position, dev.Camera.FarPos)
 
@@ -635,7 +618,7 @@ func (dev *Device) processMouseMove(game *game.Game) { //isRunning bool, masses 
 		case moving:
 			dev.moveSelected(game)
 		case stretching:
-			dev.springCursor.P = dev.spacePos.Clone() //moveSpringCursor()
+			dev.springCursor.P = dev.Grid.SpacePos.Clone() //moveSpringCursor()
 			dev.sendSpheres([]*mass.Mass{dev.springCursor})
 		default:
 			log.Logit("unknown mode)", dev.mode)
@@ -643,8 +626,8 @@ func (dev *Device) processMouseMove(game *game.Game) { //isRunning bool, masses 
 
 		if dev.buttons == 1 && dev.mode == editing {
 			//dragging/panning the camera
-			if dev.downGridPos != nil {
-				delta := dev.gridPos.Sub(dev.downGridPos).Multiply(.9)
+			if dev.downGridPos.IsNonZero() {
+				delta := dev.Grid.GridPos.Sub(dev.downGridPos).Multiply(.9)
 				dev.Camera.Position = dev.downCam.Position.Sub(delta)
 				dev.SendCamera()
 			}
@@ -789,7 +772,7 @@ func (dev *Device) sendCentreOfMass(t *thing.Thing) {
 }
 
 func (dev *Device) moveSelected(game *game.Game) {
-	moveDelta := dev.spacePos.Sub(dev.moveStart)
+	moveDelta := dev.Grid.SpacePos.Sub(dev.moveStart)
 
 	//add any movement normal to the grid to the delta
 	gridNormal := dev.Grid.Xaxis.Cross(dev.Grid.Yaxis).Normalise()
@@ -836,7 +819,7 @@ func (dev *Device) regenTransformed(masses []*mass.Mass) {
 	for _, m := range masses {
 
 		//this could be another transform such as a rotation
-		reflect := func(p *vec.V3) *vec.V3 {
+		reflect := func(p vec.V3) vec.V3 {
 			return p.ReflectInPlane(dev.Grid.Origin, dev.Grid.Normal())
 		}
 		m.RegenFromMaster(reflect)
@@ -852,7 +835,7 @@ func (dev *Device) regenTransformed(masses []*mass.Mass) {
 
 func (dev *Device) SendCursor() {
 
-	msg := msg.NewMsg(msg.Cursor, dev.cursor, dev.gridPos, dev.spacePos)
+	msg := msg.NewMsg(msg.Cursor, dev.cursor, dev.Grid.GridPos, dev.Grid.SpacePos)
 
 	if dev.highlit.mass != nil {
 		msg.Write(float32(0)) //cursor sphere radius
@@ -892,8 +875,8 @@ func (dev *Device) Notify(text string, severity string) {
 }
 
 func (dev *Device) recordMassPositions(masses []*mass.Mass) {
-	dev.massStartPos = make(map[*mass.Mass]*vec.V3) //reset each time
-	for _, m := range masses {                      //selectedMasses {
+	dev.massStartPos = make(map[*mass.Mass]vec.V3) //reset each time
+	for _, m := range masses {                     //selectedMasses {
 		dev.massStartPos[m] = m.P.Clone()
 	}
 }
@@ -1038,7 +1021,7 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 	case "mw": //mousewheel
 
 		dev.Camera.Position.AddIn(dev.Grid.Normal().Multiply(ibm.Payload[0] * -0.005))
-		dev.zOff += ibm.Payload[0] * -0.005
+		dev.Grid.Zoff += ibm.Payload[0] * -0.005
 
 		dev.processMouseMove(gm) //*isRunning, masses, things)
 		dev.SendCamera()
@@ -1061,16 +1044,17 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 			dev.cursor.Y = ibm.Payload[5]
 
 			//find and highlight the deepest leaf triangle
+			land := dev.ViewingPlayer.Game.Land
 			if delta > 2 {
 				stats := terrain.NewProbeStats()
 				ray := ray.New(dev.Camera.Position, dev.Camera.FarPos)
 
-				if dev.Land != nil {
-					dev.Land.Root.ProbeAll(dev.Land, ray, stats)
+				if land != nil {
+					land.Root.ProbeAll(land, ray, stats)
 					//log.Logit(stats.String())
 
 					if stats.NearestTri != nil {
-						msg := stats.NearestTri.EdgesAsMsg(dev.Land)
+						msg := stats.NearestTri.EdgesAsMsg(land)
 						stats.NearestTri.PrismEdges(msg)              //show the prism Hierarchy
 						terminator := float32(math.Inf(1))            //use positive infinity as terminator
 						msg.Write(terminator, terminator, terminator) //Terminator for vectors
@@ -1124,7 +1108,7 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 
 		dev.grab = dev.cursor.Clone()
 
-		dev.downGridPos = dev.gridPos.Clone()
+		dev.downGridPos = dev.Grid.GridPos.Clone()
 
 		dev.downCam = dev.Camera.Clone()
 
@@ -1133,7 +1117,7 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 			if dev.highlit.mass != nil {
 				dev.moveStart = dev.highlit.mass.P.Clone()
 			} else {
-				dev.moveStart = dev.spacePos.Clone() //may be snapped
+				dev.moveStart = dev.Grid.SpacePos.Clone() //may be snapped
 			}
 
 			dev.recordMassPositions(gm.Masses)
@@ -1157,7 +1141,7 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 			if dev.highlit.mass != nil {
 				m := dev.highlit.mass
 				gridPlane := dev.Grid.Plane()
-				dev.zOff = gridPlane.DistanceFrom(m.P)
+				dev.Grid.Zoff = gridPlane.DistanceFrom(m.P)
 
 				dev.SendCursor()
 			}
@@ -1170,10 +1154,10 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 				dev.setMode(editing)
 			case grabbingMesh:
 
-				dev.meshGrab = dev.spacePos.Clone()
+				dev.meshGrab = dev.Grid.SpacePos.Clone()
 				dev.setMode(offsettingMesh)
 			case offsettingMesh:
-				delta := dev.spacePos.Sub(dev.meshGrab)
+				delta := dev.Grid.SpacePos.Sub(dev.meshGrab)
 				//delta.x *= -1 //UGLY - but the scenes x axis is inverted
 				dev.currentThing.MeshOffset.AddIn(delta)
 				dev.sendThings([]*thing.Thing{dev.currentThing})
@@ -1295,7 +1279,7 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 			}
 			dev.sendSpheres(gm.Masses)
 		} else if k == "0" { //reset z offset (from the grid)
-			dev.zOff = 0
+			dev.Grid.Zoff = 0
 			dev.processMouseMove(gm)
 			dev.SendCamera()
 			dev.controls[input.Throttle] = 0
@@ -1568,7 +1552,7 @@ func (dev *Device) SnapMasses(things []*thing.Thing) {
 
 func (dev *Device) makeNextSpring(game *game.Game) {
 	if dev.highlit.mass == nil {
-		dev.highlit.mass = mass.New(int32(len(game.Masses)), dev.spacePos, .05, false, false, true, nil)
+		dev.highlit.mass = mass.New(int32(len(game.Masses)), dev.Grid.SpacePos, .05, false, false, true, nil)
 		game.Masses = append(game.Masses, dev.highlit.mass)
 		dev.sendSpheres([]*mass.Mass{dev.highlit.mass})
 		return
@@ -2239,141 +2223,3 @@ func Role(target *player.Player, device *Device) string {
 // 	}
 
 // }
-
-func (dev *Device) PlaceTrees() int {
-
-	occludedTrees := 0
-	wp := 0
-	dev.Land.Root.Flatten(6, dev.treeTris, &wp) //get all triangles at depth 10  -*potential* tree sites
-
-	ray := ray.New(dev.Camera.Position, vec.NoWhereSpecial) //set up *one* ray for firing at the treetops (reuse it!)
-	treeTop := vec.NewVec3(0, 0, 0)                         //scratch
-	toTree := vec.NewVec3(0, 0, 0)
-
-	stats := terrain.NewProbeStats()
-
-	dev.nearTreeCount = 0 //track the number of positions we will need to send
-	dev.farTreeCount = 0
-	//dev.farTreeBillBoardMesh.Reset()
-
-	for i := 0; i < wp; i++ { //_, tri := range tris {
-		tri := dev.treeTris[i]
-		if tri.IsSubmerged(dev.Land) {
-			continue
-		} //no trees underwater
-		//mid := tri.Centre
-		points := tri.MeshPoints(dev.Land, 6) //divide the level 6 triangles 6 further times (yeilding 28 points each)
-		//tcs := mesh.NewTcs(0, 1, 1, 0)
-
-		for _, plot := range points {
-
-			if !dev.Land.ScorchedAt(dev.Land.Root, plot) {
-
-				d := plot.DistanceFrom(dev.Camera.Position)
-				if d > 5000 {
-					continue
-				}
-				surfacePoint, _ := dev.Land.Root.VprobeLand(plot)
-				if surfacePoint == nil {
-					continue
-				} //should not happen (but does)
-
-				toTree.SubInto(surfacePoint, dev.Camera.Position)
-				toTree.NormaliseInPlace()
-				dotProd := toTree.Dot(dev.Camera.Direction)
-
-				if d < 500 {
-					if dotProd > -0.2 { //trees in front of, or somewhat behind the camera
-
-						treeTop.SetFrom(surfacePoint)
-						treeTop.Y += 3
-
-						ray.PointAt(treeTop)
-
-						//check for occlusion (by the triangle it stands on)
-						//TODO - check against whole landscape (although these are nearby trees)
-
-						stats.Hit = false
-						dev.Land.Root.Probe(dev.Land, ray, stats, 0)
-						if stats.Hit {
-							occludedTrees++
-							continue
-						}
-
-						if dev.nearTreeCount < maxNearTrees {
-							//place a (instanced mesh) tree here
-							wp := dev.nearTreeCount * 3
-							dev.nearTreePositions[wp] = float32(surfacePoint.X)
-							dev.nearTreePositions[wp+1] = float32(surfacePoint.Y)
-							dev.nearTreePositions[wp+2] = float32(surfacePoint.Z)
-							dev.nearTreeCount++
-						} else {
-							log.Logit("Max near trees reached")
-						}
-
-					}
-				} else { //it's a faraway tree - only place it if the ground slopes towards the camera
-					//todo - occlusion cull far trees too
-					if dotProd > .35 { //trees generally in front of the camera}
-						if toTree.Dot(&tri.Normal) < 0 { //if the triangle slopes towards camera
-
-							stats.Hit = false
-							treeTop.SetFrom(surfacePoint)
-							treeTop.Y += 6
-							ray.PointAt(treeTop)
-
-							dev.Land.Root.Probe(dev.Land, ray, stats, 0)
-							if stats.Hit {
-								occludedTrees++
-								continue
-							}
-
-							if dev.farTreeCount < maxFarTrees {
-								wp := dev.farTreeCount * 3
-								dev.farTreePositions[wp] = float32(surfacePoint.X)
-								dev.farTreePositions[wp+1] = float32(surfacePoint.Y)
-								dev.farTreePositions[wp+2] = float32(surfacePoint.Z)
-
-								dev.farTreeCount++
-
-							} else {
-								log.Logit("Max far trees reached")
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return occludedTrees
-
-}
-
-func (dev *Device) GetTreesInto(message *msg.Msg) {
-
-	//TODO only reposition/resend trees in new positions (most trees do not need resending)
-	//need to do trees after waterlines so we don't get trees underwater
-
-	occludedTrees := dev.PlaceTrees() //place trees on non occluded, level 10, triangles infront of the camera
-	log.Logit("Placed trees - occluded:", occludedTrees, "near trees:", dev.nearTreeCount, "far trees:", dev.farTreeCount)
-	//near trees (mesh intances)
-	message.Write(msg.PositionInstances, uint16(100),
-		uint16(0),                 //from
-		uint16(dev.nearTreeCount), //to (we position a subset)
-		byte(0),                   //padding for dword alignemnt
-		dev.nearTreePositions[0:dev.nearTreeCount*3], //Slice of XYZ float32's
-	)
-
-	message.Write(msg.PositionInstances, uint16(105),
-		uint16(0),                //from
-		uint16(dev.farTreeCount), //to (we position a subset)
-		byte(0),                  //padding for dword alignemnt
-		dev.farTreePositions[0:dev.farTreeCount*3], //Slice of XYZ float32's
-	)
-
-	// //far trees (billboards)
-	// if dev.farTreeBillBoardMesh.FaceCount() > 0 {
-	// 	dev.farTreeBillBoardMesh.WriteTo(message, 1)
-	// }
-}

@@ -17,32 +17,7 @@ type V3 struct {
 	Z float64
 }
 
-// func (p *V3) GetY() float64 {
-// 	return p.Y
-// }
-// func (p *V3) GetX() float64 {
-// 	return p.X
-// }
-
-// func (p *V3) GetZ() float64 {
-// 	return p.Z
-// }
-
-// func (p *V3) SetX(x float64) *V3 {
-// 	p.X = x
-// 	return p //allows method chaining
-// }
-
-// func (p *V3) SetZ(z float64) *V3 {
-// 	p.Z = z
-// 	return p //allows method chaining
-// }
-// func (p *V3) SetY(y float64) *V3 {
-// 	p.Y = y
-// 	return p //allows method chaining
-// }
-
-func (p *V3) AsFloat32s() []float32 {
+func (p V3) AsFloat32s() []float32 {
 	return []float32{float32(p.X), float32(p.Y), float32(p.Z)}
 }
 
@@ -69,7 +44,7 @@ func (dst *V3) Set(x, y, z float64) *V3 {
 
 // AddInto mutates dst to ADD the sum of all the components
 // BE AWARE any value already in the dst is added to - you will often want to start with a zero vector
-func (dst *V3) AddInto(components ...*V3) *V3 {
+func (dst *V3) AddInto(components ...V3) *V3 {
 	// dst = a + b
 	for _, b := range components {
 		dst.X += b.X
@@ -77,7 +52,7 @@ func (dst *V3) AddInto(components ...*V3) *V3 {
 		dst.Z += b.Z
 	}
 
-	return dst
+	return dst //we return it to allow method chaining
 }
 
 // SubInto mutates dst to be a-b
@@ -112,7 +87,7 @@ func (v *V3) NormaliseInPlace() *V3 {
 // }
 
 // distanceBetweenLines returns the shortest distance between two lines (not line segments)
-func DistanceBetweenLines(a1, a2, b1, b2 *V3) float64 {
+func DistanceBetweenLines(a1, a2, b1, b2 V3) float64 {
 	//from http://geomalgorithms.com/a07-_distance.html
 	u := a2.Sub(a1)
 	v := b2.Sub(b1)
@@ -142,12 +117,7 @@ func DistanceBetweenLines(a1, a2, b1, b2 *V3) float64 {
 
 }
 
-// returns a copy of the vector with y set to 0
-func (p *V3) Y0() *V3 {
-	return &V3{p.X, 0, p.Z}
-}
-
-func (p *V3) ReflectInPlane(pop *V3, normal *V3) *V3 {
+func (p V3) ReflectInPlane(pop V3, normal V3) V3 {
 	return p.Sub(normal.Multiply(2 * (p.Dot(normal) - pop.Dot(normal))))
 }
 
@@ -156,13 +126,13 @@ func (p *V3) ReflectInPlane(pop *V3, normal *V3) *V3 {
 // }
 
 // construct a new vector - use sparingly!
-func NewVec3(x, y, z float64) *V3 {
-	return &V3{x, y, z}
+func NewVec3(x, y, z float64) V3 {
+	return V3{x, y, z}
 }
 
 // add - adds vectors - prefer using AddInto to avoid allocations
-func (a *V3) Add(b *V3) *V3 {
-	return NewVec3(a.X+b.X, a.Y+b.Y, a.Z+b.Z)
+func (a V3) Add(b V3) V3 {
+	return V3{a.X + b.X, a.Y + b.Y, a.Z + b.Z}
 }
 
 // hypo3 - pythagorean in 3D - helped for dist
@@ -177,7 +147,7 @@ func (p *V3) WriteTo(buff *bytes.Buffer) {
 	binary.Write(buff, le, float32(p.Z)) //write z
 }
 
-func (a *V3) AddIn(b *V3) {
+func (a *V3) AddIn(b V3) {
 	a.X += b.X
 	a.Y += b.Y
 	a.Z += b.Z
@@ -189,15 +159,24 @@ func (a *V3) MulIn(f float64) {
 	a.Z *= f
 }
 
-func (a *V3) DivIn(f float64) { //helper for Mulin
+func (a *V3) DivIn(f float64) V3 { //helper for Mulin
 
 	f = 1 / f
 	a.X *= f
 	a.Y *= f
 	a.Z *= f
+
+	return *a
 }
 
-func (a *V3) SubIn(b *V3) {
+func (v V3) IsNonZero() bool {
+	if v.X != 0 || v.Y != 0 || v.Z != 0 {
+		return true
+	}
+	return false
+}
+
+func (a *V3) SubIn(b V3) {
 	a.X -= b.X
 	a.Y -= b.Y
 	a.Z -= b.Z
@@ -212,7 +191,7 @@ func (a *V3) LengthSq() float64 {
 	return a.X*a.X + a.Y*a.Y + a.Z*a.Z
 }
 
-func (p *V3) RotateAbout(axis *V3, angle float64) *V3 {
+func (p V3) RotateAbout(axis V3, angle float64) V3 {
 	al := axis.Length()
 	if al < .999 || al > 1.001 {
 		panic("axis is not unit length")
@@ -238,26 +217,26 @@ func (p *V3) RotateAbout(axis *V3, angle float64) *V3 {
 
 }
 
-func (a *V3) Divide(f float64) *V3 {
+func (a V3) Divide(f float64) V3 {
 	if f == 0 {
 		panic("divide by zero")
 	}
-	return NewVec3(a.X/f, a.Y/f, a.Z/f)
+	return V3{a.X / f, a.Y / f, a.Z / f}
 }
 
-func (a *V3) Multiply(f float64) *V3 {
+func (a V3) Multiply(f float64) V3 {
 	return NewVec3(a.X*f, a.Y*f, a.Z*f)
 }
 
-func (a *V3) Tween(b *V3, f float64) *V3 {
-	return NewVec3(a.X+(b.X-a.X)*f, a.Y+(b.Y-a.Y)*f, a.Z+(b.Z-a.Z)*f)
+func (a V3) Tween(b V3, f float64) V3 {
+	return V3{a.X + (b.X-a.X)*f, a.Y + (b.Y-a.Y)*f, a.Z + (b.Z-a.Z)*f}
 }
 
-func (a *V3) Sub(b *V3) *V3 {
-	return NewVec3(a.X-b.X, a.Y-b.Y, a.Z-b.Z)
+func (a V3) Sub(b V3) V3 {
+	return V3{a.X - b.X, a.Y - b.Y, a.Z - b.Z}
 }
 
-func (a *V3) Normalise() *V3 {
+func (a V3) Normalise() V3 {
 	l := a.Length()
 	if l == 0 {
 		panic("can't normalise 0 vector")
@@ -265,7 +244,7 @@ func (a *V3) Normalise() *V3 {
 	}
 
 	reciprocal := 1.0 / l //three multiplications is faster than one division
-	return &V3{X: a.X * reciprocal, Y: a.Y * reciprocal, Z: a.Z * reciprocal}
+	return V3{X: a.X * reciprocal, Y: a.Y * reciprocal, Z: a.Z * reciprocal}
 }
 
 // func (p *V3) FromByteBuffer(buff *bytes.Buffer) {
@@ -279,14 +258,14 @@ func (a *V3) Normalise() *V3 {
 
 // }
 
-func (a *V3) Length() float64 {
+func (a V3) Length() float64 {
 	return hypo3(a.X, a.Y, a.Z)
 }
 
-func (a *V3) Equals(b *V3) bool {
-	if a == b {
-		return true //these are two referrences to the same object
-	}
+func (a V3) Equals(b V3) bool {
+	// if a == b {
+	// 	return true //these are two referrences to the same object
+	// }
 	const epsilon = 0.00001
 	if math.Abs(a.X-b.X) < epsilon &&
 		math.Abs(a.Y-b.Y) < epsilon &&
@@ -317,13 +296,13 @@ func (a *V3) AlmostEquals(b *V3) bool {
 // 	return newVector(x, y)
 // }
 
-func (a *V3) Dot(b *V3) float64 {
+func (a V3) Dot(b V3) float64 {
 	return a.X*b.X + a.Y*b.Y + a.Z*b.Z
 }
 
-func (a *V3) Cross(b *V3) *V3 {
+func (a V3) Cross(b V3) V3 {
 
-	return &V3{a.Y*b.Z - a.Z*b.Y, a.Z*b.X - a.X*b.Z, a.X*b.Y - a.Y*b.X}
+	return V3{a.Y*b.Z - a.Z*b.Y, a.Z*b.X - a.X*b.Z, a.X*b.Y - a.Y*b.X}
 }
 
 func (d *V3) CrossInto(a, b *V3) *V3 {
@@ -335,7 +314,7 @@ func (d *V3) CrossInto(a, b *V3) *V3 {
 	return d
 }
 
-func (p *V3) SignedDistanceFromLineSegment(a, b, n *V3) float64 {
+func (p V3) SignedDistanceFromLineSegment(a, b, n V3) float64 {
 
 	cp := p.closestPointOnLineSegment(a, b)
 
@@ -352,7 +331,7 @@ func (p *V3) SignedDistanceFromLineSegment(a, b, n *V3) float64 {
 
 }
 
-func (p *V3) closestPointOnLineSegment(a, b *V3) *V3 {
+func (p V3) closestPointOnLineSegment(a, b V3) V3 {
 
 	ab := b.Sub(a)
 	ap := p.Sub(a)
@@ -368,7 +347,7 @@ func (p *V3) closestPointOnLineSegment(a, b *V3) *V3 {
 
 }
 
-func (p *V3) DistanceFromLineSegment(a, b *V3) float64 {
+func (p V3) DistanceFromLineSegment(a, b V3) float64 {
 	//TEST this
 	ab := b.Sub(a)
 	abn := ab.Normalise()
@@ -383,14 +362,14 @@ func (p *V3) DistanceFromLineSegment(a, b *V3) float64 {
 	return p.DistanceFromLine(a, b)
 }
 
-func (p V3) ClosestPointOnLine(a, b *V3) *V3 {
+func (p V3) ClosestPointOnLine(a, b V3) V3 {
 	ab := b.Sub(a)
 	abn := ab.Normalise()
 	dp := p.Sub(a).Dot(abn)
 	return a.Add(abn.Multiply(dp))
 }
 
-func (p *V3) DistanceFromLine(a, b *V3) float64 {
+func (p V3) DistanceFromLine(a, b V3) float64 {
 	return p.ClosestPointOnLine(a, b).DistanceFrom(p)
 }
 
@@ -398,11 +377,11 @@ func (p *V3) DistanceSQ(b *V3) float64 {
 	return (p.X-b.X)*(p.X-b.X) + (p.Y-b.Y)*(p.Y-b.Y) + (p.Z-b.Z)*(p.Z-b.Z)
 }
 
-func (p *V3) DistanceFrom(b *V3) float64 {
+func (p V3) DistanceFrom(b V3) float64 {
 	return hypo3(p.X-b.X, p.Y-b.Y, p.Z-b.Z)
 }
 
-func (p *V3) LiesBetween(a *V3, b *V3) bool {
+func (p *V3) LiesBetween(a V3, b V3) bool {
 
 	if a.Equals(b) {
 		panic("a and b are the same point")
@@ -425,11 +404,11 @@ func (p *V3) LiesBetween(a *V3, b *V3) bool {
 // 	return p.sub(a).dot(n)
 // }
 
-func (p *V3) Clone() *V3 {
-	return NewVec3(p.X, p.Y, p.Z)
+func (p V3) Clone() V3 {
+	return V3{p.X, p.Y, p.Z}
 }
 
-func (b *V3) SignedAngleFrom(a *V3, axis *V3) float64 {
+func (b V3) SignedAngleFrom(a V3, axis V3) float64 {
 
 	dp := a.Dot(b)
 	alXbl := (a.Length() * b.Length())
@@ -457,6 +436,6 @@ func (b *V3) SignedAngleFrom(a *V3, axis *V3) float64 {
 
 }
 
-func (v *V3) Reflect(n *V3) *V3 {
+func (v V3) Reflect(n V3) V3 {
 	return v.Sub(n.Multiply(2 * v.Dot(n)))
 }

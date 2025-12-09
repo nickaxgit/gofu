@@ -20,7 +20,7 @@ func StepWorldsForever() {
 		ar := game.AllRunning()
 		for _, game := range ar {
 
-			cvs, lands := device.ViewersOf(game) //game.ViewerscurrentViewers(game) //TODO optimise (cache this) - also shouldn't need to collect/pass lands
+			cvs := device.ViewersOf(game) //game.ViewerscurrentViewers(game) //TODO optimise (cache this) - also shouldn't need to collect/pass lands
 			//game.UpdateCurrentPlayersAndViewers() //don't need to do this every cycle
 			//game.Step(5) //<- this is a physics step - it queues stuff for all players
 
@@ -31,7 +31,7 @@ func StepWorldsForever() {
 			game.Burn()
 
 			//response := game.MoveAll(5, lands) //<- this is a physics step - it returns a message containing moved masses
-			game.MoveAll(5, lands) //<- this is a physics step - it returns a message containing moved masses
+			game.MoveAll(5) //<- this is a physics step - it returns a message containing moved masses
 			//log.Logit(response)
 
 			for _, viewer := range cvs {
@@ -49,21 +49,21 @@ func StepWorldsForever() {
 				viewer.SendCamera()
 				//viewer.SendLabels()
 
-				if viewer.Land == nil || viewer.ViewChangedSignificantly() {
+				if viewer.ViewChangedSignificantly() {
 
 					// go func() {
 					// 	if game.GetFire().Root.FireInfo == nil {
 					// 		log.Logit("no fire info on root")
 					// 		return
 					// 	}
-					// 	message := msg.Empty()
-					// 	viewer.GetFlames(game.GetFire(), message) //update visible flames for this player
-					// 	viewer.Send(message)
+					message := msg.Empty()
+					viewer.GetFlames(game.Land, game.GetFire(), message) //update visible flames for this player
+					viewer.Send(message)
 					// }()
 					//go func() {
 
 					//if viewer.Land == nil {
-					message := msg.Empty()
+					//message := msg.Empty()
 					//use copies of the camera position/direction (as camera is potentially mutated on the main thread)
 					viewer.MakeLand(game, message)
 					viewer.Send(message)

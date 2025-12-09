@@ -29,8 +29,8 @@ type Tcs struct {
 	left, top, right, bottom float32
 }
 
-func NewTcs(left, top, right, bottom float32) *Tcs {
-	return &Tcs{left: left, top: top, right: right, bottom: bottom}
+func NewTcs(left, top, right, bottom float32) Tcs {
+	return Tcs{left: left, top: top, right: right, bottom: bottom}
 }
 func (i *Tcs) clone() *Tcs {
 	return &Tcs{left: i.left, top: i.top, right: i.right, bottom: i.bottom}
@@ -48,7 +48,7 @@ func New(id uint16, materialName string, numVerts int, numFaces int) *SimpleMesh
 	// p []float32, n []float32, uv []float32, fi []uint16
 	return &SimpleMesh{id: id, pad: 0, p: make([]float32, numVerts*3), n: make([]float32, numVerts*3), uv: make([]float32, numVerts*2), fi: make([]uint16, numFaces*3), materialName: materialName}
 }
-func (sm *SimpleMesh) AddTube(start *vec.V3, end *vec.V3, xAxis *vec.V3, startRadius float64, endRadius float64, tcs *Tcs, sides int) {
+func (sm *SimpleMesh) AddTube(start vec.V3, end vec.V3, xAxis vec.V3, startRadius float64, endRadius float64, tcs Tcs, sides int) {
 	//add a tube between start and end, with the given radii at each end
 	//the tube is aligned with the vector start->end
 
@@ -94,7 +94,7 @@ func (sm *SimpleMesh) AddTube(start *vec.V3, end *vec.V3, xAxis *vec.V3, startRa
 
 }
 
-func (sm *SimpleMesh) Billboard(p *vec.V3, up *vec.V3, camPos *vec.V3, widthBottom float64, widthTop float64, height float64, shape int, tcs *Tcs) {
+func (sm *SimpleMesh) Billboard(p vec.V3, up vec.V3, camPos vec.V3, widthBottom float64, widthTop float64, height float64, shape int, tcs Tcs) {
 
 	//	up := NewVec3(0, 1, 0)
 	toCam := camPos.Sub(p).Normalise()
@@ -160,7 +160,7 @@ func NewFilledSimpleMesh(id uint16, p []float32, n []float32, uv []float32, fi [
 	return &SimpleMesh{id: id, pad: 0, p: p, n: n, uv: uv, fi: fi, materialName: materialName, vwp: vwp, fwp: fwp}
 }
 
-func (sm *SimpleMesh) AddVert(p *vec.V3, n *vec.V3, u float32, v float32) uint16 {
+func (sm *SimpleMesh) AddVert(p vec.V3, n vec.V3, u float32, v float32) uint16 {
 
 	//sm.p = append(sm.p, p.AsFloat32s()...)
 
@@ -207,7 +207,7 @@ func (sm *SimpleMesh) AddFace(v1, v2, v3 uint16) {
 
 func (sm *SimpleMesh) check() {
 	for _, idx := range sm.fi {
-		if idx >= sm.vwp {
+		if idx > sm.vwp {
 			panic(fmt.Sprintf("Mesh %d has invalid face index %d (vert count %d)", sm.id, idx, sm.vwp))
 		}
 	}

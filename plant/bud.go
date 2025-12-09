@@ -21,7 +21,7 @@ type bud struct {
 type segmentType struct {
 	name          string
 	buds          []*bud
-	tcs           *mesh.Tcs
+	tcs           mesh.Tcs
 	sides         int     //number of sides when making a tubular mesh
 	twistsFlat    float64 //tendacncy to twist such that the z axis is down (leaves)
 	droopTo       float64 //0 - angle to which sement want to droop 0 is horizontal -pi is weepeing, pi is pointing directly upwards (mares tails)
@@ -31,8 +31,8 @@ type segmentType struct {
 }
 
 type segment struct { //of a plant/tree
-	p     *vec.V3
-	xAxis *vec.V3 //direction of (accumulated) twist
+	p     vec.V3
+	xAxis vec.V3 //direction of (accumulated) twist
 	//yAxis *vec3 //direction of growth
 	//zAxis *vec3 //ortho to x and y (local down)
 	//length float64
@@ -185,13 +185,13 @@ func (seg *segment) getTubularMesh(m *mesh.SimpleMesh) {
 
 }
 
-func NewSegment(ps *segment, p *vec.V3, xAxis *vec.V3, segType *segmentType, radius float64) *segment {
+func NewSegment(ps *segment, p vec.V3, xAxis vec.V3, segType *segmentType, radius float64) *segment {
 
 	return &segment{parent: ps, p: p, xAxis: xAxis, segType: segType, radius: radius}
 
 }
 
-func NewSegmentType(name string, tcs *mesh.Tcs, sides int, droopTo, droopStrength, twistsFlat float64, girthAtDays *curve.Curve, lengthAtDays *curve.Curve) *segmentType {
+func NewSegmentType(name string, tcs mesh.Tcs, sides int, droopTo, droopStrength, twistsFlat float64, girthAtDays *curve.Curve, lengthAtDays *curve.Curve) *segmentType {
 	// segmentTypes[name]=
 	return &segmentType{name: name, tcs: tcs, sides: sides, droopTo: droopTo, droopStrength: droopStrength, twistsFlat: twistsFlat, girthAtDay: girthAtDays, lengthAtDay: lengthAtDays, buds: make([]*bud, 0)}
 }

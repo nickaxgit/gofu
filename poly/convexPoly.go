@@ -10,16 +10,16 @@ import (
 )
 
 type ConvexPoly struct {
-	P     []*vec.V3
-	Plane *plane.Plane
+	P     []vec.V3
+	Plane plane.Plane
 	//working variables to avoid allocation when calling contains
-	d      *vec.V3
-	edge   *vec.V3
-	normal *vec.V3
-	cp     *vec.V3 //crossProduct
+	//d      *vec.V3
+	//edge   *vec.V3
+	//normal *vec.V3
+	//cp     *vec.V3 //crossProduct
 	//	pcp     float64 //y or plane normal component of previous cross product
-	epsilon    float64
-	cpn        float64 //length of the normal component of the cross product
+	epsilon float64
+	//cpn        float64 //length of the normal component of the cross product
 	PointCount int
 }
 
@@ -30,7 +30,7 @@ func (p *ConvexPoly) Highest() *vec.V3 {
 			high = v
 		}
 	}
-	return high
+	return &high
 }
 
 // MatchXZ - returns true if the XZ positions of the two polygons match (ignoring Y) and rotational orientation
@@ -60,15 +60,7 @@ func (a *ConvexPoly) MatchXZ(b *ConvexPoly) bool {
 	return false
 }
 
-func (poly *ConvexPoly) Has(p *vec.V3) bool {
-	for v := range poly.P {
-		if poly.P[v] == p {
-			return true
-		}
-	}
-	return false
-}
-func (poly *ConvexPoly) Penetration(p *vec.V3, r float64) float64 {
+func (poly *ConvexPoly) Penetration(p vec.V3, r float64) float64 {
 	dist := poly.Plane.DistanceFrom(p) //.. negative means its penetrated
 	if dist < r {
 		return poly.fromEdge(p, r)
@@ -77,8 +69,9 @@ func (poly *ConvexPoly) Penetration(p *vec.V3, r float64) float64 {
 	return 0
 }
 
-func (poly *ConvexPoly) Centre() *vec.V3 {
+func (poly *ConvexPoly) Centre() vec.V3 {
 	c := vec.NewVec3(0, 0, 0)
+
 	for _, v := range poly.P {
 		//c.AddInto(c, v)
 		c.AddIn(v)
@@ -88,14 +81,11 @@ func (poly *ConvexPoly) Centre() *vec.V3 {
 }
 
 func NewConvexPoly() *ConvexPoly {
-	return &ConvexPoly{P: make([]*vec.V3, 0, 4),
-		d:       vec.NewVec3(0, 0, 0),
-		edge:    vec.NewVec3(0, 0, 0),
-		cp:      vec.NewVec3(0, 0, 0),
+	return &ConvexPoly{P: make([]vec.V3, 0, 4),
 		epsilon: 0.0001}
 }
 
-func NewConvexPolyFromVecs(pts []*vec.V3) *ConvexPoly {
+func NewConvexPolyFromVecs(pts []vec.V3) *ConvexPoly {
 	poly := NewConvexPoly()
 	for _, p := range pts {
 		poly.AddPoint(p)
@@ -105,7 +95,7 @@ func NewConvexPolyFromVecs(pts []*vec.V3) *ConvexPoly {
 	return poly
 }
 
-func (poly *ConvexPoly) fromEdge(p *vec.V3, r float64) float64 {
+func (poly *ConvexPoly) fromEdge(p vec.V3, r float64) float64 {
 
 	smallestOutDist := math.MaxFloat64 //try and find something smaller
 
@@ -143,7 +133,7 @@ func (poly *ConvexPoly) AddPointAt(x, y, z float64) {
 
 }
 
-func (poly *ConvexPoly) Cap(a, b, c *vec.V3, y float64) {
+func (poly *ConvexPoly) Cap(a, b, c vec.V3, y float64) {
 	a.Y = y
 	b.Y = y
 	c.Y = y
@@ -153,7 +143,7 @@ func (poly *ConvexPoly) Cap(a, b, c *vec.V3, y float64) {
 
 }
 
-func (poly *ConvexPoly) AddPoint(p *vec.V3) {
+func (poly *ConvexPoly) AddPoint(p vec.V3) {
 	if poly.PointCount < len(poly.P) {
 		poly.P[poly.PointCount] = p
 	} else {
@@ -168,7 +158,7 @@ func (poly *ConvexPoly) AddPoint(p *vec.V3) {
 
 	if poly.PointCount == 3 {
 		poly.Plane = plane.NewFromPoints(poly.P[0], poly.P[1], poly.P[2])
-		poly.normal = poly.Plane.GetNormal()
+
 	}
 
 	// if len(poly.p) > 3 {
@@ -180,96 +170,67 @@ func (poly *ConvexPoly) AddPoint(p *vec.V3) {
 	// }
 }
 
-// probe the convex poly with the ray - *mutates* the ray.intersect
-func (poly *ConvexPoly) Probe(ray *ray.Ray) bool {
+// probe the convex poly with the ray
+func (poly *ConvexPoly) Probe(ray ray.Ray) (bool, vec.V3) {
 
-	if poly.Plane == nil || ray == nil {
-		panic("nil plane or ray in convexPoly.Probe")
-
-	}
-	if poly.Plane.ProbeLine(ray) { //will return false for backfacing triangles
+	hit, where := poly.Plane.ProbeLine(ray)
+	if hit { //will return false for backfacing triangles
 		//if poly.Contains(ray.GetIntersect()) {
-		if ray.Intersect.X == 0 && ray.Intersect.Y == 0 && ray.Intersect.Z == 0 {
-			log.Logit("ray intersect not set - did you forget to call ray.GetIntersect()?")
-		}
-		if poly.Contains3D(ray.Intersect) {
-			return true
+
+		if poly.Contains3D(where) {
+			return true, where
 		} else {
 			//log.Logit("ray intersect not inside poly")
 
 		}
 	}
-	return false
+	return false, vec.NewVec3(0, 0, 0)
 }
 
-func (poly *ConvexPoly) Contains2D(p *vec.V3) bool {
-
-	//poly.pcp = 0.0 //IMPORTANT!
+func (poly *ConvexPoly) Contains2D(p vec.V3) bool {
 
 	for i, vertex := range poly.P {
 
-		//d := p.Sub(vertex)
-		poly.d.SubInto(p, vertex)
+		d := p.Sub(vertex)
 
 		nxt := poly.P[(i+1)%len(poly.P)]
-		poly.edge.SubInto(nxt, vertex)
+		edge := nxt.Sub(vertex)
 
 		//flatten
-		poly.edge.Y = 0
-		poly.d.Y = 0
+		edge.Y = 0
+		d.Y = 0
 
-		if poly.d.X > -poly.epsilon && poly.d.X < poly.epsilon && poly.d.Z > -poly.epsilon && poly.d.Z < poly.epsilon {
+		if d.X > -poly.epsilon && d.X < poly.epsilon && d.Z > -poly.epsilon && d.Z < poly.epsilon {
 			return true //on a vertex
 		}
-		// if poly.edge.X > -poly.epsilon && poly.edge.X < poly.epsilon {
-		// 	if poly.edge.Z > -poly.epsilon && poly.edge.Z < poly.epsilon {
-		// 		panic(fmt.Sprintf("PANIC: edge=(%f,%f,%f) epsilon=%f vertex=%v nxt=%v",
-		// 			poly.edge.X, poly.edge.Y, poly.edge.Z, poly.epsilon, vertex, nxt))
-		// 	}
-		// }
 
-		//poly.cp = poly.edge.Cross(poly.d) //.Y //.Dot(n)
-		poly.cp.CrossInto(poly.edge, poly.d)
-		// if poly.cp.Y > -poly.epsilon && poly.cp.Y < poly.epsilon {
-		// 	// if p.X == nxt.X && p.Z == nxt.Z {
-		// 	// 	return true //on a vertex
-		// 	// }
-		// 	// if !p.LiesBetween(vertex, nxt) {
-		// 	// 	return false
-		// 	// }
-		// 	continue //'ignore' points on the edge (we want to be on the same side of the other two)
-		// }
+		cp := edge.Cross(d)
 
-		if poly.cp.Y < -poly.epsilon {
+		if cp.Y < -poly.epsilon {
 			return false
 		}
-		//poly.pcp = poly.cp.Y //previous cross product
+
 	}
 
 	return true
 
 }
 
-func (poly *ConvexPoly) Contains3D(p *vec.V3) bool {
+func (poly *ConvexPoly) Contains3D(p vec.V3) bool {
+
+	normal := poly.Plane.GetNormal()
 
 	for i, vertex := range poly.P {
 
-		//d := p.Sub(vertex)
-		poly.d.SubInto(p, vertex)
-
+		d := p.Sub(vertex)
 		nxt := poly.P[(i+1)%len(poly.P)]
+		edge := nxt.Sub(vertex)
 
-		//edge:=nxt.sub(vertex) //was this -- subinto avoids the allocation
-		poly.edge.SubInto(nxt, vertex)
+		cpn := edge.Cross(d).Dot(normal)
 
-		poly.cpn = poly.cp.CrossInto(poly.edge, poly.d).Dot(poly.normal)
-
-		if poly.cpn < -poly.epsilon {
+		if cpn < -poly.epsilon {
 			return false
 		}
-
 	}
-
 	return true
-
 }

@@ -244,7 +244,8 @@ func logevt(device *device.Device, evt *errorplus.Event) {
 	if evt != nil {
 		var did, pid, gid, vid uint32
 
-		velocity := (*vec.V3)(nil)
+		velocity := vec.V3{}
+
 		if device != nil {
 			did = device.Id
 

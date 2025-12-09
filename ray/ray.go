@@ -5,10 +5,10 @@ import (
 )
 
 type Ray struct {
-	Origin    *vec.V3
-	End       *vec.V3
-	direction *vec.V3 //NOT normalised (end-origin)
-	Intersect *vec.V3 //scratchpad /probe result
+	Origin    vec.V3
+	End       vec.V3
+	direction vec.V3 //NOT normalised (end-origin)
+	//Intersect vec.V3 //scratchpad /probe result
 }
 
 // func (ray *Ray) GetIntersect() *vec.V3 {
@@ -18,31 +18,31 @@ type Ray struct {
 // 	return ray.Intersect
 // }
 
-func New(origin, end *vec.V3) *Ray {
+func New(origin, end vec.V3) Ray {
 	if origin.Equals(end) {
 		panic("degenerate ray")
 	}
 	direction := end.Sub(origin)
 
-	return &Ray{Origin: origin, End: end, direction: direction, Intersect: &vec.V3{X: 0, Y: 0, Z: 0}}
+	return Ray{Origin: origin, End: end, direction: direction}
 }
 
 // GetDirection returns the (not normalised) direction vector of the ray (end - origin)
-func (ray *Ray) GetDirection() *vec.V3 {
+func (ray Ray) GetDirection() vec.V3 {
 	return ray.direction
 }
 
 // PointAt - mutates and and direction, it's faster to repoint an existing ray than make a new one
-func (ray *Ray) PointAt(p *vec.V3) {
+func (ray *Ray) PointAt(p vec.V3) {
 	ray.End = p
 
 	//ray.direction = ray.End.Sub(ray.Origin)
-	ray.direction.SubInto(ray.End, ray.Origin)
+	ray.direction = ray.End.Sub(ray.Origin)
 }
 
 // distanceFromLineSegment calculates the shortest distance from the ray to the line segment ab
 // TODO - TEST
-func (ray *Ray) DistanceFromLineSegment(a, b *vec.V3) float64 {
+func (ray Ray) DistanceFromLineSegment(a, b vec.V3) float64 {
 
 	ab := b.Sub(a)
 	ac := ray.Origin.Sub(a)

@@ -31,8 +31,8 @@ type Game struct { //the DATA of a game in progress - it can be entirely replace
 	Sounds []*sound.Sound
 
 	Running     bool
-	RunwayStart *vec.V3
-	RunwayEnd   *vec.V3
+	RunwayStart vec.V3
+	RunwayEnd   vec.V3
 	runwayWidth float64
 	stretchDir  bool
 	ZeroG       bool
@@ -41,6 +41,7 @@ type Game struct { //the DATA of a game in progress - it can be entirely replace
 	LandSize   float64   //size of land square
 	LandHeight float64   //max height of land
 	Kinks      []float64 //land bends
+	Land       *terrain.TriMesh
 }
 
 var mutex = sync.RWMutex{}
@@ -210,7 +211,7 @@ func Load(filename string) *Game {
 
 }
 
-func (game *Game) SetRunway(start *vec.V3, vector *vec.V3, width float64) {
+func (game *Game) SetRunway(start vec.V3, vector vec.V3, width float64) {
 	game.RunwayStart = start
 	game.RunwayEnd = start.Add(vector)
 	game.runwayWidth = width
@@ -243,7 +244,7 @@ func (game *Game) BuildFireMesh() *terrain.TriMesh {
 
 // }
 
-func (game *Game) closestMass(wp *vec.V3) *mass.Mass {
+func (game *Game) closestMass(wp vec.V3) *mass.Mass {
 
 	//let closestDistance=within
 	for _, m := range game.Masses {
@@ -254,7 +255,7 @@ func (game *Game) closestMass(wp *vec.V3) *mass.Mass {
 	return nil
 }
 
-func (game *Game) resolvePenetrations(lands []*terrain.Tri) {
+func (game *Game) resolvePenetrations() {
 
 	for _, m := range game.Masses {
 		if m.Collideable {
@@ -264,34 +265,18 @@ func (game *Game) resolvePenetrations(lands []*terrain.Tri) {
 				}
 			}
 
-			impact, tri := game.probeMostDetailedLandAt(m.P, lands)
+			hit, where, tri := game.Land.Root.VprobeLand(m.P)
 
-			if impact != nil {
-				pen := impact.Y - (m.P.Y - m.R)
+			if hit {
+				penDepth := where.Y - (m.P.Y - m.R)
 
-				if pen > 0 {
-					m.ResolvePenetration(pen, impact, tri)
+				if penDepth > 0 {
+					m.ResolvePenetration(penDepth, where, tri)
 				}
 			}
 		}
 	}
 
-}
-
-func (game *Game) probeMostDetailedLandAt(p *vec.V3, lands []*terrain.Tri) (impact *vec.V3, tri *terrain.Tri) {
-
-	deepest := 0
-	var bestTri *terrain.Tri = nil
-
-	for _, rt := range lands {
-		poi, t := rt.VprobeLand(p)
-		if t.Depth > deepest {
-			deepest = t.Depth
-			bestTri = t
-			impact = poi
-		}
-	}
-	return impact, bestTri
 }
 
 // runEngines use the fuel burn (and KW) to accelerate the prop disc/engineRPM AND move the engine spring/masses
@@ -311,7 +296,7 @@ func (game *Game) RunEngines(activity *msg.Msg) {
 
 }
 
-func (g *Game) Ignite(position *vec.V3) {
+func (g *Game) Ignite(position vec.V3) {
 	g.Fire.Ignite(position)
 }
 
@@ -335,7 +320,7 @@ func (game *Game) stretchSprings() {
 }
 
 // executes a physics step and returns the index and new position for all the masses that move
-func (game *Game) MoveAll(substeps int, lands []*terrain.Tri) *msg.Msg {
+func (game *Game) MoveAll(substeps int) *msg.Msg {
 
 	//movedMasses := []int{} //return the index, x and y of all masses that move
 
@@ -381,7 +366,7 @@ func (game *Game) MoveAll(substeps int, lands []*terrain.Tri) *msg.Msg {
 		game.stretchSprings()
 		game.stretchSprings()
 
-		game.resolvePenetrations(lands)
+		game.resolvePenetrations()
 
 		//masses are pushed out of things (and things away from masses)
 		game.resolveMassOverlaps()
@@ -437,4 +422,115 @@ func (g *Game) Persist() *errorplus.Event {
 	//gameMsg := msg.NewMsg(msg.P_Game)
 	//g.WriteTo(gameMsg)
 	return nil //persist.Append("repo.bin", gameMsg)
+}
+
+func (game *Game) PlaceTrees() int {
+
+	// 	occludedTrees := 0
+	// 	wp := 0
+	// 	dev.Land.Root.Flatten(6, dev.treeTris, &wp) //get all triangles at depth 10  -*potential* tree sites
+
+	// 	ray := ray.New(dev.Camera.Position, vec.NoWhereSpecial) //set up *one* ray for firing at the treetops (reuse it!)
+	// 	treeTop := vec.NewVec3(0, 0, 0)                         //scratch
+	// 	toTree := vec.NewVec3(0, 0, 0)
+
+	// 	stats := terrain.NewProbeStats()
+
+	// 	dev.nearTreeCount = 0 //track the number of positions we will need to send
+	// 	dev.farTreeCount = 0
+	// 	//dev.farTreeBillBoardMesh.Reset()
+
+	// 	for i := 0; i < wp; i++ { //_, tri := range tris {
+	// 		tri := dev.treeTris[i]
+	// 		if tri.IsSubmerged(dev.Land) {
+	// 			continue
+	// 		} //no trees underwater
+	// 		//mid := tri.Centre
+	// 		points := tri.MeshPoints(dev.Land, 6) //divide the level 6 triangles 6 further times (yeilding 28 points each)
+	// 		//tcs := mesh.NewTcs(0, 1, 1, 0)
+
+	// 		for _, plot := range points {
+
+	// 			if !dev.Land.ScorchedAt(dev.Land.Root, plot) {
+
+	// 				d := plot.DistanceFrom(dev.Camera.Position)
+	// 				if d > 5000 {
+	// 					continue
+	// 				}
+	// 				surfacePoint, _ := dev.Land.Root.VprobeLand(plot)
+	// 				if surfacePoint == nil {
+	// 					continue
+	// 				} //should not happen (but does)
+
+	// 				toTree := surfacePoint.Sub(dev.Camera.Position)
+	// 				toTree.NormaliseInPlace()
+	// 				dotProd := toTree.Dot(dev.Camera.Direction)
+
+	// 				if d < 500 {
+	// 					if dotProd > -0.2 { //trees in front of, or somewhat behind the camera
+
+	// 						treeTop.SetFrom(surfacePoint)
+	// 						treeTop.Y += 3
+
+	// 						ray.PointAt(treeTop)
+
+	// 						//check for occlusion (by the triangle it stands on)
+	// 						//TODO - check against whole landscape (although these are nearby trees)
+
+	// 						stats.Hit = false
+	// 						dev.Land.Root.Probe(dev.Land, ray, stats, 0)
+	// 						if stats.Hit {
+	// 							occludedTrees++
+	// 							continue
+	// 						}
+
+	// 						if dev.nearTreeCount < maxNearTrees {
+	// 							//place a (instanced mesh) tree here
+	// 							wp := dev.nearTreeCount * 3
+	// 							dev.nearTreePositions[wp] = float32(surfacePoint.X)
+	// 							dev.nearTreePositions[wp+1] = float32(surfacePoint.Y)
+	// 							dev.nearTreePositions[wp+2] = float32(surfacePoint.Z)
+	// 							dev.nearTreeCount++
+	// 						} else {
+	// 							log.Logit("Max near trees reached")
+	// 						}
+
+	// 					}
+	// 				} else { //it's a faraway tree - only place it if the ground slopes towards the camera
+	// 					//todo - occlusion cull far trees too
+	// 					if dotProd > .35 { //trees generally in front of the camera}
+	// 						if toTree.Dot(&tri.Normal) < 0 { //if the triangle slopes towards camera
+
+	// 							stats.Hit = false
+	// 							treeTop.SetFrom(surfacePoint)
+	// 							treeTop.Y += 6
+	// 							ray.PointAt(treeTop)
+
+	// 							dev.Game.Land.Root.Probe(dev.Land, ray, stats, 0)
+	// 							if stats.Hit {
+	// 								occludedTrees++
+	// 								continue
+	// 							}
+
+	// 							if dev.farTreeCount < maxFarTrees {
+	// 								wp := dev.farTreeCount * 3
+	// 								dev.farTreePositions[wp] = float32(surfacePoint.X)
+	// 								dev.farTreePositions[wp+1] = float32(surfacePoint.Y)
+	// 								dev.farTreePositions[wp+2] = float32(surfacePoint.Z)
+
+	// 								dev.farTreeCount++
+
+	// 							} else {
+	// 								log.Logit("Max far trees reached")
+	// 							}
+	// 						}
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+
+	// 	return occludedTrees
+
+	return 0
 }

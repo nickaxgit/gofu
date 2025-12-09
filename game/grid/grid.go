@@ -6,28 +6,31 @@ import "github.com/nickax/gofu/game/msg"
 import "github.com/nickax/gofu/plane"
 
 type Grid struct {
-	Origin *vec.V3 //defines the plane of this players construction grid
-	Xaxis  *vec.V3 //defines the plane of this players construction grid
-	Yaxis  *vec.V3 //defines the plane of this players construction grid
+	Origin   vec.V3 //defines the plane of this players construction grid
+	Xaxis    vec.V3 //defines the plane of this players construction grid
+	Yaxis    vec.V3 //defines the plane of this players construction grid
+	GridPos  vec.V3
+	Zoff     float64 //offset from the grid (along the grid normal)
+	SpacePos vec.V3
 }
 
-func New(origin, xaxis, yaxis *vec.V3) *Grid {
-	return &Grid{origin, xaxis, yaxis}
+func New(origin, xaxis, yaxis vec.V3) *Grid {
+	return &Grid{Origin: origin, Xaxis: xaxis, Yaxis: yaxis, GridPos: vec.V3{}, Zoff: 0, SpacePos: vec.V3{}}
 }
 
-func (g *Grid) Plane() *plane.Plane {
+func (g *Grid) Plane() plane.Plane {
 
 	return plane.NewFromNormalAndPoint(g.Normal(), g.Origin)
 }
 
-func (g *Grid) Normal() *vec.V3 {
+func (g *Grid) Normal() vec.V3 {
 	return g.Yaxis.Cross(g.Xaxis).Normalise()
 }
 
-func (g *Grid) UpdateGridPosAndSpacePos(cam *cam.Camera, zOff float64, gridPos *vec.V3, spacePos *vec.V3) {
+func (g *Grid) UpdateGridPosAndSpacePos(cam *cam.Camera) {
 	gn := g.Normal()
 
-	offsetPlane := plane.NewFromNormalAndPoint(gn, g.Origin.Add(gn.Multiply(zOff)))
+	offsetPlane := plane.NewFromNormalAndPoint(gn, g.Origin.Add(gn.Multiply(g.Zoff)))
 	cpop := offsetPlane.ClosestPointOnPlane(cam.Position)
 	c2g := cpop.Sub(cam.Position) //vector from the camera pos to the grid
 	ttg := cpop.Sub(cam.FarPos)
@@ -36,8 +39,8 @@ func (g *Grid) UpdateGridPosAndSpacePos(cam *cam.Camera, zOff float64, gridPos *
 		d0 := c2g.Length()
 		d1 := ttg.Length()
 		f := d0 / (d0 + d1)
-		spacePos = cam.Position.Tween(cam.FarPos, f)
-		gridPos = spacePos.Sub(gn.Multiply(zOff))
+		g.SpacePos = cam.Position.Tween(cam.FarPos, f)
+		g.GridPos = g.SpacePos.Sub(gn.Multiply(g.Zoff))
 	}
 
 }
