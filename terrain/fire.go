@@ -54,12 +54,12 @@ func (fm *TriMesh) Burn(ft *Tri) int {
 }
 
 // recurse from fTri to find all triangles with flames, insert them (as billboards) into the simpleMesh
-func (tri *Tri) GetFlames(lm *TriMesh, fm *TriMesh, intoMesh *mesh.SimpleMesh, cam *cam.Camera, tcs mesh.Tcs) int {
+func (tri *Tri) GetFlames(deviceId uint32, lm *TriMesh, fm *TriMesh, intoMesh *mesh.SimpleMesh, cam *cam.Camera, tcs mesh.Tcs) int {
 
 	if lm != nil && tri.FireInfo != nil && tri.FireInfo.flames > 0 { //fTri.allBLTsAlight() { //fTri.flames > 0 {
 
 		if tri.FireInfo.landDepth < 10 { //sampling at level 10 is 'good enough' for flame base
-			hit, p, t := lm.Root.VprobeLand(tri.Centre) //TODO - do once and cache - also normal (for slope)
+			hit, p, t := lm.Root.VprobeLand(tri.Centre, lm, deviceId) //TODO - do once and cache - also normal (for slope)
 			if hit {
 				if t.Depth < 8 {
 					return 0
@@ -68,11 +68,14 @@ func (tri *Tri) GetFlames(lm *TriMesh, fm *TriMesh, intoMesh *mesh.SimpleMesh, c
 				if t.Depth > tri.FireInfo.landDepth {
 					tri.FireInfo.y = p.Y //we have a better observation (of the land height) - update the flame base height
 					tri.Normal = t.Normal
+
 				}
-				if t.OnOrUnderWater(lm) {
-					tri.FireInfo.flames = -1 //extinguish the flame
-					return 0
-				} //flames under water do not burn
+
+				//TODO REINSSTAE
+				// if t.OnOrUnderWater(lm) {
+				// 	tri.FireInfo.flames = -1 //extinguish the flame
+				// 	return 0
+				// } //flames under water do not burn
 			}
 
 		}
@@ -87,7 +90,7 @@ func (tri *Tri) GetFlames(lm *TriMesh, fm *TriMesh, intoMesh *mesh.SimpleMesh, c
 	} else {
 		flames := 0
 		for _, c := range tri.children {
-			flames += c.GetFlames(lm, fm, intoMesh, cam, tcs)
+			flames += c.GetFlames(deviceId, lm, fm, intoMesh, cam, tcs)
 		}
 		return flames
 	}
@@ -126,10 +129,10 @@ func (tri *Tri) GetFlames(lm *TriMesh, fm *TriMesh, intoMesh *mesh.SimpleMesh, c
 // 	return false
 // }
 
+// recursively split triangles until the firePos is contained in a triangle at maxDepth
 func (tri *Tri) splitUntil(fm *TriMesh, firePos vec.V3, maxDepth int) *Tri {
-	//recursively split triangles until the firePos is contained in a triangle at maxDepth
 
-	if tri.contains2D(firePos) {
+	if tri.contains2D(firePos, fm) {
 		if tri.Depth == maxDepth {
 			return tri
 		}

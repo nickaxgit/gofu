@@ -105,8 +105,9 @@ type Device struct {
 	farTreeCount     int
 	farTreePositions []float32 //x,z positions of far trees (centres of tree tris) - ready for sending
 
-	makingland bool
-	terrain.Collector
+	makingland    bool
+	LeafCollector *terrain.LeafCollector
+	sceneNo       int
 	//farTreeBillBoardMesh *mesh.SimpleMesh
 }
 
@@ -202,33 +203,75 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	ts = time.Now()
 	//land.Root.SplitDownTo(land, 10)
 
-	land.Root.SplitIfNeeded(land, camPos, camDir, 0.4, &device.Collector) //split the triangle into 4 recursively - collect leafTriangles (those deep enough for this PoV) and plants
-	log.Logit("splitting to focus took", time.Since(ts).Milliseconds(), "ms")
+	newTris := terrain.NewCollector(65000, 500000)
+	device.LeafCollector.Reset()
+	device.sceneNo++
+	//split the triangle into 4 recursively - collect leafTriangles (those deep enough for this PoV) and plants
+	//some newTris will be in device.collector
 
 	triCount := 0
 	land.Root.CountTris(&triCount)
-	log.Logit("land has", triCount, "tris after focus split")
-	log.Logit("collected ", device.Collector.TriCount, " tris and ", device.Collector.PlantCount, " plants")
+	log.Logit("Land starts with  ", triCount, " tris")
+	land.Root.UnPatch() //deletes all patched triangles - they will be remade as needed
+
+	plants := terrain.NewCollector(0, 1000000)
+	land.Root.SplitIfNeeded(device.Id, land, camPos, camDir, 0.4, device.LeafCollector, plants, newTris)
+	log.Logit("splitting to focus took", time.Since(ts).Milliseconds(), "ms")
+
+	triCount = 0
+	land.Root.CountTris(&triCount)
+	log.Logit("Land now has ", triCount, " tris")
+	log.Logit(device.LeafCollector.LeafCount, " leaf tris collected for POV", newTris.TriCount, " are new.")
+	log.Logit("Collected ", plants.PlantCount, " plants")
 
 	ts = time.Now()
-	land.Root.Patch(land)
+
+	//note some patches are patched - so patched may contain some non leaf triangles
+	patched := device.LeafCollector.PatchTriangles(land)
+
 	log.Logit("patch took", time.Since(ts).Milliseconds(), "ms")
 
 	ts = time.Now()
-	waterlines := []float64{game.LandHeight * 0.71, game.LandHeight * 0.41, 0.1, -game.LandHeight * 0.52}
+	//land.Root.CalcVerticalExtents(land) //we need the y extents for occlusion culling
+	newTris.BubbleVerticalExtentsFromLeaves(land)
+	log.Logit("Bubbled vertical extents took", time.Since(ts).Milliseconds(), "ms")
+
+	ts = time.Now()
+	//land.Root.MakePrisms(land) //we want to construct volumes once for each triangle - not repeatedly during occlusion culling
+	newTris.MakePrisms(land)
+	log.Logit("made ", newTris.TriCount, " prisms in", time.Since(ts).Milliseconds(), "ms")
+
+	//Note - some former leaf triangles are not in the collector - becuase they are now subdivided
+	//but neither are they in newTris - because they were not new
+	//thus, they have no prisms
+
+	ts = time.Now()
+	missing := 0
+	land.Root.MakeMissingPrisms(land, &missing)
+	log.Logit("made missing ", missing, " prisms in", time.Since(ts).Milliseconds(), "ms")
+
+	//newTris.CheckPrisms()
+	//device.Collector.CheckPrisms()
+	//patched.CheckPrisms()
+
+	//ts = time.Now()
+	//waterlines := []float64{game.LandHeight * 0.71, game.LandHeight * 0.41, 0.1, -game.LandHeight * 0.52}
 
 	// //makes the water surface mesh messages - one for each waterline, into the message
-	land.FloodAndDrain(waterlines, response, camPos)
-	log.Logit("flood and drain took", time.Since(ts).Milliseconds(), "ms")
+	//device.Collector.FloodAndDrain(land, waterlines, response, camPos)
+	//log.Logit("flood and drain took", time.Since(ts).Milliseconds(), "ms")
 	//land.Flood(-10000)
 
 	ts = time.Now()
-	land.Root.CalcVerticalExtents(land) //we need the y extents for occlusion culling
-	log.Logit("calced y extents took", time.Since(ts).Milliseconds(), "ms")
+	if device.sceneNo < 5 {
+		land.Rain(0.1)
+	}
+	land.Flow()
+	log.Logit("water flow took", time.Since(ts).Milliseconds(), "ms")
 
 	ts = time.Now()
-	land.Root.MakePrisms(land) //we want to construct volumes once for each triangle - not repeatedly during occlusion culling
-	log.Logit("made prisms took", time.Since(ts).Milliseconds(), "ms")
+	land.SendWater(patched, camPos, response)
+	log.Logit("water mesh took", time.Since(ts).Milliseconds(), "ms")
 
 	//groundPosition, groundTriangle := land.Root.VprobeLand(camPos)
 
@@ -264,13 +307,12 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	// runwayMesh.AddFace(tli, bri, bli)
 	// runwayMesh.AddFace(tli, trix, bri)
 
-	log.Logit("splitting took", time.Since(ts).Milliseconds())
 	//}
 
 	//runwayMesh.WriteTo(message, 1)
 
 	//if t.Culled || t.Scorched || t.OnOrUnderWater() {
-	isLand := func(t *terrain.Tri, mesh *terrain.TriMesh) bool {
+	isLand := func(t *terrain.LeafTri, mesh *terrain.TriMesh) bool {
 
 		if t.Scorched || t.IsSubmerged(mesh) {
 			return false
@@ -284,19 +326,20 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//land.Root.Scorch(game.fire) //update the scorched state of non culled leaf triangles
 	log.Logit("scorching took", time.Since(ts).Milliseconds(), "ms")
 
-	smallLandMesh := land.ToSimpleMesh(&device.Collector, 2, game.Fire, "land", false, isLand, camPos)
+	ts = time.Now()
+	smallLandMesh := land.ToSimpleMesh(patched, 2, game.Fire, "land", false, isLand, camPos)
 	log.Logit("converted land mesh in", time.Since(ts).Milliseconds(), "ms")
 	log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
 
 	///scorchedLand := land.Root.ToSimpleMesh(56, land, game.Fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
-	wireframe := land.ToSimpleMesh(&device.Collector, 32, game.Fire, "whiteWires", false, isLand, camPos)
+	wireframe := land.ToSimpleMesh(patched, 32, game.Fire, "whiteWires", false, isLand, camPos)
 
 	smallLandMesh.WriteTo(response, 1)
 	///scorchedLand.WriteTo(message, 1)
 	wireframe.WriteTo(response, 1)
 	response.Align() //align to dword boundary
 	log.Logit("response (before trees) is ", response.Buff.Len(), " bytes long")
-	land.GetTreesInto(response)
+	//land.GetTreesInto(response)
 
 	log.Logit("response is ", response.Buff.Len(), " bytes long")
 }
@@ -404,6 +447,7 @@ func New(id uint32, name string,
 		treeTris:          make([]*terrain.Tri, (maxFarTrees/4 + maxNearTrees)), //tris suitable for tree placement (level 10)
 		nearTreePositions: make([]float32, maxNearTrees*3),                      //x,z positions of near trees (centres of tree tris) - ready for sending
 		farTreePositions:  make([]float32, maxFarTrees*3),                       //x,z positions of far trees (centres of tree tris) - ready for sending
+		LeafCollector:     terrain.NewLeafCollector(500000, id),
 
 		//farTreeBillBoardMesh: mesh.New(105, "tree", 8000, 2000), //2 faces per tree - room for 1k trees
 	}
@@ -517,7 +561,7 @@ func (dev *Device) GetFlames(land *terrain.TriMesh, fire *terrain.TriMesh, messa
 	flameMesh := mesh.New(201, "flame", 10000, 30000) //10k faces, 30k verts
 
 	//adds a flame billboard to the flamemesh for every (bespoke) view triangle that sits on on globally burning triangle
-	fire.Root.GetFlames(land, fire, flameMesh, dev.Camera, tcs)
+	fire.Root.GetFlames(dev.Id, land, fire, flameMesh, dev.Camera, tcs)
 
 	if flameMesh.FaceCount() > 0 {
 		flameMesh.WriteTo(message, 1)
@@ -1046,16 +1090,14 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 			//find and highlight the deepest leaf triangle
 			land := dev.ViewingPlayer.Game.Land
 			if delta > 2 {
-				stats := terrain.NewProbeStats()
-				ray := ray.New(dev.Camera.Position, dev.Camera.FarPos)
 
 				if land != nil {
-					land.Root.ProbeAll(land, ray, stats)
-					//log.Logit(stats.String())
-
-					if stats.NearestTri != nil {
-						msg := stats.NearestTri.EdgesAsMsg(land)
-						stats.NearestTri.PrismEdges(msg)              //show the prism Hierarchy
+					landProber := terrain.NewProber(dev.Id, land, dev.Camera.Position, false)
+					land.Root.Probe(landProber)
+					//log.logit (landProber.String())
+					if landProber.NearestTri != nil {
+						msg := landProber.NearestTri.EdgesAsMsg(land)
+						landProber.NearestTri.Parent.PrismEdges(msg)  //show the prism Hierarchy
 						terminator := float32(math.Inf(1))            //use positive infinity as terminator
 						msg.Write(terminator, terminator, terminator) //Terminator for vectors
 
@@ -1345,7 +1387,7 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 				transformed[m] = mass.FindAt(gm.Masses, tp, 0.01) //some masses (those on the plane) will map to themselves
 				if transformed[m] == nil {
 					//nope, make a new mass
-					transformed[m] = mass.New(int32(len(gm.Masses)), tp, m.R, m.Fixed, m.IsCoin, m.Collideable, m) //add 'shadow' mass
+					transformed[m] = mass.New(int32(len(gm.Masses)), tp, m.R, m.Fixed, m.IsCoin, m.Collideable, m, dev.Id) //add 'shadow' mass
 					gm.Masses = append(gm.Masses, transformed[m])
 
 				}
@@ -1552,14 +1594,14 @@ func (dev *Device) SnapMasses(things []*thing.Thing) {
 
 func (dev *Device) makeNextSpring(game *game.Game) {
 	if dev.highlit.mass == nil {
-		dev.highlit.mass = mass.New(int32(len(game.Masses)), dev.Grid.SpacePos, .05, false, false, true, nil)
+		dev.highlit.mass = mass.New(int32(len(game.Masses)), dev.Grid.SpacePos, .05, false, false, true, nil, dev.Id)
 		game.Masses = append(game.Masses, dev.highlit.mass)
 		dev.sendSpheres([]*mass.Mass{dev.highlit.mass})
 		return
 	}
 
 	m1 := dev.highlit.mass
-	m2 := mass.New(int32(len(game.Masses)), m1.P.Clone().Add(vec.NewVec3(0, .001, 0)), 0.05, false, false, true, nil)
+	m2 := mass.New(int32(len(game.Masses)), m1.P.Clone().Add(vec.NewVec3(0, .001, 0)), 0.05, false, false, true, nil, dev.Id)
 	game.Masses = append(game.Masses, m2)
 	dev.springCursor = m2
 
@@ -1893,7 +1935,7 @@ func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg) (*errorplus.Event, *Device) {
 
 		//the old game is not destroyed - a new game is created and I am started in it
 		oGid := myGame.Id
-		gm := game.Load(filename) //replace the game (globals - as the game is a pointer)
+		gm := game.Load(filename, dev.Id) //replace the game (globals - as the game is a pointer)
 
 		//StoreImpl.SetGame(gm)
 

@@ -4,40 +4,19 @@ import (
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/mesh"
+
 	//"github.com/nickax/gofu/ray"
 	"fmt"
+	"math"
+
 	"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/vec"
-	"math"
 )
 
 // feels like the collector may be an unnecesssary step
 // can't splitifnecessary generate the plants and simplemesh faces directly ? - doing the occlusion and backface culling there too ?
 // even writing the faces directly to the message ?
 // patching is a problem - may need to integrate
-type Collector struct {
-	triangles  [10000]*Tri
-	plants     [100000]Plant
-	TriCount   int
-	PlantCount int
-}
-
-func (c *Collector) reset() {
-	c.TriCount = 0
-	c.PlantCount = 0
-}
-
-func (c *Collector) AddTri(t *Tri) {
-	c.triangles[c.TriCount] = t
-	c.TriCount++
-}
-
-func (c *Collector) AddPlants(p []Plant) {
-	for _, pl := range p {
-		c.plants[c.PlantCount] = pl
-		c.PlantCount++
-	}
-}
 
 type TriMesh struct {
 	name        string
@@ -48,10 +27,11 @@ type TriMesh struct {
 
 	midpoints map[uint64]uint32 //compound key of the two endpoints of an edge, map contains the index of its midpoint vertex
 
-	size     float64   //+/- land size
-	kinks    []float64 //fractions of the land height to pull down by at each level
-	height   float64   //+/- land height
-	flooding bool      // for debug (concurrency check)
+	size      float64            //+/- land size
+	kinks     []float64          //fractions of the land height to pull down by at each level
+	height    float64            //+/- land height
+	flooding  bool               // for debug (concurrency check)
+	firstLeaf map[uint32]LeafTri //devciceID to first leaf tri seen by that device
 }
 
 type fireInfo struct {
@@ -96,71 +76,47 @@ func (t *Tri) BarycentricInterpolate(m *TriMesh, u, v, w float64) vec.V3 {
 
 func (land *TriMesh) GetTreesInto(message *msg.Msg) {
 
-	occludedTrees := dev.ViewingPlayer.Game.PlaceTrees() //place trees on non occluded, level 10, triangles infront of the camera
-	log.Logit("Placed trees - occluded:", occludedTrees, "near trees:", dev.nearTreeCount, "far trees:", dev.farTreeCount)
-	//near trees (mesh intances)
-	message.Write(msg.PositionInstances, uint16(100),
-		uint16(0),                 //from
-		uint16(dev.nearTreeCount), //to (we position a subset)
-		byte(0),                   //padding for dword alignemnt
-		dev.nearTreePositions[0:dev.nearTreeCount*3], //Slice of XYZ float32's
-	)
+	// 	occludedTrees := dev.ViewingPlayer.Game.PlaceTrees() //place trees on non occluded, level 10, triangles infront of the camera
+	// 	log.Logit("Placed trees - occluded:", occludedTrees, "near trees:", dev.nearTreeCount, "far trees:", dev.farTreeCount)
+	// 	//near trees (mesh intances)
+	// 	message.Write(msg.PositionInstances, uint16(100),
+	// 		uint16(0),                 //from
+	// 		uint16(dev.nearTreeCount), //to (we position a subset)
+	// 		byte(0),                   //padding for dword alignemnt
+	// 		dev.nearTreePositions[0:dev.nearTreeCount*3], //Slice of XYZ float32's
+	// 	)
 
-	message.Write(msg.PositionInstances, uint16(105),
-		uint16(0),                //from
-		uint16(dev.farTreeCount), //to (we position a subset)
-		byte(0),                  //padding for dword alignemnt
-		dev.farTreePositions[0:dev.farTreeCount*3], //Slice of XYZ float32's
-	)
+	// 	message.Write(msg.PositionInstances, uint16(105),
+	// 		uint16(0),                //from
+	// 		uint16(dev.farTreeCount), //to (we position a subset)
+	// 		byte(0),                  //padding for dword alignemnt
+	// 		dev.farTreePositions[0:dev.farTreeCount*3], //Slice of XYZ float32's
+	// 	)
 
-	// //far trees (billboards)
-	// if dev.farTreeBillBoardMesh.FaceCount() > 0 {
-	// 	dev.farTreeBillBoardMesh.WriteTo(message, 1)
+	// 	// //far trees (billboards)
+	// 	// if dev.farTreeBillBoardMesh.FaceCount() > 0 {
+	// 	// 	dev.farTreeBillBoardMesh.WriteTo(message, 1)
+	// 	// }
 	// }
 }
 
 // return the normals of the verts specified in vis (vertices we've added)
-func (m *TriMesh) getNormals(asWater bool) []float32 {
+func (m *TriMesh) getNormals(asWater bool, touchedVerts *Contacts) []vec.V3 {
 
 	//for every new vertex, reset the normal to zero, then add the normals of the faces it touches
-	n := make([]float32, m.VertexCount*3) //position x,y,z
+	n := make([]vec.V3, m.VertexCount) //position x,y,z
 
 	if asWater {
+		up := vec.NewVec3(0, 1, 0)
 		for i := 0; i < m.VertexCount; i++ { //} range m.verts {
-			n[i*3+0] = 0
-			n[i*3+1] = 1
-			n[i*3+2] = 0
+			n[i] = up
 		}
 		return n
 
 	}
 
 	for i := 0; i < m.VertexCount; i++ {
-		v := m.verts[i]
-
-		if len(v.touches) > 0 {
-
-			v.n.X, v.n.Y, v.n.Z = 0, 0, 0 //reuse (don't re-allocate)
-
-			//usually 6 0- can be 5 - or even 3 at edges and 1 in conrners
-			for t := range v.touches { //for every face this vertex touches
-				if t.childCount == 0 { //ony include bottom level traingles in the normal calculation
-					v.n.AddIn(t.Normal)
-				}
-			}
-
-			vn := v.n.Normalise()
-			n[i*3] = float32(vn.X)
-			n[i*3+1] = float32(vn.Y)
-			n[i*3+2] = float32(vn.Z)
-
-		} else {
-			n[i*3] = float32(0)
-			n[i*3+1] = float32(1)
-			n[i*3+2] = float32(0)
-
-			log.Logit("vert", i, "of", m.name, " touches no tris")
-		}
+		n[i] = touchedVerts.GetNormal(uint32(i), m)
 	}
 
 	return n
@@ -176,7 +132,7 @@ func (mesh *TriMesh) Reset() {
 	for i := 0; i < 3; i++ {
 		v := mesh.verts[i]
 
-		clear(v.touches)
+		//clear(v.touches)
 		v.wl = 0
 		//v.occluded = false
 		//v.testedForOcclusion = false
@@ -198,12 +154,14 @@ func NewTriMesh(name string, maxFaces uint16, size float64, kinks []float64, hei
 	verts := make([]*vert, 0, 65000) //clear the verts
 	mesh := &TriMesh{name: name, verts: verts, midpoints: make(map[uint64]uint32, maxFaces*3), size: size, kinks: kinks, height: height}
 
-	mesh.addVert(vec.NewVec3(size, 0, -size), 0, 0)  //near right
-	mesh.addVert(vec.NewVec3(-size, 0, -size), 0, 0) //near left
-	mesh.addVert(vec.NewVec3(0, 0, size), 0, 0)      //far, far away
+	seaLevel := height * .2
+	mesh.addVert(vec.NewVec3(size, 0, -size), 0, 0, seaLevel)  //near right
+	mesh.addVert(vec.NewVec3(-size, 0, -size), 0, 0, seaLevel) //near left
+	mesh.addVert(vec.NewVec3(0, 0, size), 0, 0, seaLevel)      //far, far away
 
 	mesh.Root = newTri(nil, mesh, [3]uint32{0, 1, 2}) //make the root triangle
-	return mesh                                       //&TriMesh{name: name, Root: root, verts: []*vert{}, midpoints: make(map[uint64]uint32, maxFaces*3), size: size, kinks: kinks, height: height}
+	mesh.Root.MakePrism(mesh)
+	return mesh //&TriMesh{name: name, Root: root, verts: []*vert{}, midpoints: make(map[uint64]uint32, maxFaces*3), size: size, kinks: kinks, height: height}
 }
 
 func (m *TriMesh) midpoint(v1 uint32, v2 uint32) uint32 {
@@ -227,64 +185,60 @@ func (m *TriMesh) midpoint(v1 uint32, v2 uint32) uint32 {
 // creates a new vertex halfway between the indexed verts a and b and returns the index of the new vertex
 // depth is used to determin whether to calculate UVs from alitude, or halfway between the two parent verts UVs
 // such that geoloiical strata are decided 'early' and later splits distort them - this produces more natural strata, and also beans finer geometry does not have texture coords popping (snow patches appearing out of nowhere for example)
-func (m *TriMesh) splitEdge(a, b uint32, dy float64, depth int) uint32 {
+func (m *TriMesh) splitEdge(ai, bi uint32, dy float64, depth int) uint32 {
 
-	if a == b {
+	if ai == bi {
 		panic("degenerate edge in splitEdge")
 	}
-	pa := m.verts[a].p
-	pb := m.verts[b].p
+	a := m.verts[ai]
+	b := m.verts[bi]
 
-	p := pa.Tween(pb, 0.5)
+	p := a.p.Tween(b.p, 0.5)
 
 	p.Y += dy
+
+	depthA := a.wl - a.p.Y
+	depthB := b.wl - b.p.Y
 
 	//maintain a map of edges to midpoints
 	// key := uint32(a) + uint32(65536)*uint32(b)
 	// existingMid, present := m.midpoints[key]
 
-	vi := m.midpoint(a, b) //will look (in a map) for an existing midpoints a->b or b->a
+	vi := m.midpoint(ai, bi) //will look (in a map) for an existing midpoints a->b or b->a
 
-	if vi == a || vi == b {
+	if vi == ai || vi == bi {
 		panic("midpoint is one of the endpoints")
 	}
-
 	if vi != math.MaxUint32 {
-		if vi == 0 {
-			log.Logit("zero midpoint")
-		}
+
 		return vi
 	}
 
-	// if len(m.reuseVerts) > 0 {
-	// 	vi = m.reuseVerts[0]
-	// 	log.Logit("reusing vert", vi)
-	// 	m.verts[vi].p = p
-	// 	m.reuseVerts = m.reuseVerts[1:]
-	// } else {
-
+	//No vertex here - make one
 	//for the first few levels of splitting, calculate UVs from altitude (so large scale features are consistent)
 	uvy := (p.Y + m.height) / (2 * m.height)
 	if depth > 6 {
 		//later splits, preserve ealier UVs (so fine geometry detail does not cause texture popping)
-		uvy = (m.verts[a].uv.GetY() + m.verts[b].uv.GetY()) / 2
+		uvy = (a.uv.Y + b.uv.Y) / 2
 	}
 
 	//we don't have normals yet - so must calc UVX's later
-	vi = m.addVert(p, 0, uvy) //OrReuseVertAtXZ(p)
-
-	//}
+	vi = m.addVert(p, 0, uvy, p.Y+(depthA+depthB)/2) //OrReuseVertAtXZ(p)
 
 	//add it to the index of midpoints
-	key := uint64(a) + uint64(math.MaxUint32)*uint64(b)
+	key := uint64(ai) + uint64(math.MaxUint32)*uint64(bi)
 	m.midpoints[key] = vi
 
 	return vi
 }
 
-func (m *TriMesh) addVert(p vec.V3, u float64, v float64) uint32 {
+func (m *TriMesh) addVert(p vec.V3, u float64, v float64, wl float64) uint32 {
 
 	var vert *vert
+
+	if wl == 0 {
+		panic("water level not set")
+	}
 
 	// Check if we have an existing vert to reuse
 	if m.VertexCount < len(m.verts) {
@@ -297,8 +251,8 @@ func (m *TriMesh) addVert(p vec.V3, u float64, v float64) uint32 {
 		vert.uv.Y = v
 		//vert.occluded = false
 		//vert.testedForOcclusion = false
-		vert.wl = 0
-		clear(vert.touches)
+		vert.wl = wl
+		//clear(vert.touches)
 
 		//vert.touches = make(map[*Tri]bool, 6)
 
@@ -306,7 +260,7 @@ func (m *TriMesh) addVert(p vec.V3, u float64, v float64) uint32 {
 		// vert.touches is already cleared in Reset()
 	} else {
 		// No free verts, allocate new one and append
-		vert = newVert(p, u, v)
+		vert = newVert(p, u, v, wl)
 		m.verts = append(m.verts, vert)
 	}
 
@@ -318,24 +272,47 @@ func (m *TriMesh) addVert(p vec.V3, u float64, v float64) uint32 {
 // create a shore by dropping the land vertex to the level of
 // func (m *TriMesh) flowWater(fis []uint16) {
 
-// 	//flow the water (only along the deepest/visible faces)
-// 	//for iw := 0; iw < 10; iw++ { //iteration of water
-// 	for i := 0; i < len(fis); i += 3 {
-// 		a := m.verts[fis[i]]
-// 		b := m.verts[fis[i+1]]
-// 		c := m.verts[fis[i+2]]
-// 		flow(a, b) //update the accumulators at each vertex
-// 		flow(b, c)
-// 		flow(c, a)
-// 	}
-// 	//update the water levels (from the accumulators)
-// 	for _, v := range m.verts { //note m.verts is a slice of pointers to verts - so we *can* mutate them
+func (m *TriMesh) Flow() {
+	// for _, v := range m.verts {
+	// 	v.acc = 0
+	// 	v.incount = 0
+	// }
+	//flow the water (only along the deepest/visible faces)
+	for iw := 0; iw < 10; iw++ { //iteration of water
+		for _, tri := range m.Root.getLeaves() {
+			tri.flow(m)
+		}
+	}
+}
 
-// 		v.wl += v.acc / float64(v.incount)
-// 		v.acc = 0
-// 		v.incount = 0
-// 	}
+func (t *Tri) flow(m *TriMesh) {
+	a := m.verts[t.vi[0]]
+	b := m.verts[t.vi[1]]
+	c := m.verts[t.vi[2]]
+	a.flow(b)
+	b.flow(c)
+	c.flow(a)
+}
 
+func (m *TriMesh) SendWater(tris *LeafCollector, campos vec.V3, response *msg.Msg) {
+	funcIsWater := func(t *LeafTri, m *TriMesh) bool { return t.OnOrUnderWater(m) }
+	//funcIsWater := func(t *Tri, m *TriMesh) bool { return true }
+	waterMesh := m.ToSimpleMesh(tris, uint16(4), nil, "water", true, funcIsWater, campos)
+
+	if waterMesh.FaceCount() > 0 {
+		log.Logit("Water mesh has ", waterMesh.FaceCount(), " faces and ", waterMesh.VertCount(), " verts")
+		waterMesh.WriteTo(response, 1)
+	} else {
+		log.Logit("No water")
+	}
+}
+
+//update the water levels (from the accumulators)
+// for _, v := range m.verts { //note m.verts is a slice of pointers to verts - so we *can* mutate them
+
+// 	v.wl += v.acc / float64(v.incount)
+// 	v.acc = 0
+// 	v.incount = 0
 // }
 
 //now done within ToSimpleMesh (only for verts actually used in faces)
@@ -356,8 +333,8 @@ func (m *TriMesh) getUVs() []float32 {
 	//big vertex index (in the huge mesh) to small vertex index (in the new sub mesh)
 	for i := 0; i < vc; i++ {
 		v := m.verts[i]
-		uvs[i*2] = float32(v.uv.GetX())
-		uvs[i*2+1] = float32(v.uv.GetY())
+		uvs[i*2] = float32(v.uv.X)
+		uvs[i*2+1] = float32(v.uv.Y)
 	}
 
 	return uvs
@@ -381,59 +358,6 @@ func (m *TriMesh) getPositions(asWater bool) []float32 {
 
 	}
 	return p
-
-}
-
-// FloodAndDrain - adds the water surface meshes (to the msg)
-func (land *TriMesh) FloodAndDrain(waterlines []float64, response *msg.Msg, campos vec.V3) {
-
-	if land.flooding {
-		panic("concurrent flooding detected!")
-	}
-	defer func() { land.flooding = false }()
-	land.flooding = true
-
-	//snapped := 0
-	//land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
-
-	//snapped = 0
-	//land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
-
-	for i, wl := range waterlines { //work DOWN through the waterlines
-		land.Flood(wl) //set the waterlevel of all land below wl to wl (anything above is set to wl=-1000000
-
-		if i != len(waterlines)-1 { //Don't drain the sea
-			for lake := 0; lake < 10; lake++ {
-				drained := false
-				for _, v := range land.verts {
-					if v.wl > v.p.Y+300 {
-						count := 0
-						land.drain(v, wl, &count) //all deep lakes at this WL are drained to -1000000
-
-						log.Logit("drained", count)
-						drained = true
-
-						break
-					}
-				}
-				if !drained {
-					log.Logit("no more lakes to drain")
-					break
-				}
-			}
-		}
-
-		funcIsWater := func(t *Tri, m *TriMesh) bool { return t.OnOrUnderWater(m) }
-		waterMesh := land.ToSimpleMesh(land.Root, uint16(4+i), nil, "water", true, funcIsWater, campos)
-
-		if waterMesh.FaceCount() > 0 {
-			log.Logit("water mesh at wl", wl, " has ", waterMesh.FaceCount(), " faces and ", waterMesh.VertCount(), " verts")
-			waterMesh.WriteTo(response, 1)
-		} else {
-			log.Logit("water mesh at wl", wl, i, " is empty")
-		}
-
-	}
 
 }
 
@@ -469,7 +393,7 @@ func (mesh *TriMesh) ScorchedAt(tri *Tri, p vec.V3) bool {
 		//for _, c := range t.children {
 		for i := 0; i < tri.childCount; i++ {
 			//if c.prismFaces[5].Contains(p) {
-			if tri.children[i].contains2D(p) {
+			if tri.children[i].contains2D(p, mesh) {
 				return mesh.ScorchedAt(tri.children[i], p)
 			}
 		}
@@ -506,31 +430,28 @@ func (mesh *TriMesh) shoreLines(tri *Tri, levels []float64, snapped *int) {
 			mesh.shoreLines(tri.children[i], levels, snapped)
 		}
 	}
-
 }
 
-func (lm *TriMesh) ToSimpleMesh(collector *Collector, id uint16, fm *TriMesh, material string, asWater bool, faceTest func(face *Tri, mesh *TriMesh) bool, camPos vec.V3) *mesh.SimpleMesh {
+func (lm *TriMesh) ToSimpleMesh(leaves *LeafCollector, id uint16, fm *TriMesh, material string, asWater bool, faceTest func(face *LeafTri, mesh *TriMesh) bool, camPos vec.V3) *mesh.SimpleMesh {
 
 	vc := lm.VertexCount
-	fis := make([]uint16, vc*4) //there will actually be many less faces than verts - but we need 3 uints per face
 
 	if vc >= math.MaxUint16 {
 		panic("mesh too big - over 65535 verts")
 	}
 
-	lm.getNormals(asWater) //we must get normals (becuase it calculates them) before updating UVx's
-
-	wp := uint32(0)
+	allNormals := lm.getNormals(asWater, leaves.TouchedVerts) //we must get normals (becuase it calculates them) before updating UVx's
 
 	viewpoint := camPos.Clone()
 	viewpoint.Y += 5
-	ray := ray.New(viewpoint, nowhereSpecial)
-	votc := make(map[uint32]bool) //verts occlusion test cache TODO reuse/clear (place on device)
 
-	stats := NewProbeStats()
+	prober := NewProber(leaves.DeviceId, lm, viewpoint, true)
 
-	lm.getFacesInto(collector, fis, &wp, faceTest, ray, votc, stats) //populate Fis (recursivley from the root triangle)
-	fis = fis[:wp]                                                   //truncate at the write pointer
+	wp := uint32(0)
+	fis := make([]uint16, 65535*3)                   //there will actually be many less faces than verts - but we need 3 uints per face
+	leaves.getFinalFaces(fis, &wp, faceTest, prober) //populate Fis (recursivley from the root triangle)
+	fis = fis[:wp]
+	numLeaves := wp //truncate at the write pointer
 
 	//kill two birds with one stone - generate a subset of verts just for the face sets - and set all their Y's
 
@@ -540,12 +461,13 @@ func (lm *TriMesh) ToSimpleMesh(collector *Collector, id uint16, fm *TriMesh, ma
 
 	mapping := make(map[uint16]uint16) //map from old vert index to new vert index
 
-	for i := 0; i < int(wp); i++ {
+	for i := range numLeaves {
 		fi := fis[i]
 		tfi, present := mapping[fi]
 		if !present {
 			v := lm.verts[fi]
-			v.uv.UpdateUVxFromNormal(v.n)
+			n := allNormals[fi]
+			v.uv.UpdateUVxFromNormal(n)
 
 			ni := uint16(len(mapping))
 			ni2 := ni * 2 //new index (for uv)
@@ -554,7 +476,8 @@ func (lm *TriMesh) ToSimpleMesh(collector *Collector, id uint16, fm *TriMesh, ma
 			if asWater {
 				nn[ni3], nn[ni3+1], nn[ni3+2] = 0, 1, 0
 			} else {
-				nn[ni3], nn[ni3+1], nn[ni3+2] = float32(v.n.X), float32(v.n.Y), float32(v.n.Z)
+
+				nn[ni3], nn[ni3+1], nn[ni3+2] = float32(n.X), float32(n.Y), float32(n.Z) //float32(v.n.X), float32(v.n.Y), float32(v.n.Z)
 			}
 
 			nuv[ni2], nuv[ni2+1] = float32(v.uv.X), float32(v.uv.Y)
@@ -592,27 +515,26 @@ func (lm *TriMesh) ToSimpleMesh(collector *Collector, id uint16, fm *TriMesh, ma
 
 }
 
-func (mesh *TriMesh) getFacesInto(collector *Collector, fis []uint16, p *uint32, test func(face *Tri, m *TriMesh) bool, ray ray.Ray, votc map[uint32]bool, probeStats *ProbeStats) {
+func (leaves *LeafCollector) getFinalFaces(fis []uint16, wp *uint32, test func(face *LeafTri, m *TriMesh) bool, prober *Prober) {
 
-	for i := 0; i < len(collector.triangles); i++ {
-		tri := collector.triangles[i]
-		j := *p
-		if test(tri, mesh) {
-			if !tri.occludedOrBackFacing(probeStats, ray, mesh, votc) {
-				fis[j] = uint16(tri.vi[0])
-				fis[j+1] = uint16(tri.vi[1])
-				fis[j+2] = uint16(tri.vi[2])
-				*p += 3
-			}
-		} else {
-			//log.Logit("tri rejected at depth", t.Depth)
+	for i := range leaves.LeafCount {
+		leaf := leaves.leaves[i]
+
+		if leaf.childCount != 0 {
+			panic("There should be no leaves with children here")
 		}
+
+		if test(leaf, prober.mesh) {
+			if !leaf.occludedOrBackFacing(prober) {
+
+				fis[*wp] = uint16(leaf.vi[0])
+				fis[*wp+1] = uint16(leaf.vi[1])
+				fis[*wp+2] = uint16(leaf.vi[2])
+				*wp += 3
+			}
+		}
+
 	}
-	//for _, c := range t.children {
-	// for i := 0; i < tri.childCount; i++ {
-	// 	//todo - test the topface of the prism for occlusion - don't recurse if occluded
-	// 	mesh.getFacesInto(tri.children[i], fis, p, test, ray, votc, probeStats)
-	// }
 }
 
 func (m *TriMesh) Flood(wl float64) {
@@ -626,81 +548,97 @@ func (m *TriMesh) Flood(wl float64) {
 			v.wl = -100000 //high and dry
 		}
 	}
-
 }
 
-func (m *TriMesh) drain(v *vert, wl float64, count *int) {
-
-	deep := -1000000.0
-	for f := range v.touches {
-
-		if f.childCount == 0 {
-			a := m.verts[f.vi[0]]
-			b := m.verts[f.vi[1]]
-			c := m.verts[f.vi[2]]
-
-			if a != v && a.wl == wl {
-				a.wl = deep
-				*count++
-				m.drain(a, wl, count)
-			}
-			if b != v && b.wl == wl {
-				b.wl = deep
-				*count++
-				m.drain(b, wl, count)
-			}
-			if c != v && c.wl == wl {
-				c.wl = deep
-				*count++
-				m.drain(c, wl, count)
-			}
-		}
-
+func (m *TriMesh) Rain(rainFall float64) {
+	for _, v := range m.verts {
+		v.wl += rainFall
 	}
 }
 
-// func flow(a *vert, b *vert) {
+// func (m *TriMesh) drain(v *vert, wl float64, count *int) {
 
-// 	//if diff < 0 {
-// 	//rate := float64(1) //free flow - water is above ground at both ends
+// 	deep := -1000000.0
+// 	for f := range v.touches {
 
-// 	//surfaceWater := a.p.wl - m.p.y
-// 	// if a.wl < a.p.y {
-// 	// 	rate -= .3
-// 	// } //ground percolation
-// 	// if b.wl < b.p.y {
-// 	// 	rate -= .3
-// 	// }
+// 		if f.childCount == 0 {
+// 			a := m.verts[f.vi[0]]
+// 			b := m.verts[f.vi[1]]
+// 			c := m.verts[f.vi[2]]
 
-// 	// if b.wl < b.p.Y {
-// 	// 	rate *= .1
-// 	// } //ground percolation
-
-// 	//use an accumulator per vertex for the in/out flow
-
-// 	//amount := diff  * rate
-
-// 	if a.wl > a.p.Y || b.wl > b.p.Y {
-// 		diff := a.wl - b.wl //uses the absolute water level
-// 		if diff < 0 {
-// 			diff = -diff
+// 			if a != v && a.wl == wl {
+// 				a.wl = deep
+// 				*count++
+// 				m.drain(a, wl, count)
+// 			}
+// 			if b != v && b.wl == wl {
+// 				b.wl = deep
+// 				*count++
+// 				m.drain(b, wl, count)
+// 			}
+// 			if c != v && c.wl == wl {
+// 				c.wl = deep
+// 				*count++
+// 				m.drain(c, wl, count)
+// 			}
 // 		}
 
-// 		if a.wl >= b.wl {
-// 			//a is high
-// 			a.acc -= diff //* .8
-// 			//b.acc += diff * .2
-// 		} else {
-// 			b.acc -= diff //* 0.8
-// 			//a.acc += diff * 0.2
-// 		}
-
-// 		a.incount++
-// 		b.incount++
 // 	}
-
 // }
-type ProbeStats struct {
+
+func (a *vert) flow(b *vert) {
+
+	//if diff < 0 {
+	//rate := float64(1) //free flow - water is above ground at both ends
+
+	//surfaceWater := a.p.wl - m.p.y
+	// if a.wl < a.p.y {
+	// 	rate -= .3
+	// } //ground percolation
+	// if b.wl < b.p.y {
+	// 	rate -= .3
+	// }
+
+	// if b.wl < b.p.Y {
+	// 	rate *= .1
+	// } //ground percolation
+
+	//use an accumulator per vertex for the in/out flow
+
+	//amount := diff  * rate
+
+	if a.wl > a.p.Y || b.wl > b.p.Y {
+
+		diff := a.wl - b.wl //uses the absolute water level
+		a.wl -= diff * .3
+		b.wl += diff * .3
+
+		// if diff < 0 {
+		// 	diff = -diff
+		// }
+
+		// if a.wl >= b.wl {
+		// 	//a is high
+		// 	a.acc -= diff //* .8
+		// 	//b.acc += diff * .2
+		// } else {
+		// 	b.acc -= diff //* 0.8
+		// 	//a.acc += diff * 0.2
+		// }
+
+		// a.incount++
+		// b.incount++
+	}
+
+}
+
+// Probes a triMesh with a ray - finding leaf triangle hits
+type Prober struct {
+	DeviceId      uint32
+	mesh          *TriMesh
+	votc          map[uint32]bool //vertex occlusion test cache
+	ray           ray.Ray
+	earlyExit     bool //set to true to exit on first hit
 	Hit           bool //used in occlusiuon cull
 	leafHits      int
 	leafMisses    int
@@ -714,13 +652,18 @@ type ProbeStats struct {
 	SDist         float64 //smallest distance found sofar (start big) - used if ProbeAll()
 }
 
-func NewProbeStats() *ProbeStats {
-	return &ProbeStats{
-		SDist: math.MaxFloat64,
+func NewProber(deviceId uint32, mesh *TriMesh, camPos vec.V3, earlyExit bool) *Prober {
+	return &Prober{
+		DeviceId:  deviceId,
+		ray:       ray.New(camPos, nowhereSpecial),
+		mesh:      mesh,
+		earlyExit: earlyExit,
+		SDist:     math.MaxFloat64,
+		votc:      make(map[uint32]bool), //vertex occlusion test cache TODO reuse/clear (place on device)
 	}
 }
 
-func (S *ProbeStats) String() string {
+func (S *Prober) String() string {
 	return fmt.Sprintf(`
 		leaf hits: %d
 		leaf misses: %d

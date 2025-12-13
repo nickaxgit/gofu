@@ -22,6 +22,7 @@ import (
 
 type Mass struct {
 	Index       int32
+	Owner       uint32 //device id - penetrations are resolved against the owners version of the terrain
 	ThingIndex  uint32 //not persisted - set (from springs) after loading
 	P           vec.V3
 	transformOf *Mass
@@ -128,13 +129,14 @@ func (m *Mass) SetIndex(i int32) {
 	m.Index = i
 }
 
-func New(index int32, p vec.V3, r float64, fixed bool, isCoin bool, collideable bool, transFormOf *Mass) *Mass {
+func New(index int32, p vec.V3, r float64, fixed bool, isCoin bool, collideable bool, transFormOf *Mass, owner uint32) *Mass {
 
 	return &Mass{Index: index,
 		P: p, R: r, Fixed: fixed, IsCoin: isCoin,
 		Collideable: collideable,
 		Op:          p.Clone(),
-		transformOf: transFormOf}
+		transformOf: transFormOf,
+		Owner:       owner}
 }
 
 func (m *Mass) HasMoved() bool {
@@ -156,7 +158,7 @@ func (m *Mass) overlaps(masses []*Mass) *Mass {
 func (m *Mass) WithinDistanceOf(p vec.V3, tol float64) bool {
 	return m.P.DistanceFrom(p) <= tol
 }
-func NewFromMsg(massesSoFar []*Mass, msg *msg.Msg, withDetail byte) *Mass {
+func NewFromMsg(massesSoFar []*Mass, msg *msg.Msg, withDetail byte, owner uint32) *Mass {
 
 	var idx int32 = 0
 	msg.Read(&idx)
@@ -164,7 +166,7 @@ func NewFromMsg(massesSoFar []*Mass, msg *msg.Msg, withDetail byte) *Mass {
 	p := vec.V3{}
 	msg.Read(p) //read the mass position (note p is a pointer)
 
-	m := New(idx, p, 0, false, false, false, nil)
+	m := New(idx, p, 0, false, false, false, nil, owner)
 
 	m.Op = m.P.Clone() //todo serialise this to be able to save masses in motion
 	if withDetail != 0 {
@@ -479,7 +481,7 @@ func (m *Mass) Delete(masses []*Mass) {
 	}
 }
 
-func MassesFromMsg(message *msg.Msg) []*Mass {
+func MassesFromMsg(message *msg.Msg, owner uint32) []*Mass {
 
 	if message.MsgType != msg.Masses {
 		panic("Masses are not next")
@@ -493,7 +495,7 @@ func MassesFromMsg(message *msg.Msg) []*Mass {
 	message.Read(&withDetail)
 
 	for i := 0; i < int(nm); i++ {
-		mass := NewFromMsg(massBatch, message, withDetail) //creates them 'into' the mass slice
+		mass := NewFromMsg(massBatch, message, withDetail, owner) //creates them 'into' the mass slice
 
 		massBatch = append(massBatch, mass)
 		if int(mass.Index) != i {

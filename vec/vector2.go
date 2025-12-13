@@ -17,12 +17,6 @@ func (p *V2) AsFloat32s() []float32 {
 	return []float32{float32(p.X), float32(p.Y)}
 }
 
-func (p *V2) GetY() float64 {
-	return p.Y
-}
-func (p *V2) GetX() float64 {
-	return p.X
-}
 func (a *V2) Tween(b *V2, f float64) *V2 {
 	return NewVec2(a.X+(b.X-a.X)*f, a.Y+(b.Y-a.Y)*f)
 }

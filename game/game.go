@@ -179,7 +179,7 @@ func landToBytes(s *Game) []byte {
 	return buff.Bytes()
 }
 
-func Load(filename string) *Game {
+func Load(filename string, owner uint32) *Game {
 
 	file, err := os.Open(filename + ".bin")
 	if err != nil {
@@ -197,7 +197,7 @@ func Load(filename string) *Game {
 	state := New(1, filename)
 	m := msg.NewFromBytes(allBytes) //beware sets message type from first byte
 
-	state.Masses = mass.MassesFromMsg(m)
+	state.Masses = mass.MassesFromMsg(m, owner)
 	state.Things = thing.ThingsFromMsg(m, state.Masses)
 
 	//fix up wing areas on loading
@@ -265,7 +265,7 @@ func (game *Game) resolvePenetrations() {
 				}
 			}
 
-			hit, where, tri := game.Land.Root.VprobeLand(m.P)
+			hit, where, tri := game.Land.Root.VprobeLand(m.P, game.Land, m.Owner)
 
 			if hit {
 				penDepth := where.Y - (m.P.Y - m.R)
@@ -321,7 +321,6 @@ func (game *Game) stretchSprings() {
 
 // executes a physics step and returns the index and new position for all the masses that move
 func (game *Game) MoveAll(substeps int) *msg.Msg {
-
 	//movedMasses := []int{} //return the index, x and y of all masses that move
 
 	//distance an object falls in 1/30th of a second

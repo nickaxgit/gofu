@@ -14,15 +14,15 @@ func (c *Curve) addPoint(x float64, y float64) {
 
 func (c *Curve) GetY(x float64) float64 {
 
-	if x >= c.points[len(c.points)-1].GetX() {
-		return c.points[len(c.points)-1].GetY()
+	if x >= c.points[len(c.points)-1].X {
+		return c.points[len(c.points)-1].Y
 	}
 
 	for i, v := range c.points {
-		if v.GetX() > x {
+		if v.X > x {
 			prv := c.points[i-1]
-			f := (x - prv.GetX()) / (v.GetX() - prv.GetX())
-			return prv.Tween(v, f).GetY()
+			f := (x - prv.X) / (v.X - prv.X)
+			return prv.Tween(v, f).Y
 		}
 	}
 
