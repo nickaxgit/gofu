@@ -9,8 +9,15 @@ type V2 struct {
 	Y float64
 }
 
-func (uv *V2) UpdateUVxFromNormal(n V3) {
-	uv.X = math.Atan2(n.X, n.Z) / float64(6.28)
+func (uv *V2) UpdateUVxFromNormal(vn V3) {
+
+	if uv.X == -1000 {
+	//uv.Y += vn.Y * .01
+	//} //lower flat ground (equivalent to raising steep ground)}
+
+	uv.X = math.Atan2(vn.X, vn.Z) / float64(6.28) * 6 //300 //25
+	}
+
 }
 
 func (p *V2) AsFloat32s() []float32 {

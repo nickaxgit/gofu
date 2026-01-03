@@ -105,9 +105,13 @@ type Device struct {
 	farTreeCount     int
 	farTreePositions []float32 //x,z positions of far trees (centres of tree tris) - ready for sending
 
-	makingland    bool
-	LeafCollector *terrain.LeafCollector
+	makingland bool
+
+	leafCollector *terrain.LeafCollector
+	patched       *terrain.LeafCollector
+	touchedVerts  *terrain.TouchedVerts
 	sceneNo       int
+	wireframe     bool
 	//farTreeBillBoardMesh *mesh.SimpleMesh
 }
 
@@ -177,7 +181,7 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	device.lastCam = device.Camera.Clone() //store this as the new old position
 
 	if land == nil {
-		game.Land = terrain.NewTriMesh("land", 65000, game.LandSize, game.Kinks, game.LandHeight)
+		game.Land = terrain.NewTriMesh("land", 500000, game.LandSize, game.Kinks, game.LandHeight)
 		land = game.Land
 	} else {
 		//device.Land.Reset()
@@ -203,8 +207,8 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	ts = time.Now()
 	//land.Root.SplitDownTo(land, 10)
 
-	newTris := terrain.NewCollector(65000, 500000)
-	device.LeafCollector.Reset()
+	newTris := terrain.NewTriCollector(65500)
+	device.leafCollector.Reset()
 	device.sceneNo++
 	//split the triangle into 4 recursively - collect leafTriangles (those deep enough for this PoV) and plants
 	//some newTris will be in device.collector
@@ -212,22 +216,22 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	triCount := 0
 	land.Root.CountTris(&triCount)
 	log.Logit("Land starts with  ", triCount, " tris")
-	land.Root.UnPatch() //deletes all patched triangles - they will be remade as needed
 
-	plants := terrain.NewCollector(0, 1000000)
-	land.Root.SplitIfNeeded(device.Id, land, camPos, camDir, 0.4, device.LeafCollector, plants, newTris)
+	land.Root.SplitIfNeeded(device.Id, land, camPos, camDir, 0.4, device.leafCollector, newTris, device.touchedVerts)
 	log.Logit("splitting to focus took", time.Since(ts).Milliseconds(), "ms")
 
 	triCount = 0
 	land.Root.CountTris(&triCount)
 	log.Logit("Land now has ", triCount, " tris")
-	log.Logit(device.LeafCollector.LeafCount, " leaf tris collected for POV", newTris.TriCount, " are new.")
-	log.Logit("Collected ", plants.PlantCount, " plants")
+	log.Logit(device.leafCollector.LeafCount, " leaf tris collected for POV", newTris.TriCount, " are new.")
 
 	ts = time.Now()
 
-	//note some patches are patched - so patched may contain some non leaf triangles
-	patched := device.LeafCollector.PatchTriangles(land)
+	//note some patches are patched - so patched may contain some non terminal leaf triangles
+
+	device.touchedVerts.Reset()
+	device.patched.Reset()
+	device.leafCollector.PatchTriangles(device.Camera.Position, land, device.patched, device.touchedVerts)
 
 	log.Logit("patch took", time.Since(ts).Milliseconds(), "ms")
 
@@ -263,14 +267,17 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//land.Flood(-10000)
 
 	ts = time.Now()
-	if device.sceneNo < 5 {
-		land.Rain(0.1)
+	if device.sceneNo < 2 {
+		land.Rain(1)
 	}
-	land.Flow()
+	if device.sceneNo < 20 {
+		land.Flow()
+	}
+
 	log.Logit("water flow took", time.Since(ts).Milliseconds(), "ms")
 
 	ts = time.Now()
-	land.SendWater(patched, camPos, response)
+	land.SendWater(device.patched, camPos, response, device.wireframe)
 	log.Logit("water mesh took", time.Since(ts).Milliseconds(), "ms")
 
 	//groundPosition, groundTriangle := land.Root.VprobeLand(camPos)
@@ -312,34 +319,38 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//runwayMesh.WriteTo(message, 1)
 
 	//if t.Culled || t.Scorched || t.OnOrUnderWater() {
-	isLand := func(t *terrain.LeafTri, mesh *terrain.TriMesh) bool {
-
-		if t.Scorched || t.IsSubmerged(mesh) {
-			return false
-		}
-
-		return true
-	}
 
 	ts = time.Now()
 	//TODO REINSTATE (But is causes poly contains checks to screw up)
 	//land.Root.Scorch(game.fire) //update the scorched state of non culled leaf triangles
 	log.Logit("scorching took", time.Since(ts).Milliseconds(), "ms")
 
-	ts = time.Now()
-	smallLandMesh := land.ToSimpleMesh(patched, 2, game.Fire, "land", false, isLand, camPos)
-	log.Logit("converted land mesh in", time.Since(ts).Milliseconds(), "ms")
-	log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
+	land.SendLand(device.patched, device.touchedVerts, camPos, response, device.wireframe)
+	// ts = time.Now()
+	// smallLandMesh := land.ToSimpleMesh(device.patched, device.touchedVerts, 2, game.Fire, "land", false, isLand, camPos)
+	// log.Logit("converted land mesh in", time.Since(ts).Milliseconds(), "ms")
+	// log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
+	// smallLandMesh.WriteGeometryTo(response, 1, 0)
 
-	///scorchedLand := land.Root.ToSimpleMesh(56, land, game.Fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
-	wireframe := land.ToSimpleMesh(patched, 32, game.Fire, "whiteWires", false, isLand, camPos)
+	// ///scorchedLand := land.Root.ToSimpleMesh(56, land, game.Fire, "scorched", false, func(t *terrain.Tri) bool { return t.Scorched })
+	// ///scorchedLand.WriteTo(message, 1)
 
-	smallLandMesh.WriteTo(response, 1)
-	///scorchedLand.WriteTo(message, 1)
-	wireframe.WriteTo(response, 1)
+	// wireframe := land.ToSimpleMesh(device.patched, device.touchedVerts, 32, game.Fire, "whiteWires", false, isLand, camPos)
+	// wireframe.WriteGeometryTo(response, 1, 0)
+
 	response.Align() //align to dword boundary
 	log.Logit("response (before trees) is ", response.Buff.Len(), " bytes long")
-	//land.GetTreesInto(response)
+
+	near := msg.NewMsg(msg.PositionInstances, uint16(103), byte(0))
+
+	land.GetPlants(land.Root, plant.Oak, near, &device.Camera.Position, 3000*3000, device.Id)
+	terminator := float32(math.Inf(1))             //use positive infinity as terminator
+	near.Write(terminator, terminator, terminator) //Terminator for vectors
+	//far.Write(terminator, terminator, terminator)
+
+	device.Send(near)
+
+	log.Logit("Near trees msg size:", near.Buff.Len(), " bytes")
 
 	log.Logit("response is ", response.Buff.Len(), " bytes long")
 }
@@ -447,7 +458,9 @@ func New(id uint32, name string,
 		treeTris:          make([]*terrain.Tri, (maxFarTrees/4 + maxNearTrees)), //tris suitable for tree placement (level 10)
 		nearTreePositions: make([]float32, maxNearTrees*3),                      //x,z positions of near trees (centres of tree tris) - ready for sending
 		farTreePositions:  make([]float32, maxFarTrees*3),                       //x,z positions of far trees (centres of tree tris) - ready for sending
-		LeafCollector:     terrain.NewLeafCollector(500000, id),
+		leafCollector:     terrain.NewLeafCollector(100000, id),
+		patched:           terrain.NewLeafCollector(100000, id),
+		touchedVerts:      terrain.NewTouchedVerts(100000),
 
 		//farTreeBillBoardMesh: mesh.New(105, "tree", 8000, 2000), //2 faces per tree - room for 1k trees
 	}
@@ -564,7 +577,7 @@ func (dev *Device) GetFlames(land *terrain.TriMesh, fire *terrain.TriMesh, messa
 	fire.Root.GetFlames(dev.Id, land, fire, flameMesh, dev.Camera, tcs)
 
 	if flameMesh.FaceCount() > 0 {
-		flameMesh.WriteTo(message, 1)
+		flameMesh.WriteGeometryTo(message, 1, 0)
 	}
 
 }
@@ -943,7 +956,10 @@ func (dev *Device) MoveCamera(game *game.Game) {
 	}
 
 	if dev.keys["w"] {
-		dir.Z = speed
+		if !dev.keys["ctrl"] {
+
+			dir.Z = speed
+		}
 	}
 	if dev.keys["s"] {
 		dir.Z = -speed
@@ -1093,11 +1109,20 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 
 				if land != nil {
 					landProber := terrain.NewProber(dev.Id, land, dev.Camera.Position, false)
+					landProber.Target(dev.Camera.FarPos)
+
 					land.Root.Probe(landProber)
 					//log.logit (landProber.String())
 					if landProber.NearestTri != nil {
-						msg := landProber.NearestTri.EdgesAsMsg(land)
-						landProber.NearestTri.Parent.PrismEdges(msg)  //show the prism Hierarchy
+						msg := msg.NewMsg(msg.Vectors)
+						landProber.NearestTri.WriteEdgesInto(msg, land, colors.Magenta)
+						landProber.NearestTri.Parent.WritePrismHeirarchyEdgesInto(msg) //show the prism Hierarchy
+
+						if landProber.HitWater {
+							//send the edges of the water leaf triangle too
+							log.Logit("water hit")
+							landProber.NearestLeaf.WaterPoly.WriteEdgesInto(msg, colors.Cyan)
+						}
 						terminator := float32(math.Inf(1))            //use positive infinity as terminator
 						msg.Write(terminator, terminator, terminator) //Terminator for vectors
 
@@ -1288,10 +1313,25 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 
 		switch kl {
 		case "t":
-			if dev.currentThing == nil {
-				dev.currentThing = gm.Things[0]
-			}
-			dev.setMode(adding)
+
+			gm.Land.TextureX(dev.touchedVerts)
+			gm.Land.SendLand(dev.patched, dev.touchedVerts, dev.Camera.Position, response, dev.wireframe)
+			dev.Send(response)
+
+			// isLand := func(t *terrain.LeafTri, mesh *terrain.TriMesh) bool {
+			// 	if t.Scorched || t.IsSubmerged(mesh) {
+			// 		return false
+			// 	}
+			// 	return true
+			// }
+
+			// smallLandMesh := gm.Land.ToSimpleMesh(dev.patched, dev.touchedVerts, 2, "land", false, isLand, dev.Camera.Position)
+			// smallLandMesh.WriteGeometryTo(response, 1, 0)
+
+			// if dev.currentThing == nil {
+			// 	dev.currentThing = gm.Things[0]
+			// }
+			// dev.setMode(adding)
 		case "y": //Tidy - permanenty snaps reflection halves together and removes unreferenced masses
 			dev.SnapMasses(gm.Things)
 			dev.Tidy(gm)
@@ -1308,6 +1348,13 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 
 		case "e":
 			dev.setMode(editing)
+		case "f":
+			//gm.Land.Rain(0.1) //10cm of rain
+			gm.Land.Flow()
+
+			gm.Land.SendWater(dev.patched, dev.Camera.Position, response, dev.wireframe)
+			log.Logit("flowed water")
+			dev.Send(response)
 		}
 
 		if dev.keys["Control"] && kl == "d" { //deselect all
@@ -1346,17 +1393,34 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 			} else {
 				dev.follow = !dev.follow
 			}
+		} else if kl == "`" {
+			dev.wireframe = !dev.wireframe
+			response.Write(msg.RemoveMesh, uint16(32)) //remove the land and water wireframes
+			response.Write(msg.RemoveMesh, uint16(5))
+
+			gm.Land.SendLand(dev.patched, dev.touchedVerts, dev.Camera.Position, response, dev.wireframe)
+			gm.Land.SendWater(dev.patched, dev.Camera.Position, response, dev.wireframe)
+			dev.Send(response)
+
 		} else if kl == "r" {
 			if dev.keys["Control"] {
 				//rotate thing 90 degrees more
 				dev.currentThing.MeshRotation.AddIn(dev.currentThing.MeshRotation.Normalise().Multiply(math.Pi / 2))
 			} else {
 				//right mass  (x axis mass) of thing mesh
+
+				//Refresh land
+				message := msg.Empty()
+				dev.MakeLand(gm, message)
+				dev.Send(message)
+
 				if dev.checkHighlitMass() {
 					dev.currentThing.Rm = dev.highlit.mass
 				}
 			}
-			dev.sendThings([]*thing.Thing{dev.currentThing})
+			if dev.currentThing != nil {
+				dev.sendThings([]*thing.Thing{dev.currentThing})
+			}
 
 		} else if kl == "g" { //align the grid
 			if dev.keys["Control"] { //CTRL-G - toggle gravity
@@ -1871,7 +1935,7 @@ func (dev *Device) ProcessBinaryMsg(ibm *msg.Msg) (*errorplus.Event, *Device) {
 		runwayVec := vec.NewVec3(1000, 0, 1000)
 		newGame.SetRunway(runwayPos, runwayVec, 40)
 
-		newGame.Ignite(vec.NewVec3(10, 0, -1000)) //note the Y position has no effect
+		// REINSTATE newGame.Ignite(vec.NewVec3(10, 0, -1000)) //note the Y position has no effect
 
 		//Plough the runway and set the start and end heights
 		// ogm := msg.Empty()
@@ -1993,22 +2057,25 @@ func (dev *Device) startIn(game *game.Game) {
 	dev.SendLabelSets()
 	dev.SendMasses(game.Masses)
 
-	treeMesh := plant.GrowTree(100) //mesh id
+	for i, age := range []int{20, 100, 120, 140} {
+		treeMesh := plant.GrowTree(100+uint16(i), float64(age)) //mesh id
 
-	tm := msg.Empty()
-	treeMesh.WriteTo(tm, maxNearTrees) //prep for 500 near trees
-	dev.Send(tm)                       //send the tree mesh
+		log.Logit("tree mesh for age", age, "has", treeMesh.VertCount(), "vertices and", treeMesh.FaceCount(), "faces")
+		tm := msg.Empty()
+		treeMesh.WriteGeometryTo(tm, maxNearTrees, maxFarTrees) //prep for 500 near trees (of each age)
+		dev.Send(tm)                                            //send the tree mesh
+	}
 
-	bbm := msg.Empty()
-	qbb := mesh.New(105, "tree", 4, 2)                               //quad billboard
-	qbb.AddVert(vec.NewVec3(-.5, 0, 0), vec.NewVec3(0, 0, -1), 0, 0) //BL
-	qbb.AddVert(vec.NewVec3(.5, 0, 0), vec.NewVec3(0, 0, -1), 1, 0)  //BR
-	qbb.AddVert(vec.NewVec3(.5, 1, 0), vec.NewVec3(0, 0, -1), 1, 1)  //TR
-	qbb.AddVert(vec.NewVec3(-.5, 1, 0), vec.NewVec3(0, 0, -1), 0, 1) //TL
-	qbb.AddFace(0, 1, 2)
-	qbb.AddFace(0, 2, 3)
-	qbb.WriteTo(bbm, maxFarTrees) //prep for 5000 far (billboarded) trees
-	dev.Send(bbm)
+	// bbm := msg.Empty()
+	// qbb := mesh.New(105, "none", 4, 2)                               //quad billboard
+	// qbb.AddVert(vec.NewVec3(-.5, 0, 0), vec.NewVec3(0, 0, -1), 0, 0) //BL
+	// qbb.AddVert(vec.NewVec3(.5, 0, 0), vec.NewVec3(0, 0, -1), 1, 0)  //BR
+	// qbb.AddVert(vec.NewVec3(.5, 1, 0), vec.NewVec3(0, 0, -1), 1, 1)  //TR
+	// qbb.AddVert(vec.NewVec3(-.5, 1, 0), vec.NewVec3(0, 0, -1), 0, 1) //TL
+	// qbb.AddFace(0, 1, 2)
+	// qbb.AddFace(0, 2, 3)
+	// qbb.WriteGeometryTo(bbm, 0) //prep for 5000 far (billboarded) trees
+	// dev.Send(bbm)
 
 	dev.primaryControls = dev.Owner
 	dev.sendGameId(game.Id) //game id starts it running

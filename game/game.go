@@ -51,7 +51,23 @@ func New(id uint32, name string) *Game {
 
 	landSize := 10000.0
 	landHeight := 400.0
-	kinks := []float64{1.0, 0.8, 1.0, 0.5, 0.25, 0.125, 1.0 / 16, 1.0 / 32, 1.0 / 64, 1.0 / 128, 1.0 / 256, 1.0 / 512, 1.0 / 1024, 1.0 / 2048, 1.0 / 4096, 1.0 / 8192} //, 1.0 / 16384} //, 1.0 / 32768, 1.0 / 65536} //how much to pull down the midpoint at each level of recursion
+	kinks := []float64{
+		1.0,
+		0.8,
+		1.0,
+		0.5,
+		0.25,
+		0.125,
+		1.0 / 16,
+		1.0 / 32,
+		1.0 / 64,
+		1.0 / 128,
+		1.0 / 256,
+		1.0 / 512,
+		1.0 / 1024,
+		1.0 / 2048,
+		1.0 / 4096,
+		1.0 / 8192} //, 1.0 / 16384} //, 1.0 / 32768, 1.0 / 65536} //how much to pull down the midpoint at each level of recursion
 
 	game := &Game{
 		Id:   id,
@@ -265,13 +281,13 @@ func (game *Game) resolvePenetrations() {
 				}
 			}
 
-			hit, where, tri := game.Land.Root.VprobeLand(m.P, game.Land, m.Owner)
+			hit, where, _, leaf := game.Land.Root.VprobeLand(m.P, game.Land, m.Owner)
 
 			if hit {
 				penDepth := where.Y - (m.P.Y - m.R)
 
 				if penDepth > 0 {
-					m.ResolvePenetration(penDepth, where, tri)
+					m.ResolvePenetration(game.Land, penDepth, where, leaf)
 				}
 			}
 		}

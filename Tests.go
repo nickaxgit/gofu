@@ -72,7 +72,7 @@ func tests() {
 	somePoint := vec.NewVec3(0, 10, 0)
 	testFloat("Plane distance from point (on plane)", func() float64 { return p1.DistanceFrom(somePoint) }, 10, "plane (point on plane) distance wrong")
 
-	testBool("Poly probe", func() bool {
+	testBool("Poly prob at vertex", func() bool {
 		poly := poly.NewConvexPoly()
 		poly.AddPointAt(0, -1, 10)
 		poly.AddPointAt(10, 2, 0)
@@ -81,9 +81,9 @@ func tests() {
 		hit, _ := poly.Probe(ray)
 		return hit
 
-	}, true, "poly vertex probe failed")
+	}, true, "poly at vertex probe failed")
 
-	testBool("Poly probe", func() bool {
+	testBool("Poly probe outside ", func() bool {
 		poly := poly.NewConvexPoly()
 		poly.AddPointAt(0, -1, 10)
 		poly.AddPointAt(10, 2, 0)
@@ -92,7 +92,17 @@ func tests() {
 		hit, _ := poly.Probe(ray)
 		return hit
 
-	}, false, "poly extended edge vertex probe failed (should be outside)")
+	}, false, "poly extended edge probe failed (should be outside)")
+
+	testBool("Poly probe inside", func() bool {
+		poly := poly.NewConvexPoly()
+		poly.AddPointAt(0, -1, 10)
+		poly.AddPointAt(10, 2, 0)
+		poly.AddPointAt(-10, 3, 0)
+		ray := ray.New(vec.NewVec3(5, 10000, 1), vec.NewVec3(3, -10000, 2))
+		hit, _ := poly.Probe(ray)
+		return hit
+	}, true, "Poly probe inside")
 
 	testBool("Poly contains2D - 2", func() bool {
 		ray := ray.New(vec.NewVec3(-14, 10000, 14), vec.NewVec3(-14, -10000, 14))

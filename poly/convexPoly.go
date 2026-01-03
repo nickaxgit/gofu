@@ -1,11 +1,14 @@
 package poly
 
 import (
+	"math"
+
+	"github.com/nickax/gofu/colors"
+	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/plane"
 	"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/vec"
-	"math"
 	//	"strconv"
 )
 
@@ -93,6 +96,19 @@ func NewConvexPolyFromVecs(pts []vec.V3) *ConvexPoly {
 	}
 
 	return poly
+}
+
+func (poly *ConvexPoly) WriteEdgesInto(msg *msg.Msg, color colors.Color) {
+
+	for i := range poly.P {
+		a := poly.P[i]
+		b := poly.P[(i+1)%len(poly.P)]
+
+		msg.Write(
+			a, b, color,
+		)
+	}
+
 }
 
 func (poly *ConvexPoly) fromEdge(p vec.V3, r float64) float64 {
@@ -228,7 +244,7 @@ func (poly *ConvexPoly) Contains3D(p vec.V3) bool {
 
 		cpn := edge.Cross(d).Dot(normal)
 
-		if cpn < -poly.epsilon {
+		if cpn < -poly.epsilon {		
 			return false
 		}
 	}

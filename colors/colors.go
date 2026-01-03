@@ -1,19 +1,24 @@
 package colors
 
 //vga colours
-var Black = uint8(0)
-var Blue = uint8(1)
-var Green = uint8(2)
-var Cyan = uint8(3)
-var Red = uint8(4)
-var Magenta = uint8(5)
-var Orange = uint8(6)
-var LightGray = uint8(7)
-var DarkGray = uint8(8)
-var LightBlue = uint8(9)
-var LightGreen = uint8(10)
-var LightCyan = uint8(11)
-var LightRed = uint8(12)
-var LightMagenta = uint8(13)
-var Yellow = uint8(14)
-var White = uint8(15)
+
+type Color byte
+
+const (
+	Black        Color = 0
+	Blue         Color = 1
+	Green        Color = 2
+	Cyan         Color = 3
+	Red          Color = 4
+	Magenta      Color = 5
+	Orange       Color = 6
+	LightGray    Color = 7
+	DarkGray     Color = 8
+	LightBlue    Color = 9
+	LightGreen   Color = 10
+	LightCyan    Color = 11
+	LightRed     Color = 12
+	LightMagenta Color = 13
+	Yellow       Color = 14
+	White        Color = 15
+)

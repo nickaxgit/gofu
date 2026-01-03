@@ -5,6 +5,7 @@ import (
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/vec"
 	"math"
+	"github.com/nickax/gofu/log"
 )
 
 type SimpleMesh struct {
@@ -137,6 +138,12 @@ func (sm *SimpleMesh) Billboard(p vec.V3, up vec.V3, camPos vec.V3, widthBottom 
 // 	return m
 // }
 
+func (m *SimpleMesh) Mutate(id uint16, materialName string) *SimpleMesh {
+	m.id = id
+	m.materialName = materialName
+	return m
+}
+
 func NewFilledSimpleMesh(id uint16, p []float32, n []float32, uv []float32, fi []uint16, materialName string) *SimpleMesh {
 
 	if len(fi)%3 != 0 {
@@ -213,7 +220,7 @@ func (sm *SimpleMesh) check() {
 	}
 }
 
-func (sm *SimpleMesh) WriteTo(message *msg.Msg, maxInstances uint16) {
+func (sm *SimpleMesh) WriteGeometryTo(message *msg.Msg, maxInstances uint16, maxBillBoards uint16) {
 
 	sm.check()
 
@@ -244,9 +251,18 @@ func (sm *SimpleMesh) WriteTo(message *msg.Msg, maxInstances uint16) {
 		byte(123),                //check byte (magic number)
 		sm.materialName,
 		maxInstances,
+		maxBillBoards,
 	)
 }
 
+func (sm *SimpleMesh) Finish(){
+	sm.fi =sm.fi[0:sm.fwp*3]
+	sm.p=sm.p[0:sm.vwp*3]
+	sm.n=sm.n[0:sm.vwp*3]
+	sm.uv=sm.uv[0:sm.vwp*2]
+	log.Logit("Finished simple mesh", sm.id, " with ", sm.vwp, " verts and ", sm.fwp, " faces")
+
+}
 // func (sm *SimpleMesh) ToMsg(maxInstances uint16) *msg.Msg {
 
 // 	msg := msg.NewMsg(msg.Mesh, sm.id,

@@ -4,17 +4,15 @@ import (
 	"math"
 
 	// "github.com/nickax/gofu/game/msg"
-	// "github.com/nickax/gofu/log"
+	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/poly"
 	"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/vec"
 )
 
-type Collector struct {
-	triangles  []*Tri
-	plants     []Plant
-	TriCount   int
-	PlantCount int
+type TriCollector struct {
+	triangles []*Tri
+	TriCount  int
 }
 
 type LeafTri struct {
@@ -25,43 +23,72 @@ type LeafTri struct {
 	Scorched   bool
 	centre     vec.V3
 	poly       *poly.ConvexPoly // made/cached JIT
+	WaterPoly  *poly.ConvexPoly // made/cached JIT
 }
 
-func (lt *LeafTri) ToConvexPoly(mesh *TriMesh) *poly.ConvexPoly {
-	a := mesh.verts[lt.vi[0]].p
-	b := mesh.verts[lt.vi[1]].p
-	c := mesh.verts[lt.vi[2]].p
+func (lt *LeafTri) ToConvexPoly(mesh *TriMesh, asWater bool) *poly.ConvexPoly {
+
+	v0 := mesh.verts[lt.vi[0]]
+	v1 := mesh.verts[lt.vi[1]]
+	v2 := mesh.verts[lt.vi[2]]
+
+	a := v0.p
+	b := v1.p
+	c := v2.p
+
+	if asWater {
+		a.Y = v0.wl
+		b.Y = v1.wl
+		c.Y = v2.wl
+	}
 	return poly.NewConvexPolyFromVecs([]vec.V3{a, b, c})
 }
 
-func (lt *LeafTri) Probe(ray ray.Ray, mesh *TriMesh) (bool, vec.V3) {
+func (lt *LeafTri) Probe(ray ray.Ray, mesh *TriMesh, water int) (bool, vec.V3, *LeafTri) {
 
 	if lt.poly == nil {
-		lt.poly = lt.ToConvexPoly(mesh) //cache it
+		lt.poly = lt.ToConvexPoly(mesh, false) //cache it
+	}
+	if water == 1 {
+		if lt.WaterPoly == nil {
+			lt.WaterPoly = lt.ToConvexPoly(mesh, true) //cache it
+		}
 	}
 
 	hit, where := lt.poly.Probe(ray)
 
 	if hit {
 		if lt.childCount == 0 {
-			return true, where
+			return true, where, lt
 		}
 
 		for i := range lt.childCount {
-			childHit, childWhere := lt.children[i].Probe(ray, mesh)
+			child := lt.children[i]
+			childHit, childWhere, childLeaf := child.Probe(ray, mesh, water)
 			if childHit {
-				return true, childWhere
+				return true, childWhere, childLeaf
 			}
 		}
-		return hit, where //return the hit on the parent if we somehow missed all children
+		//log.Logit("hit parent but missed all children")
+		//hit parent but missed all children - can/does happen when a leaf triangle is kinked
+		return false, vec.NewVec3(0, 0, 0), nil
+
+		//return hit, where, lt //return the hit on the parent if we somehow missed all children
 	}
 
-	return false, vec.NewVec3(0, 0, 0)
+	return false, vec.NewVec3(0, 0, 0), nil
 }
 
-func NewLeafTri(a, b, c uint32, scorched bool) *LeafTri {
+func NewLeafTri(a, b, c uint32, scorched bool, mesh *TriMesh) *LeafTri {
 
-	return &LeafTri{vi: [3]uint32{a, b, c}, normal: vec.NewVec3(0, 0, 0), Scorched: scorched}
+	//initialise normals  pointing down to indicate uncalculated
+	lt := LeafTri{vi: [3]uint32{a, b, c}, normal: vec.NewVec3(0, 0, 0), Scorched: scorched}
+
+	//lt.CacheNormal(mesh)
+	// if lt.normal.Y < 0 {
+	// 	panic("leaf tri with downward normal created")
+	// }
+	return &lt
 }
 
 func (leaf *LeafTri) CacheCentre(mesh *TriMesh) vec.V3 {
@@ -74,31 +101,30 @@ func (leaf *LeafTri) CacheCentre(mesh *TriMesh) vec.V3 {
 }
 
 type LeafCollector struct {
-	DeviceId     uint32
-	TouchedVerts *Contacts
-	leaves       []*LeafTri
-	LeafCount    int
+	DeviceId  uint32
+	leaves    []*LeafTri
+	LeafCount int
 }
 
 func NewLeafCollector(tris int, deviceId uint32) *LeafCollector {
-	return &LeafCollector{LeafCount: 0, leaves: make([]*LeafTri, tris), TouchedVerts: NewContacts(tris), DeviceId: deviceId}
+	return &LeafCollector{LeafCount: 0, leaves: make([]*LeafTri, tris), DeviceId: deviceId}
 }
 
-func (lc *LeafCollector) Reset() {
-	lc.LeafCount = 0
-	clear(lc.leaves)
+func (in *LeafCollector) Reset() {
+	in.LeafCount = 0
+	clear(in.leaves)
 }
 
-func (lc *LeafCollector) AddLeaf(t *LeafTri) {
-	lc.leaves[lc.LeafCount] = t
-	lc.LeafCount++
+func (in *LeafCollector) AddLeaf(t *LeafTri) {
+	in.leaves[in.LeafCount] = t
+	in.LeafCount++
 }
 
-func NewCollector(tris, plants int) *Collector {
-	return &Collector{TriCount: 0, PlantCount: 0, triangles: make([]*Tri, tris), plants: make([]Plant, plants)}
+func NewTriCollector(tris int) *TriCollector {
+	return &TriCollector{TriCount: 0, triangles: make([]*Tri, tris)}
 }
 
-func (c *Collector) BubbleVerticalExtentsFromLeaves(mesh *TriMesh) {
+func (c *TriCollector) BubbleVerticalExtentsFromLeaves(mesh *TriMesh) {
 
 	for i := 0; i < c.TriCount; i++ {
 		tri := c.triangles[i]
@@ -108,7 +134,7 @@ func (c *Collector) BubbleVerticalExtentsFromLeaves(mesh *TriMesh) {
 	}
 }
 
-func (c *Collector) CheckPrisms() {
+func (c *TriCollector) CheckPrisms() {
 
 	for i := 0; i < c.TriCount; i++ {
 		t := c.triangles[i]
@@ -120,7 +146,7 @@ func (c *Collector) CheckPrisms() {
 	}
 }
 
-func (c *Collector) MakePrisms(mesh *TriMesh) {
+func (c *TriCollector) MakePrisms(mesh *TriMesh) {
 
 	for i := 0; i < c.TriCount; i++ {
 		t := c.triangles[i]
@@ -131,115 +157,51 @@ func (c *Collector) MakePrisms(mesh *TriMesh) {
 
 }
 
-// func (c *Collector) Flood(mesh *TriMesh, waterLevel float64) {
-// 	for i := 0; i < c.TriCount; i++ {
-// 		v := mesh.verts[c.triangles[i].vi[0]]
-// 		if v.p.Y <= waterLevel {
-// 			v.wl = waterLevel
+func (m *TriMesh) TextureX(tv *TouchedVerts) {
 
-// 		} else {
-// 			v.wl = -100000 //high and dry
-// 		}
-// 	}
-// }
+	for v := range m.verts {
+		m.verts[v].uv.X = -1 //mark all as untextured
+	}
 
-// FloodAndDrain - adds the water surface meshes (to the msg)
-// func (tris *Collector) FloodAndDrain(land *TriMesh, waterlines []float64, response *msg.Msg, campos vec.V3) {
-// 	log.Logit("flood and drain", tris.TriCount)
-// 	if land.flooding {
-// 		panic("concurrent flooding detected!")
-// 	}
-// 	defer func() { land.flooding = false }()
-// 	land.flooding = true
+	count := 0
+	m.verts[0].uv.X = 0 //seed vert
+	textureX(m, 0, tv, 0, &count)
+	log.Logit("textured verts", count)
+}
 
-// 	//snapped := 0
-// 	//land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
+//call this on some central onscreen vert and it will wrap the texture x coords outwards from there based on the edge lengths in world space
+func textureX(m *TriMesh, vi uint32, touchedVerts *TouchedVerts, tcx float64, count *int) {
 
-// 	//snapped = 0
-// 	//land.Root.shoreLines(waterlines, &snapped) //snaps the lowest vert of triangles spanning the waterline(s) to the waterline
+	//touchedVerts is an array of maps - it gives us a list of all the leaf tris touching a vert
+	touches := touchedVerts.touches[vi]
 
-// 	for _, v := range land.verts {
-// 		v.wl = -5000 //reset all waterlevels
-// 	}
+	v := m.verts[vi]
 
-// 	for i, wl := range waterlines { //work DOWN through the waterlines
+	pp := v.p
+	for lt := range touches {
 
-// 		//land.Flood(wl) //set the waterlevel of all land below wl to wl (anything above is set to wl=-1000000
-// 		tris.Flood(land, wl) //MAYBE AT FAULT ?
+		if lt.childCount == 0 {
+			for _, vti := range lt.vi {
+				nv := m.verts[vti] //next vert
 
-// 		if i != len(waterlines)-1 { //Don't drain the sea
-// 			for lake := 0; lake < 10; lake++ {
-// 				drained := false
-// 				for _, v := range land.verts {
-// 					//for j := 0; j < tris.TriCount; j++ {
-// 					//	v := land.verts[tris.triangles[j].vi[0]]
-// 					if v.wl > v.p.Y+300 {
-// 						count := 0
-// 						//land.drain(v, wl, &count) //all deep lakes at this WL are drained to -1000000
-// 						drain(land, v, wl, &count)
+				if nv.uv.X == -1 {
+					hop := pp.Sub(nv.p)
+					hop.Y = 0 //project onto the xz plane
 
-// 						log.Logit("drained", count, "verts at ", wl)
-// 						drained = true
+					dx := hop.Dot(lt.CacheNormal(m).Cross(vec.NewVec3(0, 1, 0)))
+					tcx += dx / 400
+					nv.uv.X = tcx
+					*count++
+					textureX(m, vti, touchedVerts, tcx, count) //recurse
 
-// 						break
-// 					}
-// 				}
-// 				if !drained {
-// 					log.Logit("no more lakes to drain at wl", wl)
-// 					break
-// 				}
-// 			}
-// 		}
+				}
+			}
+		}
 
-// 		funcIsWater := func(t *Tri, m *TriMesh) bool { return t.OnOrUnderWater(m) }
-// 		waterMesh := land.ToSimpleMesh(tris, uint16(4+i), nil, "water", true, funcIsWater, campos)
+	}
+}
 
-// 		if waterMesh.FaceCount() > 0 {
-// 			log.Logit("water mesh at wl", wl, " has ", waterMesh.FaceCount(), " faces and ", waterMesh.VertCount(), " verts")
-// 			waterMesh.WriteTo(response, 1)
-// 		} else {
-// 			log.Logit("water mesh at wl", wl, i, " is empty")
-// 		}
-
-// 	}
-
-// }
-
-// func drain(m *TriMesh, v *vert, waterLevel float64, count *int) {
-
-// 	deep := -5000.0
-// 	if len(v.touches) == 0 {
-// 		panic("vert touches no faces")
-// 	}
-
-// 	for f := range v.touches {
-
-// 		if f.childCount == 0 {
-// 			a := m.verts[f.vi[0]]
-// 			b := m.verts[f.vi[1]]
-// 			c := m.verts[f.vi[2]]
-
-// 			if a != v && a.wl == waterLevel {
-// 				a.wl = deep
-// 				*count++
-// 				drain(m, a, waterLevel, count)
-// 			}
-// 			if b != v && b.wl == waterLevel {
-// 				b.wl = deep
-// 				*count++
-// 				drain(m, b, waterLevel, count)
-// 			}
-// 			if c != v && c.wl == waterLevel {
-// 				c.wl = deep
-// 				*count++
-// 				drain(m, c, waterLevel, count)
-// 			}
-// 		}
-
-// 	}
-// }
-
-func (leaf *LeafTri) PatchInto(final *LeafCollector, mesh *TriMesh, contacts *Contacts) {
+func (leaf *LeafTri) PatchInto(camPos vec.V3, final *LeafCollector, mesh *TriMesh, touchedVerts *TouchedVerts, depth int) {
 
 	for j := range 3 {
 		ai := leaf.vi[j]
@@ -249,11 +211,15 @@ func (leaf *LeafTri) PatchInto(final *LeafCollector, mesh *TriMesh, contacts *Co
 		mi := mesh.midpoint(bi, ci) //looks both ways for a midpoint
 
 		if mi != math.MaxUint32 { //is there a midpoint(on the opposite edge) ?
-			leaf.splitIn2(mesh, contacts, ai, bi, ci, mi)
+			leaf.removeFrom(touchedVerts)
+			leaf.splitIn2(mesh, ai, bi, ci, mi)
 			a := leaf.children[0]
 			b := leaf.children[1]
-			a.PatchInto(final, mesh, contacts)
-			b.PatchInto(final, mesh, contacts)
+			a.addTo(touchedVerts)
+			b.addTo(touchedVerts)
+
+			a.PatchInto(camPos, final, mesh, touchedVerts, depth+1)
+			b.PatchInto(camPos, final, mesh, touchedVerts, depth+1)
 			return
 		}
 	}
@@ -262,43 +228,41 @@ func (leaf *LeafTri) PatchInto(final *LeafCollector, mesh *TriMesh, contacts *Co
 	if leaf.childCount > 0 {
 		panic("leaf with children being added to final")
 	}
-	final.AddLeaf(leaf)
+
+	//backface culling (don't ever backface cull under water tris)
+	camPos.Y += 3 //pretend we're 10 ft taller
+	if leaf.OnOrUnderWater(mesh) || leaf.CacheCentre(mesh).Sub(camPos).Dot(leaf.CacheNormal(mesh)) <= 0 {
+		final.AddLeaf(leaf)
+	}
 
 }
 
 // PatchTriangles - Bridges adjoining depths - splitting triangles in two (sometimes recursively)
-func (c *LeafCollector) PatchTriangles(mesh *TriMesh) *LeafCollector {
+// iterates over top level leaves (bottom level triangle)
+// also fills touchedVerts with all verts touched by 'final' patch triangles
+func (in *LeafCollector) PatchTriangles(camPos vec.V3, mesh *TriMesh, out *LeafCollector, touchedVerts *TouchedVerts) {
 
-	final := NewLeafCollector(c.LeafCount*3, c.DeviceId)
+	//	final := NewLeafCollector(c.LeafCount*3, c.DeviceId)
 
-	for i := range c.LeafCount {
+	for i := range in.LeafCount {
 
-		tri := c.leaves[i]
-		tri.addTo(c.TouchedVerts)
+		leaf := in.leaves[i]     //these are 'shallow copies' of the BLTs (as leafTris)
+		leaf.addTo(touchedVerts) //this will be undone if we split the leaf
 
-		tri.PatchInto(final, mesh, c.TouchedVerts)
+		leaf.PatchInto(camPos, out, mesh, touchedVerts, 0) //this splits some leaves into fans
 
 	}
 
-	return final
+	//	return final //note - also mutates (which persist on the device)
 }
 
-func (c *Collector) Reset() {
+func (c *TriCollector) Reset() {
 	c.TriCount = 0
-	c.PlantCount = 0
 	//clear (c.plants) clearing plants is unnecessary - they are values not pointers
 	clear(c.triangles)
-
 }
 
-func (c *Collector) AddTri(t *Tri) {
+func (c *TriCollector) AddTri(t *Tri) {
 	c.triangles[c.TriCount] = t
 	c.TriCount++
-}
-
-func (c *Collector) AddPlants(p []Plant) {
-	for _, pl := range p {
-		c.plants[c.PlantCount] = pl
-		c.PlantCount++
-	}
 }

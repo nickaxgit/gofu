@@ -59,7 +59,7 @@ func (tri *Tri) GetFlames(deviceId uint32, lm *TriMesh, fm *TriMesh, intoMesh *m
 	if lm != nil && tri.FireInfo != nil && tri.FireInfo.flames > 0 { //fTri.allBLTsAlight() { //fTri.flames > 0 {
 
 		if tri.FireInfo.landDepth < 10 { //sampling at level 10 is 'good enough' for flame base
-			hit, p, t := lm.Root.VprobeLand(tri.Centre, lm, deviceId) //TODO - do once and cache - also normal (for slope)
+			hit, p, t, _ := lm.Root.VprobeLand(tri.Centre, lm, deviceId) //TODO - do once and cache - also normal (for slope)
 			if hit {
 				if t.Depth < 8 {
 					return 0

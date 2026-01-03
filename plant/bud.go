@@ -22,11 +22,11 @@ type segmentType struct {
 	name          string
 	buds          []*bud
 	tcs           mesh.Tcs
-	sides         int     //number of sides when making a tubular mesh
-	twistsFlat    float64 //tendacncy to twist such that the z axis is down (leaves)
-	droopTo       float64 //0 - angle to which sement want to droop 0 is horizontal -pi is weepeing, pi is pointing directly upwards (mares tails)
-	droopStrength float64 //how strongly the segment tends to its droop angle
-	girthAtDay    *curve.Curve
+	sides         int          //number of sides when making a tubular mesh
+	twistsFlat    *curve.Curve //tendacncy to twist such that the z axis is down (leaves)
+	droopTo       *curve.Curve //0 - angle to which sement want to droop 0 is horizontal -pi is weepeing, pi is pointing directly upwards (mares tails)
+	droopStrength *curve.Curve //how strongly the segment tends to its droop angle
+	radiusAtDay   *curve.Curve
 	lengthAtDay   *curve.Curve
 }
 
@@ -52,34 +52,41 @@ type segment struct { //of a plant/tree
 // 	return sm
 
 // }
-func GrowTree(meshId uint16) *mesh.SimpleMesh {
+func GrowTree(meshId uint16, daysOld float64) *mesh.SimpleMesh {
 
 	// segmentTypes:=make(map[string]*segmentType, 0)
 
-	leafCurve := curve.New(0, 0, 10, 1)               //grow to 30cm over 20 days
-	stalkLength := curve.New(0, 0, 20, 1.6, 100, 2)   //grow to 1 metre over 100 days
-	stalkGirth := curve.New(0, .001, 70, .2, 100, .5) //rapid initial girth growth, then slow down
+	pi := math.Pi
+	leafSize := curve.New(0, 0, 10, .2)                 //grow to 30cm over 20 days
+	stalkLength := curve.New(0, 0, 20, .4, 100, 1)      //grow to 1 metre over 100 days
+	stalkRadius := curve.New(0, .001, 70, .1, 100, .15) //rapid initial girth growth, then slow down
+	droopToward := curve.New(0, pi, 110, -pi/2)
+	droopStrength := curve.New(0, .5, 110, .2)
+	twistsFlat := curve.New(0, 0, 10, .9)
+	noTwistFlat := curve.New(0, 0, 10, 0)
 
-	stalk := NewSegmentType("stalk", mesh.NewTcs(0, 0, 1, 0.5), 8, 0, .25, 1, stalkGirth, stalkLength) //, 2, -math.Pi/4, .8, 1, nil, nil)
-	leaf := NewSegmentType("leaf", mesh.NewTcs(0, .5, 1, 1), 2, -math.Pi/2*1.2, .9, 0.0, leafCurve, leafCurve)
+	stalk := NewSegmentType("stalk", mesh.NewTcs(0, 0, .5, 0.5), 8, droopToward, droopStrength, noTwistFlat, stalkRadius, stalkLength) //, 2, -math.Pi/4, .8, 1, nil, nil)
+	leaf := NewSegmentType("leaf", mesh.NewTcs(0, .5, .5, 1), 2, droopToward, droopStrength, twistsFlat, leafSize, leafSize)
 
-	stalk.addBud(&bud{twist: math.Pi / 5, turn: math.Pi / 6, grows: []*segmentType{leaf, leaf, leaf, stalk, stalk, leaf, stalk, stalk, stalk}, sproutAge: 11})
+	stalk.addBud(&bud{twist: math.Pi / 5, turn: math.Pi / 6,
+		grows: []*segmentType{leaf, leaf, leaf, stalk, stalk, leaf, stalk, stalk, stalk}, sproutAge: 11})
 
-	stalk.addBud(&bud{twist: -.1, turn: -math.Pi / 5, grows: []*segmentType{leaf, leaf, leaf, stalk, leaf, stalk, stalk}, sproutAge: 9})
+	stalk.addBud(&bud{twist: -.1, turn: -math.Pi / 5, grows: []*segmentType{leaf, leaf, stalk, leaf, stalk, leaf, stalk, stalk}, sproutAge: 9})
 
 	//stalk.addBud(&bud{twist: .1, direction: NewVec3(0, 1, -1).normalise(), grows: stalk, sproutAge: 9})
 	// trunk:=segment{segType:segmentType{name:"stalk"}}
 
-	trunk := NewSegment(nil, vec.NewVec3(0, 0, 0), vec.NewVec3(1, 0, 0), stalk, stalkGirth.GetY(100)) //segment{segType: stalk, age: 0, children: make([]*segment, 0)}
+	trunk := NewSegment(nil, vec.NewVec3(0, 0, 0), vec.NewVec3(1, 0, 0), stalk, stalkRadius.GetY(100)) //segment{segType: stalk, age: 0, children: make([]*segment, 0)}
 
 	sprouts := 0
-	trunk.grow(120, &sprouts, 0)
+	trunk.grow(daysOld, &sprouts, 0)
 	log.Logit("sprouts", sprouts)
 
-	m := mesh.New(meshId, "atlas", 10000, 3000) //newLandMesh("tree", 20000, 10, 100, 100, kinks)
+	m := mesh.New(meshId, "atlas", 65000, 65000) //newLandMesh("tree", 20000, 10, 100, 100, kinks)
 	//trunk.getBillBoardedMesh(m)                             //uses the meshes internal vert and face write pointer (vwp,fwp)
 	trunk.getTubularMesh(m)
 
+	m.Finish()
 	return m
 
 }
@@ -131,20 +138,20 @@ func (seg *segment) grow(age float64, sprouts *int, depth int) {
 
 			sproutYaxis := yAxis.RotateAbout(xAxis, bud.turn) //elevation
 			//sproutYAxis = yAxis.rotateAbout(seg.xAxis, droop)
-			droopedAxis := up.RotateAbout(vec.NewVec3(xAxis.X, 0, xAxis.Z).Normalise(), sproutType.droopTo) //the 'natural' droop angle for this leaf
+			droopedAxis := up.RotateAbout(vec.NewVec3(xAxis.X, 0, xAxis.Z).Normalise(), sproutType.droopTo.GetY(budAge)) //the 'natural' droop angle for this leaf
 
-			sproutYaxis = sproutYaxis.Tween(droopedAxis, sproutType.droopStrength) //tend towrds the droop angle
+			sproutYaxis = sproutYaxis.Tween(droopedAxis, sproutType.droopStrength.GetY(budAge)) //tend towrds the droop angle
 			//sproutYAxis = sproutYAxis.rotateAbout(seg.yAxis, rotation+(rand.Float64()-.5)/10).normalise()
 			//sproutXAxis := seg.xAxis.rotateAbout(seg.yAxis, rotation+bud.twist+(rand.Float64()-.5)/5).normalise()
 
-			xAxis.Y *= sproutType.twistsFlat //tend to twist the leaves flat
+			xAxis.Y *= sproutType.twistsFlat.GetY(budAge) //tend to twist the leaves flat
 			xAxis = xAxis.Normalise()
 
 			lad := sproutType.lengthAtDay.GetY(budAge)
 			p := seg.p.Add(sproutYaxis.Multiply(lad))
 			//sproutType := bud.grows[rand.IntN(len(bud.grows))] //randomly pick one of the possible segment types for this bud
 
-			newSegment := NewSegment(seg, p, xAxis, sproutType, 0.5*sproutType.girthAtDay.GetY(budAge))
+			newSegment := NewSegment(seg, p, xAxis, sproutType, 0.5*sproutType.radiusAtDay.GetY(budAge))
 			seg.children = append(seg.children, newSegment)
 			newSegment.grow(budAge, sprouts, depth+1)
 
@@ -191,7 +198,7 @@ func NewSegment(ps *segment, p vec.V3, xAxis vec.V3, segType *segmentType, radiu
 
 }
 
-func NewSegmentType(name string, tcs mesh.Tcs, sides int, droopTo, droopStrength, twistsFlat float64, girthAtDays *curve.Curve, lengthAtDays *curve.Curve) *segmentType {
+func NewSegmentType(name string, tcs mesh.Tcs, sides int, droopTo *curve.Curve, droopStrength *curve.Curve, twistsFlat *curve.Curve, girthAtDays *curve.Curve, lengthAtDays *curve.Curve) *segmentType {
 	// segmentTypes[name]=
-	return &segmentType{name: name, tcs: tcs, sides: sides, droopTo: droopTo, droopStrength: droopStrength, twistsFlat: twistsFlat, girthAtDay: girthAtDays, lengthAtDay: lengthAtDays, buds: make([]*bud, 0)}
+	return &segmentType{name: name, tcs: tcs, sides: sides, droopTo: droopTo, droopStrength: droopStrength, twistsFlat: twistsFlat, radiusAtDay: girthAtDays, lengthAtDay: lengthAtDays, buds: make([]*bud, 0)}
 }

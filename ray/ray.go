@@ -34,6 +34,8 @@ func (ray Ray) GetDirection() vec.V3 {
 
 // PointAt - mutates and and direction, it's faster to repoint an existing ray than make a new one
 func (ray *Ray) PointAt(p vec.V3) {
+
+	
 	ray.End = p
 
 	//ray.direction = ray.End.Sub(ray.Origin)
