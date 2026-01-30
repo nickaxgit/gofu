@@ -209,17 +209,17 @@ func (m *Mass) Fly(running bool) {
 		}
 
 		//wingAxis := (m.p.sub(m.axle.p)).normalise()
-		wingAxis := (m.P.Sub(m.WingRoot.P)).Normalise() //TE
+		wingAxis := (m.P.Sub(m.WingRoot.P)).Normalised() //TE
 		if m.Flip {
 			wingAxis = wingAxis.Multiply(-1)
 		}
 
-		rootChord := (m.Axle.P.Sub(m.WingRoot.P)).Normalise()
+		rootChord := (m.Axle.P.Sub(m.WingRoot.P)).Normalised()
 
 		vms := m.P.Sub(m.Op).Length() * 30.0 * 5.0 //cyles per second * steps per cycle
 
 		if vms > 0.1 {
-			direction := (m.P.Sub(m.Op)).Normalise()
+			direction := (m.P.Sub(m.Op)).Normalised()
 			//log.Logit(vms, "m/s")
 			v2 := vms * vms
 
@@ -233,8 +233,8 @@ func (m *Mass) Fly(running bool) {
 			}
 
 			//the lift direction is always orthogonal to the direction of travel (regardless of the AoA)
-			liftDir := (direction.Cross(wingAxis)).Normalise() //.rotateAbout(rootAxis, m.dihedralDegrees)
-			wingUp := (rootChord.Cross(wingAxis)).Normalise()  //orthogonal to the chord of the wing (le-te)
+			liftDir := (direction.Cross(wingAxis)).Normalised() //.rotateAbout(rootAxis, m.dihedralDegrees)
+			wingUp := (rootChord.Cross(wingAxis)).Normalised()  //orthogonal to the chord of the wing (le-te)
 
 			aoa := -math.Asin(direction.Dot(wingUp)) // + math.Pi/2 //+ m.aoaRads
 			// if aoa < -math.Pi {
@@ -391,7 +391,7 @@ func (m *Mass) ResolvePenetration(mesh *terrain.TriMesh, depth float64, impact v
 	vr = vr.Sub(n.Multiply(vr.Dot(n) * .8)) //kill 80% of the vertical velocity (20% bounce)
 
 	if m.Axle != nil {
-		axle := m.Axle.P.Sub(m.P).Normalise()
+		axle := m.Axle.P.Sub(m.P).Normalised()
 		vr = vr.Sub(axle.Multiply(vr.Dot(axle) * .85)) //.95)) //kill (95% of the) sideways velocity of the wheel
 		vr = vr.Multiply(0.95)                         //some wheel friciton
 
@@ -401,7 +401,7 @@ func (m *Mass) ResolvePenetration(mesh *terrain.TriMesh, depth float64, impact v
 			brakeForce := m.Brake * maxBrakeForce //brake force in metres per cycle
 			vrl := vr.Length()
 			if vrl > brakeForce {
-				vr.SubIn(vr.Normalise().Multiply(brakeForce)) //some wheel friciton
+				vr.SubIn(vr.Normalised().Multiply(brakeForce)) //some wheel friciton
 			} else {
 				//vr = NewVec3(0, 0, 0) //vr.multiply(-0.001) //dead stop
 				//m.fixed = true

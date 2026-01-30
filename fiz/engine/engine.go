@@ -104,7 +104,7 @@ func (engine *Engine) Run(activity *msg.Msg) {
 			engine.writePitchInto(activity)
 		}
 
-		svn := engine.Spring.M1.P.Sub(engine.Spring.M2.P).Normalise()
+		svn := engine.Spring.M1.P.Sub(engine.Spring.M2.P).Normalised()
 
 		//acceleration = force / mass
 		//mv1 := svn.multiply(e.thrustNewtons / e.spring.m1.mass * 150)

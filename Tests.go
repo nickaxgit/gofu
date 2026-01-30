@@ -104,6 +104,20 @@ func tests() {
 		return hit
 	}, true, "Poly probe inside")
 
+	// New: probe the same polygon from "behind" (backfacing).
+	// This ensures Poly.Probe does not implicitly backface-cull.
+	testBool("Poly probe from behind (backfacing)", func() bool {
+		poly := poly.NewConvexPoly()
+		poly.AddPointAt(0, -1, 10)
+		poly.AddPointAt(10, 2, 0)
+		poly.AddPointAt(-10, 3, 0)
+
+		// Use the same line as "Poly probe inside" but reversed.
+		r := ray.New(vec.NewVec3(3, -10000, 2), vec.NewVec3(5, 10000, 1))
+		hit, _ := poly.Probe(r)
+		return hit
+	}, true, "Poly probe from behind failed")
+
 	testBool("Poly contains2D - 2", func() bool {
 		ray := ray.New(vec.NewVec3(-14, 10000, 14), vec.NewVec3(-14, -10000, 14))
 		poly := poly.NewConvexPoly()

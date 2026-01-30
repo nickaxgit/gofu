@@ -12,6 +12,8 @@ import (
 	//	"strconv"
 )
 
+const Epsilon = 0.001
+
 type ConvexPoly struct {
 	P     []vec.V3
 	Plane plane.Plane
@@ -21,7 +23,7 @@ type ConvexPoly struct {
 	//normal *vec.V3
 	//cp     *vec.V3 //crossProduct
 	//	pcp     float64 //y or plane normal component of previous cross product
-	epsilon float64
+	//epsilon float64
 	//cpn        float64 //length of the normal component of the cross product
 	PointCount int
 }
@@ -84,8 +86,7 @@ func (poly *ConvexPoly) Centre() vec.V3 {
 }
 
 func NewConvexPoly() *ConvexPoly {
-	return &ConvexPoly{P: make([]vec.V3, 0, 4),
-		epsilon: 0.0001}
+	return &ConvexPoly{P: make([]vec.V3, 0, 4)}
 }
 
 func NewConvexPolyFromVecs(pts []vec.V3) *ConvexPoly {
@@ -189,6 +190,12 @@ func (poly *ConvexPoly) AddPoint(p vec.V3) {
 // probe the convex poly with the ray
 func (poly *ConvexPoly) Probe(ray ray.Ray) (bool, vec.V3) {
 
+	if poly.PointCount < 3 {
+		log.Logit("degenerate poly probe")
+		return false, vec.NewVec3(0, 0, 0)
+	}
+
+	
 	hit, where := poly.Plane.ProbeLine(ray)
 	if hit { //will return false for backfacing triangles
 		//if poly.Contains(ray.GetIntersect()) {
@@ -216,13 +223,13 @@ func (poly *ConvexPoly) Contains2D(p vec.V3) bool {
 		edge.Y = 0
 		d.Y = 0
 
-		if d.X > -poly.epsilon && d.X < poly.epsilon && d.Z > -poly.epsilon && d.Z < poly.epsilon {
+		if d.X > -Epsilon && d.X < Epsilon && d.Z > -Epsilon && d.Z < Epsilon {
 			return true //on a vertex
 		}
 
 		cp := edge.Cross(d)
 
-		if cp.Y < -poly.epsilon {
+		if cp.Y < -Epsilon {
 			return false
 		}
 
@@ -244,7 +251,7 @@ func (poly *ConvexPoly) Contains3D(p vec.V3) bool {
 
 		cpn := edge.Cross(d).Dot(normal)
 
-		if cpn < -poly.epsilon {		
+		if cpn < -Epsilon {
 			return false
 		}
 	}

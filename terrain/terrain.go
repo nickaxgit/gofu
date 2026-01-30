@@ -4,13 +4,15 @@ import (
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/mesh"
-	"github.com/nickax/gofu/plant"
+
+	"github.com/nickax/gofu/terrainVert"
 
 	//"github.com/nickax/gofu/ray"
 	"fmt"
 	"math"
 	"time"
 
+	"github.com/nickax/gofu/plant"
 	"github.com/nickax/gofu/ray"
 	"github.com/nickax/gofu/vec"
 )
@@ -20,11 +22,13 @@ import (
 // even writing the faces directly to the message ?
 // patching is a problem - may need to integrate
 
+//feels like breaking a mesh into verts , and several sets of faces
+
 type TriMesh struct {
 	name        string
 	Root        *Tri
-	verts       []*vert //{}
-	VertexCount int     //uint32
+	verts       []*terrainVert.Vert //{}
+	VertexCount int                 //uint32
 	//fi          []uint32 //{} //face indices
 
 	midpoints map[uint64]uint32 //compound key of the two endpoints of an edge, map contains the index of its midpoint vertex
@@ -66,9 +70,9 @@ func (tri *Tri) MeshPoints(mesh *TriMesh, subdivisions int) []vec.V3 {
 }
 
 func (t *Tri) BarycentricInterpolate(m *TriMesh, u, v float64) vec.V3 {
-	a := m.verts[t.vi[0]].p
-	b := m.verts[t.vi[1]].p
-	c := m.verts[t.vi[2]].p
+	a := m.verts[t.vi[0]].P
+	b := m.verts[t.vi[1]].P
+	c := m.verts[t.vi[2]].P
 
 	w := 1.0 - u - v
 
@@ -96,7 +100,7 @@ func dropOntoLeafTri(p vec.V3, mesh *TriMesh, tri *Tri, deviceId uint32) vec.V3 
 	return vec.NewVec3(0, 0, 0)
 }
 
-func (land *TriMesh) GetPlants(tri *Tri, species plant.Species, near *msg.Msg, camPos *vec.V3, threshDistSq float64, deviceId uint32) {
+func (land *TriMesh) GetPlants(tri *Tri, positionMsgs []*msg.Msg, camPos *vec.V3, deviceId uint32) {
 
 	// 	occludedTrees := dev.ViewingPlayer.Game.PlaceTrees() //place trees on non occluded, level 10, triangles infront of the camera
 	// 	log.Logit("Placed trees - occluded:", occludedTrees, "near trees:", dev.nearTreeCount, "far trees:", dev.farTreeCount)
@@ -105,11 +109,16 @@ func (land *TriMesh) GetPlants(tri *Tri, species plant.Species, near *msg.Msg, c
 
 	prober := NewProber(deviceId, land, *camPos, true)
 
-	for _, plnt := range tri.Plants {
-		if plnt.Species == species {
+	//di
+	for distributionIndex, instances := range tri.Distributions { // a slice of slices of plants per species
 
-			u := float64(plnt.BcU) / float64(255)
-			v := float64(plnt.BcV) / float64(255)
+		positionMsg := positionMsgs[distributionIndex]
+
+		threshDistSq := plant.MaxDistSq(distributionIndex)
+		for _, instance := range instances { //for each plant of that species (on this triangle)
+
+			u := float64(instance.BcU) / float64(255)
+			v := float64(instance.BcV) / float64(255)
 			p := tri.BarycentricInterpolate(land, u, v)
 
 			ds := p.DistanceSQ(camPos)
@@ -118,20 +127,20 @@ func (land *TriMesh) GetPlants(tri *Tri, species plant.Species, near *msg.Msg, c
 				p = dropOntoLeafTri(p, land, tri, deviceId)
 
 				//occlusion cull by treetops
-				prober.Target(p.Add(vec.NewVec3(0, plant.DecodeScale(plnt.Scale), 0))) //we dont want to mutate the actual vertex pos
+				prober.Target(p.Add(vec.NewVec3(0, plant.DecodeScale(instance.Scale), 0))) //we dont want to mutate the actual vertex pos
 				land.Root.Probe(prober)
 
 				if prober.Hit == false {
 					//the point is on the ground - the client decides wheter to add a mesh or a billboard there
-					near.Write(p) ///writes a vec3 as three float32s
-					near.Write(plnt.Scale)
+					positionMsg.Write(p) ///writes a vec3 as three float32s
+					positionMsg.Write(instance.Scale)
 				}
 			}
 		}
 	}
 
-	for i := 0; i < tri.childCount; i++ {
-		land.GetPlants(tri.children[i], species, near, camPos, threshDistSq, deviceId)
+	for i := 0; i < tri.ChildCount; i++ {
+		land.GetPlants(tri.children[i], positionMsgs, camPos, deviceId)
 	}
 
 	// 	// //far trees (billboards)
@@ -142,51 +151,29 @@ func (land *TriMesh) GetPlants(tri *Tri, species plant.Species, near *msg.Msg, c
 }
 
 // return the normals of the verts specified in vis (vertices we've added)
-func (m *TriMesh) getNormals(asWater bool, touchedVerts *TouchedVerts) (normals []vec.V3, steepnesses []float64) {
+func (m *TriMesh) getNormals(asWater bool, touchedVerts *TouchedVerts) []vec.V3 {
 
 	//for every new vertex, reset the normal to zero, then add the normals of the faces it touches
-	n := make([]vec.V3, m.VertexCount)  //position x,y,z
-	s := make([]float64, m.VertexCount) //position x,y,z
+	n := make([]vec.V3, m.VertexCount) //position x,y,z
 
 	if asWater {
 		up := vec.NewVec3(0, 1, 0)
 		for i := 0; i < m.VertexCount; i++ { //} range m.verts {
 			n[i] = up
-			s[i] = 1
+
 		}
-		return n, s
+		return n
 
 	}
 
 	for i := 0; i < m.VertexCount; i++ {
-		n[i], s[i] = touchedVerts.GetNormal(uint32(i), m)
+		n[i] = touchedVerts.GetAverageVertexNormal(uint32(i), m)
 	}
 
-	return n, s
+	return n
 
 }
 
-func (mesh *TriMesh) Reset() {
-
-	panic("dont call this")
-	clear(mesh.midpoints) //empties the map preserving capacity
-
-	//preserve the first three verts (the root triangle)
-	for i := 0; i < 3; i++ {
-		v := mesh.verts[i]
-
-		//clear(v.touches)
-		v.wl = 0
-		//v.occluded = false
-		//v.testedForOcclusion = false
-
-	}
-
-	mesh.VertexCount = 3 //beacuse we start again at the root triangle
-
-	mesh.Root.Reset()
-
-}
 func NewTriMesh(name string, maxVertsFaces uint32, size float64, kinks []float64, height float64) *TriMesh {
 
 	//we need three entries per face in fis
@@ -194,15 +181,16 @@ func NewTriMesh(name string, maxVertsFaces uint32, size float64, kinks []float64
 	//l := int(maxFaces) * 3
 	//fis := make([]uint32, l)
 	//return &landMesh{name: name, verts: []*vert{}, fi: fis, midpoints: make(map[uint64]uint32, 0), splits: splits, height: height, size: size, kinks: kinks}
-	verts := make([]*vert, 0, maxVertsFaces) //clear the verts
+	verts := make([]*terrainVert.Vert, 0, maxVertsFaces) //clear the verts
 	mesh := &TriMesh{name: name, verts: verts,
 		midpoints: make(map[uint64]uint32, maxVertsFaces),
 		size:      size, kinks: kinks, height: height}
 
-	seaLevel := 0.0                                            // -height * .3
-	mesh.addVert(vec.NewVec3(size, 0, -size), 0, 0, seaLevel)  //near right
-	mesh.addVert(vec.NewVec3(-size, 0, -size), 0, 0, seaLevel) //near left
-	mesh.addVert(vec.NewVec3(0, 0, size), 0, 0, seaLevel)      //far, far away
+	seaLevel := 0.0
+	emptyTC := vec.NewVec2(0, 0)                                  // -height * .3
+	mesh.addVert(vec.NewVec3(size, 0, -size), emptyTC, seaLevel)  //near right
+	mesh.addVert(vec.NewVec3(-size, 0, -size), emptyTC, seaLevel) //near left
+	mesh.addVert(vec.NewVec3(0, 0, size), emptyTC, seaLevel)      //far, far away
 
 	mesh.Root = newTri(nil, mesh, [3]uint32{0, 1, 2}) //make the root triangle
 	mesh.Root.MakePrism(mesh)
@@ -238,7 +226,7 @@ func (m *TriMesh) splitEdge(ai, bi uint32, dy float64, depth int) uint32 {
 	a := m.verts[ai]
 	b := m.verts[bi]
 
-	p := a.p.Tween(b.p, 0.5)
+	p := a.P.Tween(b.P, 0.5)
 
 	p.Y += dy
 
@@ -259,24 +247,27 @@ func (m *TriMesh) splitEdge(ai, bi uint32, dy float64, depth int) uint32 {
 	//No vertex here - make one
 	//for the first few levels of splitting, calculate UVs from altitude (so large scale features are consistent)
 	//uvy := (p.Y + m.height) / (2 * m.height)
-	seaLevel := -m.height * .3
-	uvy := (p.Y - seaLevel) / (m.height - seaLevel) //* 1.5 //* 4 /// (2 * m.height)
-	if uvy < 0 {
-		uvy = 0
-	}
-	if uvy > .99 {
-		uvy = .99
-	}
 
-	if depth > 6 {
-		//later splits, preserve ealier UVs (so geology is contorted)
-		uvy = (a.uv.Y + b.uv.Y) / 2
-	}
+	// seaLevel := -m.height * .3
+	// uvy := (p.Y - seaLevel) / (m.height - seaLevel) //* 1.5 //* 4 /// (2 * m.height)
+	// if uvy < 0 {
+	// 	uvy = 0
+	// }
+	// if uvy > .99 {
+	// 	uvy = .99
+	// }
+
+	// if depth > 6 {
+	// 	//later splits, preserve ealier UVs (so geology is contorted)
+	uv := a.Uv.Tween(b.Uv, 0.5)
+	uv.Y = p.Y / 300
+
+	//	}
 
 	//we don't have normals yet - so must calc UVX's later
 	//vi = m.addVert(p, -1000, uvy, (a.wl+b.wl)/2) //p.Y+(depthA+depthB)/2)
 	//vi = m.addVert(p, -1000, uvy, p.Y+(depthA+depthB)/2)
-	vi = m.addVert(p, -1000, uvy, (a.wl+b.wl)/2)
+	vi = m.addVert(p, uv, (a.Wl+b.Wl)/2)
 
 	//add it to the index of midpoints
 	key := uint64(ai) + uint64(math.MaxUint32)*uint64(bi)
@@ -285,9 +276,9 @@ func (m *TriMesh) splitEdge(ai, bi uint32, dy float64, depth int) uint32 {
 	return vi
 }
 
-func (m *TriMesh) addVert(p vec.V3, u float64, v float64, wl float64) uint32 {
+func (m *TriMesh) addVert(p vec.V3, uv vec.V2, wl float64) uint32 {
 
-	var vert *vert
+	var vert *terrainVert.Vert
 
 	// Check if we have an existing vert to reuse
 	if m.VertexCount < len(m.verts) {
@@ -295,12 +286,12 @@ func (m *TriMesh) addVert(p vec.V3, u float64, v float64, wl float64) uint32 {
 		// Overwrite existing data
 		// Note: We assume p is a new vector or we copy it.
 		// If p is a pointer to a vector that changes, we might need p.Clone() or *vert.p = *p
-		vert.p = p
-		vert.uv.X = u
-		vert.uv.Y = v
+		vert.P = p
+		vert.Uv = uv
+
 		//vert.occluded = false
 		//vert.testedForOcclusion = false
-		vert.wl = wl
+		vert.Wl = wl
 		//clear(vert.touches)
 
 		//vert.touches = make(map[*Tri]bool, 6)
@@ -309,7 +300,7 @@ func (m *TriMesh) addVert(p vec.V3, u float64, v float64, wl float64) uint32 {
 		// vert.touches is already cleared in Reset()
 	} else {
 		// No free verts, allocate new one and append
-		vert = newVert(p, u, v, wl)
+		vert = terrainVert.New(p, uv, wl)
 		m.verts = append(m.verts, vert)
 	}
 
@@ -349,9 +340,9 @@ func (t *Tri) flow(m *TriMesh) {
 	a := m.verts[t.vi[0]]
 	b := m.verts[t.vi[1]]
 	c := m.verts[t.vi[2]]
-	a.flow(b)
-	b.flow(c)
-	c.flow(a)
+	a.Flow(b)
+	b.Flow(c)
+	c.Flow(a)
 }
 
 func (m *TriMesh) SendLand(tris *LeafCollector, tv *TouchedVerts, camPos vec.V3, response *msg.Msg, withWireFrame bool) {
@@ -365,10 +356,20 @@ func (m *TriMesh) SendLand(tris *LeafCollector, tv *TouchedVerts, camPos vec.V3,
 	}
 
 	ts := time.Now()
-	smallLandMesh := m.ToSimpleMesh(tris, tv, 2, "land", false, isLand, camPos)
+	//create/send another buff
+
+	//any triangle not straddling a contour is broken out into a mesh (per contour)
+	//
+
+	smallLandMesh := m.ToSimpleMesh(tris, tv, 2, false, isLand, camPos, "landBlend")
 	log.Logit("converted land mesh in", time.Since(ts).Milliseconds(), "ms")
-	log.Logit("small land mesh has", smallLandMesh.FaceCount(), "faces ", smallLandMesh.VertCount(), " verts")
+	log.Logit("small land mesh has", smallLandMesh.Tris, "faces ", smallLandMesh.Verts, " verts")
 	smallLandMesh.WriteGeometryTo(response, 1, 0)
+
+	response.Write(msg.Steeps, byte(len(terrainVert.Steeps.Points)))
+	for _, s := range terrainVert.Steeps.Points {
+		response.Write(float32(s.Y))
+	}
 
 	if withWireFrame {
 		smallLandMesh.Mutate(32, "whiteWires")
@@ -376,16 +377,24 @@ func (m *TriMesh) SendLand(tris *LeafCollector, tv *TouchedVerts, camPos vec.V3,
 
 	}
 
+	//send all vertex normals for visualisation
+	response.Write(msg.Vectors)
+	smallLandMesh.WriteNormalsTo(response)
+
+	terminator := float32(math.Inf(1))                 //use positive infinity as terminator
+	response.Write(terminator, terminator, terminator) //Terminator for vectors
+
 }
 
 func (m *TriMesh) SendWater(tris *LeafCollector, campos vec.V3, response *msg.Msg, withWireFrame bool) {
+
 	funcIsWater := func(t *LeafTri, m *TriMesh) bool { return t.OnOrUnderWater(m) }
-	//funcIsWater := func(t *Tri, m *TriMesh) bool { return true }
-	waterMesh := m.ToSimpleMesh(tris, nil, uint16(4), "water", true, funcIsWater, campos)
+
+	waterMesh := m.ToSimpleMesh(tris, nil, uint16(4), true, funcIsWater, campos, "water")
 	//waterMeshW := m.ToSimpleMesh(tris, nil, uint16(4), nil, "whiteWires", true, funcIsWater, campos)
 
-	if waterMesh.FaceCount() > 0 {
-		log.Logit("Water mesh has ", waterMesh.FaceCount(), " faces and ", waterMesh.VertCount(), " verts")
+	if waterMesh.Tris > 0 {
+		log.Logit("Water mesh has ", waterMesh.Tris, " faces and ", waterMesh.Verts, " verts")
 		waterMesh.WriteGeometryTo(response, 1, 0)
 		//waterMeshW.WriteGeometryTo(response, 1, 0)
 
@@ -426,47 +435,47 @@ func (m *TriMesh) getUVs() []float32 {
 	//big vertex index (in the huge mesh) to small vertex index (in the new sub mesh)
 	for i := 0; i < vc; i++ {
 		v := m.verts[i]
-		uvs[i*2] = float32(v.uv.X)
-		uvs[i*2+1] = float32(v.uv.Y)
+		uvs[i*2] = float32(v.Uv.X)
+		uvs[i*2+1] = float32(v.Uv.Y)
 	}
 
 	return uvs
 
 }
 
-func (m *TriMesh) getPositions(asWater bool) []float32 {
+// func (m *TriMesh) getPositions(asWater bool) []float32 {
 
-	vc := m.VertexCount
-	p := make([]float32, 0, vc*3) //position x,y,z
+// 	vc := m.VertexCount
+// 	p := make([]float32, vc*3) //position x,y,z
 
-	for i := 0; i < vc; i++ {
-		j := m.verts[i]
-		o := i * 3
-		if asWater {
+// 	for i := 0; i < vc; i++ {
+// 		j := m.verts[i]
+// 		o := i * 3
+// 		if asWater {
 
-			//v := []float32{float32(j.p.X), float32(j.p.Y + j.wl), float32(j.p.Z)}
-			//p = append(p, v...)
-			p[o] = float32(j.p.X)
-			p[o+1] = float32(j.p.Y + j.wl)
-			p[o+2] = float32(j.p.Z)
+// 			//v := []float32{float32(j.p.X), float32(j.p.Y + j.wl), float32(j.p.Z)}
+// 			//p = append(p, v...)
+// 			p[o] = float32(j.P.X)
+// 			p[o+1] = float32(j.P.Y + j.Wl)
+// 			p[o+2] = float32(j.P.Z)
 
-		} else {
-			p[o] = float32(j.p.X)
-			p[o+1] = float32(j.p.Y)
-			p[o+2] = float32(j.p.Z)
-		}
+// 		} else {
+// 			p[o] = float32(j.P.X)
+// 			p[o+1] = float32(j.P.Y)
+// 			p[o+2] = float32(j.P.Z)
+// 		}
 
-	}
-	return p
+// 	}
+// 	return p
 
-}
+// }
 
 func (mesh *TriMesh) ScorchedAt(tri *Tri, p vec.V3) bool {
-	if tri.childCount == 0 {
+	if tri.ChildCount == 0 {
 		return tri.Scorched //reached a leaf - return sorched value
 	} else {
 		//for _, c := range t.children {
-		for i := 0; i < tri.childCount; i++ {
+		for i := 0; i < tri.ChildCount; i++ {
 			//if c.prismFaces[5].Contains(p) {
 			if tri.children[i].contains2D(p, mesh) {
 				return mesh.ScorchedAt(tri.children[i], p)
@@ -476,7 +485,7 @@ func (mesh *TriMesh) ScorchedAt(tri *Tri, p vec.V3) bool {
 	}
 }
 
-func (lm *TriMesh) ToSimpleMesh(leaves *LeafCollector, touchedVerts *TouchedVerts, id uint16, material string, asWater bool, faceTest func(face *LeafTri, mesh *TriMesh) bool, camPos vec.V3) *mesh.SimpleMesh {
+func (lm *TriMesh) ToSimpleMesh(leaves *LeafCollector, touchedVerts *TouchedVerts, id uint16, asWater bool, faceTest func(face *LeafTri, mesh *TriMesh) bool, camPos vec.V3, materialName string) *mesh.SimpleMesh {
 
 	vc := lm.VertexCount
 
@@ -486,93 +495,83 @@ func (lm *TriMesh) ToSimpleMesh(leaves *LeafCollector, touchedVerts *TouchedVert
 	}
 
 	//we must get normals (becuase it calculates them) before updating UVx's
-	allNormals, steepness := lm.getNormals(asWater, touchedVerts)
+	//allNormals, steepness := lm.getNormals(asWater, touchedVerts)
+	allNormals := lm.getNormals(asWater, touchedVerts)
 
 	viewpoint := camPos.Clone()
 	viewpoint.Y += 0.1 //5
 
 	prober := NewProber(leaves.DeviceId, lm, viewpoint, true)
 
-	wp := uint32(0)
-	fvis := make([]uint16, 65535*3)                   //face vertex indices (3 per face)
-	leaves.getFinalFaces(fvis, &wp, faceTest, prober) //populate Fis (recursivley from the root triangle)
-	fvis = fvis[:wp]
-	numLeaves := wp //truncate at the write pointer
-
-	//kill two birds with one stone - generate a subset of verts just for the face sets - and set all their Y's
-
-	np := make([]float32, lm.VertexCount*3)  // new position
-	nn := make([]float32, lm.VertexCount*3)  // new normals
-	nuv := make([]float32, lm.VertexCount*2) // new Uvs
-
-	mapping := make(map[uint16]uint16) //map from old vert index to new vert index
-
-	n := vec.NewVec3(0, 1, 0)
-	for i := range numLeaves {
-		fvi := fvis[i]
-		tfi, present := mapping[fvi]
-		if !present {
-			v := lm.verts[fvi]
-
-			if !asWater {
-				n = allNormals[fvi]
-				v.uv.UpdateUVxFromNormal(n)
-			}
-
-			ni := uint16(len(mapping))
-			ni2 := ni * 2 //new index (for uv)
-			ni3 := ni * 3 //new index (for normal/pos)
-
-			nn[ni3], nn[ni3+1], nn[ni3+2] = float32(n.X), float32(n.Y), float32(n.Z) //float32(v.n.X), float32(v.n.Y), float32(v.n.Z)
-
-			//lower TC's of flat ground (equivalent to raising the TC's of steep ground)
-			tcv := .3 + float32(v.uv.Y-steepness[fvi]*.3)
-			if tcv < .01 {
-				tcv = 0
-			}
-			if tcv > 0.99 {
-				tcv = 0.99
-			}
-
-			nuv[ni2], nuv[ni2+1] = float32(v.uv.X), tcv
-
-			np[ni3] = float32(v.p.X)
-			if asWater {
-				np[ni3+1] = float32(v.p.Y + v.wl)
-			} else {
-				np[ni3+1] = float32(v.p.Y)
-			}
-			np[ni3+2] = float32(v.p.Z)
-
-			mapping[fvi] = ni
-
-			fvis[i] = ni //update the face index to point to the new vert index
-		} else {
-			fvis[i] = uint16(tfi) //update the face index to point to the new vert index
-		}
+	//fill the simpleMeshes fis - with non-occluded faces
+	sm := mesh.NewSimpleMesh(id, materialName, vc*3, vc*4)
+	if asWater {
+		FillWaterMeshFromLeaves(sm, lm, leaves, faceTest, prober)
+	} else {
+		FillSimpleMeshFromLeaves(sm, lm, leaves, allNormals, faceTest, prober, asWater)
 	}
+	//sm.FillFrom(lm.verts, allNormals)
 
-	if len(mapping) > 65530 {
-		panic("large mesh:" + fmt.Sprint(len(mapping)) + "verts for mesh" + fmt.Sprint(id))
-	}
-	np = np[0 : len(mapping)*3] //truncate to actual size
-	nn = nn[0 : len(mapping)*3]
-	nuv = nuv[0 : len(mapping)*2]
+	//sm.ReduceToUsedVerts(lm.verts, allNormals, steeps, asWater)
 
-	log.Logit(lm.VertexCount, "verts reduced to", len(mapping), "for mesh", id)
-
-	//normals := lm.getNormals(asWater) //we must get normals (becuase it calculates them) before updating UVx's
-	//lm.updateUVxsFromNormals()
-
-	//return mesh.NewFilledSimpleMesh(id, lm.getPositions(asWater), normals, lm.getUVs(), fis, material)
-	return mesh.NewFilledSimpleMesh(id, np, nn, nuv, fvis, material)
+	return sm
 
 }
 
-func (in *LeafCollector) getFinalFaces(fis []uint16, wp *uint32, test func(face *LeafTri, m *TriMesh) bool, prober *Prober) {
+func FillWaterMeshFromLeaves(sm *mesh.SimpleMesh, lm *TriMesh, leaves *LeafCollector, test func(face *LeafTri, m *TriMesh) bool, prober *Prober) {
 
-	for i := range in.LeafCount {
-		leaf := in.leaves[i]
+	//hold a map of landmesh vert index to simplemesh vert indices (with differing normals)
+	mapping := map[uint32]uint16{}
+
+	for i := 0; i < leaves.LeafCount; i++ {
+		leaf := leaves.leaves[i]
+
+		if leaf.childCount != 0 {
+			panic("There should be no leaves with children here")
+		}
+
+		if test(leaf, prober.mesh) {
+			//if !leaf.occluded(prober) {
+
+			nv := []uint16{math.MaxUint16, math.MaxUint16, math.MaxUint16}
+			for j := range 3 {
+				vi := leaf.Vi[j] //an index in the land/triMesh
+				P := lm.verts[vi].P
+
+				tvi, present := mapping[vi]
+
+				wl := lm.verts[vi].Wl
+				P.Y += wl
+				normal := vec.NewVec3(0, 1, 0)
+
+				if !present {
+					nv[j] = sm.AddVert(P, normal, 0.0, 0.0)
+					mapping[vi] = nv[j]
+				} else {
+					nv[j] = tvi
+				}
+			}
+
+			if nv[0] == math.MaxUint16 || nv[1] == math.MaxUint16 || nv[2] == math.MaxUint16 {
+				panic("Failed to get new vert indices for face")
+			}
+
+			sm.AddFace(nv[0], nv[1], nv[2])
+
+			//}
+		}
+
+	}
+	sm.Finish()
+}
+
+func FillSimpleMeshFromLeaves(sm *mesh.SimpleMesh, lm *TriMesh, leaves *LeafCollector, allNormals []vec.V3, test func(face *LeafTri, m *TriMesh) bool, prober *Prober, asWater bool) {
+
+	//hold a map of landmesh vert index to simplemesh vert indices (with differing normals)
+	mapping := map[uint32][]uint16{}
+
+	for i := 0; i < leaves.LeafCount; i++ {
+		leaf := leaves.leaves[i]
 
 		if leaf.childCount != 0 {
 			panic("There should be no leaves with children here")
@@ -580,40 +579,92 @@ func (in *LeafCollector) getFinalFaces(fis []uint16, wp *uint32, test func(face 
 
 		if test(leaf, prober.mesh) {
 			if !leaf.occluded(prober) {
+				leafNormal := up
+				if !asWater {
+					leafNormal = leaf.CacheNormal(lm)
+				}
 
-				fis[*wp] = uint16(leaf.vi[0])
-				fis[*wp+1] = uint16(leaf.vi[1])
-				fis[*wp+2] = uint16(leaf.vi[2])
-				*wp += 3
+				if leafNormal.Y < 0 {
+					panic("Leaf with downward normal")
+				}
+
+				nv := []uint16{math.MaxUint16, math.MaxUint16, math.MaxUint16}
+				for j := range 3 {
+					vi := leaf.Vi[j] //an index in the land/triMesh
+					P := lm.verts[vi].P
+					avgVertNormal := allNormals[vi]
+					if avgVertNormal.Y < 0 {
+						panic("Vert with downward normal")
+					}
+
+					vertsHere, present := mapping[vi]
+
+					uvy := float64(terrainVert.Contours.GetX(P.Y))
+					if asWater {
+						wl := lm.verts[vi].Wl
+						P.Y += wl
+						avgVertNormal = vec.NewVec3(0, 1, 0)
+					}
+					if !present {
+						//nv[j] = sm.AddVert(P, leafNormal, 0.0, uvy)
+						if avgVertNormal.Dot(leafNormal) > .9 {
+							nv[j] = sm.AddVert(P, avgVertNormal, 0.0, uvy+(1.0-avgVertNormal.Y*.5))
+						} else {
+							nv[j] = sm.AddVert(P, leafNormal, 0.0, uvy+(1-leafNormal.Y)*.5)
+						}
+						mapping[vi] = append(mapping[vi], nv[j])
+					} else {
+
+						best, alignment := sm.BestNormalMatchAmongst(vertsHere, leafNormal)
+						if alignment > .9 {
+							nv[j] = best //map onto existing vert with similar normal
+						} else {
+							nv[j] = sm.AddVert(P, leafNormal, 0.0, uvy)
+							mapping[vi] = append(mapping[vi], nv[j])
+							if len(mapping[vi]) > 10 {
+								log.Logit("Warning - more than 10 normals for vert", vi, "pos", P, "leaf normal", leafNormal, "avg normal", avgVertNormal)
+							}
+						}
+					}
+				}
+
+				if nv[0] == math.MaxUint16 || nv[1] == math.MaxUint16 || nv[2] == math.MaxUint16 {
+					panic("Failed to get new vert indices for face")
+				}
+
+				sm.AddFace(nv[0], nv[1], nv[2])
+
 			}
 		}
 
 	}
+	sm.Finish()
 }
+
+// func (in *LeafCollector) getFinalFaces(sm *mesh.SimpleMesh, test func(face *LeafTri, m *TriMesh) bool, prober *Prober) {
+
+// 	for i := range in.LeafCount {
+// 		leaf := in.leaves[i]
+
+// 		if leaf.childCount != 0 {
+// 			panic("There should be no leaves with children here")
+// 		}
+
+// 		if test(leaf, prober.mesh) {
+// 			if !leaf.occluded(prober) {
+
+// 				sm.AddFace(sm.ContourBand(sm.p[leaf), uint16(leaf.Vi[0]), uint16(leaf.Vi[1]), uint16(leaf.Vi[2]))
+
+// 			}
+// 		}
+
+// 	}
+// }
 
 func (m *TriMesh) Rain(rainFall float64) {
 	for _, v := range m.verts {
-		v.wl += rainFall
+		v.Wl += rainFall
 	}
-}
-
-func (a *vert) flow(b *vert) {
-
-	//if a.wl > -.1 && b.wl > -.1 {
-
-	if a.wl > 0 || b.wl > 0 {
-		diff := (a.p.Y + a.wl) - (b.p.Y + b.wl) //uses the absolute water level
-
-		a.wl -= diff * .25
-		b.wl += diff * .25
-	}
-
-	//erode the land
-	//a.p.Y -= diff * .01
-	//b.p.Y -= diff * .01
-
-	//}
-
 }
 
 // Probes a triMesh with a ray - finding leaf triangle hits
@@ -638,8 +689,20 @@ type Prober struct {
 	SDist         float64 //smallest distance found sofar (start big) - used if ProbeAll()
 }
 
+func (prober *Prober) Origin(p vec.V3) {
+	prober.ray.Origin = p
+
+}
+
 func (prober *Prober) Target(p vec.V3) {
+	//dir := p.Sub(prober.ray.Origin).Normalize()
 	prober.ray.PointAt(p)
+	prober.Hit = false
+	prober.HitWater = false
+	prober.SDist = 100000
+	prober.nearestHit = vec.NewVec3(0, 0, 0)
+	prober.NearestTri = nil
+	prober.NearestLeaf = nil
 }
 
 func NewProber(deviceId uint32, mesh *TriMesh, camPos vec.V3, earlyExit bool) *Prober {

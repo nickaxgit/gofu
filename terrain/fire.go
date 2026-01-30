@@ -7,6 +7,7 @@ import (
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/mesh"
 	"github.com/nickax/gofu/vec"
+	"github.com/nickax/gofu/tcs"
 )
 
 func (fm *TriMesh) Ignite(firePos vec.V3) {
@@ -14,7 +15,7 @@ func (fm *TriMesh) Ignite(firePos vec.V3) {
 
 	result := fm.Root.splitUntil(fm, firePos, 10)
 	if result != nil { // are we on the map ?
-		if result.childCount > 0 {
+		if result.ChildCount > 0 {
 			log.Logit("Igniting a non-leaf triangle at depth", result.Depth)
 		}
 		if result.FireInfo == nil {
@@ -54,7 +55,7 @@ func (fm *TriMesh) Burn(ft *Tri) int {
 }
 
 // recurse from fTri to find all triangles with flames, insert them (as billboards) into the simpleMesh
-func (tri *Tri) GetFlames(deviceId uint32, lm *TriMesh, fm *TriMesh, intoMesh *mesh.SimpleMesh, cam *cam.Camera, tcs mesh.Tcs) int {
+func (tri *Tri) GetFlames(deviceId uint32, lm *TriMesh, fm *TriMesh, intoMesh *mesh.SimpleMesh, cam *cam.Camera, tcs tcs.Tcs) int {
 
 	if lm != nil && tri.FireInfo != nil && tri.FireInfo.flames > 0 { //fTri.allBLTsAlight() { //fTri.flames > 0 {
 
@@ -67,7 +68,7 @@ func (tri *Tri) GetFlames(deviceId uint32, lm *TriMesh, fm *TriMesh, intoMesh *m
 
 				if t.Depth > tri.FireInfo.landDepth {
 					tri.FireInfo.y = p.Y //we have a better observation (of the land height) - update the flame base height
-					tri.Normal = t.Normal
+					//tri.Normal = t.Normal
 
 				}
 
@@ -138,13 +139,13 @@ func (tri *Tri) splitUntil(fm *TriMesh, firePos vec.V3, maxDepth int) *Tri {
 		}
 
 		//split only if necessary
-		if tri.childCount == 0 {
+		if tri.ChildCount == 0 {
 			tri.split(fm)
 		}
 
 		miss := 0
 		//for _, c := range t.children {
-		for i := 0; i < tri.childCount; i++ {
+		for i := 0; i < tri.ChildCount; i++ {
 			res := tri.children[i].splitUntil(fm, firePos, maxDepth)
 			if res != nil {
 				return res

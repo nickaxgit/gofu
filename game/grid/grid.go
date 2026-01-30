@@ -24,7 +24,7 @@ func (g *Grid) Plane() plane.Plane {
 }
 
 func (g *Grid) Normal() vec.V3 {
-	return g.Yaxis.Cross(g.Xaxis).Normalise()
+	return g.Yaxis.Cross(g.Xaxis).Normalised()
 }
 
 func (g *Grid) UpdateGridPosAndSpacePos(cam *cam.Camera) {

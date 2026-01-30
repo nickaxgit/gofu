@@ -137,7 +137,7 @@ func (s *Spring) distanceFrom(p *vec.V3) float64 {
 
 func (s *Spring) direction() vec.V3 {
 	v := s.M2.P.Sub(s.M1.P)
-	return v.Normalise()
+	return v.Normalised()
 }
 
 func (s *Spring) SetVelocity(v vec.V3) {

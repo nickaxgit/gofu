@@ -14,7 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/nickax/gofu/cam"
-	"github.com/nickax/gofu/colors"
+
 	"github.com/nickax/gofu/errorplus"
 	"github.com/nickax/gofu/fiz/mass"
 	"github.com/nickax/gofu/fiz/spring"
@@ -28,10 +28,11 @@ import (
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/game/player"
 	"github.com/nickax/gofu/html"
+	"github.com/nickax/gofu/mesh"
 
 	"github.com/nickax/gofu/jsonmsg"
 	"github.com/nickax/gofu/log"
-	"github.com/nickax/gofu/mesh"
+
 	"github.com/nickax/gofu/next"
 	"github.com/nickax/gofu/ray"
 
@@ -39,12 +40,23 @@ import (
 	"github.com/nickax/gofu/fiz/mixer"
 	"github.com/nickax/gofu/persist"
 	"github.com/nickax/gofu/plant"
+	"github.com/nickax/gofu/rock"
 	"github.com/nickax/gofu/terrain"
+	"github.com/nickax/gofu/terrainVert"
+
+	"github.com/nickax/gofu/colors"
+	"github.com/nickax/gofu/curve"
+	"github.com/nickax/gofu/tcs"
 	"github.com/nickax/gofu/vec"
 )
 
 const maxNearTrees = 500
 const maxFarTrees = 15000
+
+type BoundPoint struct { //the device holds a slice of these, client sends id and new (normalised) values
+	curve *curve.Curve //tells us the bounds (for scaling normalised values back from the client
+	index int          //which point in the curve to apply the change to
+}
 
 type Device struct {
 	Id        uint32
@@ -58,11 +70,13 @@ type Device struct {
 	primaryControls   *player.Player //this is set to a target player when permission is granted, and set back to the owner if it is revoked, expires, or the controller leaves
 	secondaryControls *player.Player //this is set to a target player when permission is granted, and set back to the owner if it is revoked, expires, or the controller leaves
 	Owner             *player.Player
-	pov               string      //point of pilot, copilot, instruments, overhead panel, satellite etc
-	Camera            *cam.Camera //initially a clone of viewPoint(within the vehicle) - Ongoing, additional position direction and up in vehicle space (our head swivel/slew)
-	lastCam           *cam.Camera //where were we positioned/looking when we last sent an update
+	pov               string          //point of pilot, copilot, instruments, overhead panel, satellite etc
+	Camera            *cam.Camera     //initially a clone of viewPoint(within the vehicle) - Ongoing, additional position direction and up in vehicle space (our head swivel/slew)
+	lastCam           *cam.Camera     //where were we positioned/looking when we last sent an update
+	prober            *terrain.Prober //for land probing
 
 	mtx          *sync.Mutex // a mutex is required to 'lock' access to each users connection (for writing)
+	keysMutex    *sync.RWMutex
 	InMtx        *sync.Mutex //inbound mutex, ensure only one command is processed at a time
 	highlit      highlitType
 	currentThing *thing.Thing
@@ -81,14 +95,15 @@ type Device struct {
 	downGridPos vec.V3 //where were we when they pressed the mouse button down
 	//downCamPos  *vec3
 
-	cursor   *vec.V2 //current mouse pos in normalised screen coords (-1/+1)
-	grab     *vec.V2 //where we moused down in normalised screen coords (-1/+1)
-	meshGrab vec.V3  //a 'source' point on the mesh - we will translate to some target point
+	cursor   vec.V2 //current mouse pos in normalised screen coords (-1/+1)
+	grab     vec.V2 //where we moused down in normalised screen coords (-1/+1)
+	meshGrab vec.V3 //a 'source' point on the mesh - we will translate to some target point
 
 	//mouseDown     bool
 	buttons             byte
 	keys                map[string]bool
 	boundValues         map[string]*float64 //boundValue //these form a popup dialog box (mass properties)
+	boundPoints         []BoundPoint
 	movedSinceMouseDown bool
 	labels              []*label.Label
 	follow              bool                           //whether the camera follows the players vehicle
@@ -112,6 +127,7 @@ type Device struct {
 	touchedVerts  *terrain.TouchedVerts
 	sceneNo       int
 	wireframe     bool
+	TxScale       float64
 	//farTreeBillBoardMesh *mesh.SimpleMesh
 }
 
@@ -161,6 +177,63 @@ func OwnedBy(player *player.Player) []*Device {
 		}
 	}
 	return owned
+}
+
+func (dev *Device) bindValue(key string, valuePointer *float64, min float64, max float64, step float64, labelSet byte) {
+
+	dev.boundValues[key] = valuePointer //store the address of the value to be updated
+
+	m := msg.NewMsg(msg.BindValue, key, *valuePointer, min, max, step, labelSet)
+	dev.Send(m) //we will receive msg.ValueChange messages back
+
+}
+
+func (dev *Device) bindCurve(graph string, series string, curve *curve.Curve, color colors.Color, idx *int) {
+
+	m := msg.NewMsg(msg.Series, graph, series, byte(color),
+		curve.Bounds.Left, curve.Bounds.Right, curve.Bounds.Bottom, curve.Bounds.Top,
+		uint16(len(curve.Points)))
+
+	w := curve.Bounds.Width()
+	h := curve.Bounds.Height()
+
+	for i := range curve.Points {
+		dev.boundPoints[*idx] = BoundPoint{curve, *idx} //expand slice
+		*idx++
+		p := curve.Points[i]
+		m.Write(float32(p.X/w), float32(p.Y/h))
+	}
+
+	dev.Send(m) //we will receive msg.CurvePointChange messages back
+}
+
+func (dev *Device) EditDistributions() {
+
+	pointIdx := 0
+	for _, distrib := range plant.Distributions {
+		dev.bindCurve(distrib.Name, "altitude", distrib.Altitude, colors.Blue, &pointIdx)
+		dev.bindCurve(distrib.Name, "slope", distrib.Altitude, colors.Green, &pointIdx)
+		dev.bindValue(distrib.Name+" density", &distrib.Density, 0, 20, 1, 0)
+	}
+}
+
+func (dev *Device) EditContours() {
+
+	cnames := []string{"begin mud", "begin sand", "begin grass", "begin rock", "begin snow", "end snow"}
+
+	idx := 0
+
+	dev.bindCurve("Contours", "elevation", terrainVert.Contours, colors.Green, &idx) //.Bounds, colors.Brown, &dev.boundPoints)
+	// cps := terrainVert.Contours.Points //countour points
+	// for i := 0; i < len(cps); i++ {
+	// 	dev.bindValue(cnames[i], &cps[i].Y, -1000, 1000, 1, 0)
+	// }
+	for i := range terrainVert.Steeps.Points {
+		//DONT use the iterated value - it's a copy
+		dev.bindValue("s "+cnames[i], &terrainVert.Steeps.Points[i].Y, -5, 5, 0.1, 0)
+	}
+
+	dev.setMode(props)
 }
 
 // Makeland - generates lands,scorched land, water and trees for the given camera position and direction (into Message)
@@ -217,7 +290,9 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	land.Root.CountTris(&triCount)
 	log.Logit("Land starts with  ", triCount, " tris")
 
-	land.Root.SplitIfNeeded(device.Id, land, camPos, camDir, 0.4, device.leafCollector, newTris, device.touchedVerts)
+	affectedMap := make(map[*terrain.Tri]int)
+	//fill device.leafcollector with lightweight copies of the BLTs for this POV
+	land.Root.SplitIfNeeded(device.Id, land, camPos, camDir, 0.4, device.leafCollector, affectedMap, device.touchedVerts)
 	log.Logit("splitting to focus took", time.Since(ts).Milliseconds(), "ms")
 
 	triCount = 0
@@ -230,29 +305,35 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	//note some patches are patched - so patched may contain some non terminal leaf triangles
 
 	device.touchedVerts.Reset()
+
+	//device.leafcollector contains a subset of global land mesh -
+	// subdivided for the POV - some of the leaves are *not* the smallest possible (the global mesh may have been split deeper than this device needs)
+	//there are gaps between the leafcollectors triangles (between LODs)
+	//newTris are the leaves/patches that are new (have been created for this POV)
+	//affectedTris := newTris.AsAffectedMap() //keep track of which tris/prisms we need to expand beause of patchingfor t:= range newTris.TriCount
+
 	device.patched.Reset()
 	device.leafCollector.PatchTriangles(device.Camera.Position, land, device.patched, device.touchedVerts)
 
-	log.Logit("patch took", time.Since(ts).Milliseconds(), "ms")
+	device.patched.BubbleVerticalExtents(land) //relatively cheap
 
-	ts = time.Now()
+	land.Root.RemakePrisms(land) //only makes missing prisms and those whose vertical extents have changed
+
+	log.Logit("patch into land mesh took", time.Since(ts).Milliseconds(), "ms")
+
+	//ts = time.Now()
 	//land.Root.CalcVerticalExtents(land) //we need the y extents for occlusion culling
-	newTris.BubbleVerticalExtentsFromLeaves(land)
-	log.Logit("Bubbled vertical extents took", time.Since(ts).Milliseconds(), "ms")
+	//newTris.BubbleVerticalExtentsFromLeaves(land)
+	//log.Logit("Bubbled vertical extents took", time.Since(ts).Milliseconds(), "ms")
 
-	ts = time.Now()
+	//ts = time.Now()
 	//land.Root.MakePrisms(land) //we want to construct volumes once for each triangle - not repeatedly during occlusion culling
-	newTris.MakePrisms(land)
-	log.Logit("made ", newTris.TriCount, " prisms in", time.Since(ts).Milliseconds(), "ms")
+	//newTris.MakePrisms(land)
+	//log.Logit("made ", newTris.TriCount, " prisms in", time.Since(ts).Milliseconds(), "ms")
 
 	//Note - some former leaf triangles are not in the collector - becuase they are now subdivided
 	//but neither are they in newTris - because they were not new
 	//thus, they have no prisms
-
-	ts = time.Now()
-	missing := 0
-	land.Root.MakeMissingPrisms(land, &missing)
-	log.Logit("made missing ", missing, " prisms in", time.Since(ts).Milliseconds(), "ms")
 
 	//newTris.CheckPrisms()
 	//device.Collector.CheckPrisms()
@@ -341,16 +422,21 @@ func (device *Device) MakeLand(game *game.Game, response *msg.Msg) {
 	response.Align() //align to dword boundary
 	log.Logit("response (before trees) is ", response.Buff.Len(), " bytes long")
 
-	near := msg.NewMsg(msg.PositionInstances, uint16(103), byte(0))
+	positionsMsgs := make([]*msg.Msg, len(plant.Distributions))
+	for idx := range plant.Distributions {
+		positionsMsgs[idx] = msg.Empty()
+		positionsMsgs[idx].Write(msg.PositionInstances, uint16(1000+idx))
+	}
 
-	land.GetPlants(land.Root, plant.Oak, near, &device.Camera.Position, 3000*3000, device.Id)
-	terminator := float32(math.Inf(1))             //use positive infinity as terminator
-	near.Write(terminator, terminator, terminator) //Terminator for vectors
-	//far.Write(terminator, terminator, terminator)
+	//Drop plants onto terrain write plant positions into positionsMsgs
+	land.GetPlants(land.Root, positionsMsgs, &device.Camera.Position, device.Id)
 
-	device.Send(near)
-
-	log.Logit("Near trees msg size:", near.Buff.Len(), " bytes")
+	//terminate and send each positionsMessage
+	terminator := float32(math.Inf(1)) //use positive infinity as terminator
+	for idx := range plant.Distributions {
+		positionsMsgs[idx].Write(terminator, terminator, terminator)
+		device.Send(positionsMsgs[idx])
+	}
 
 	log.Logit("response is ", response.Buff.Len(), " bytes long")
 }
@@ -445,13 +531,14 @@ func New(id uint32, name string,
 		//Socket:         socket,
 		Grid:              grid.New(gridOrigin, gridX, gridY),
 		cursor:            vec.NewVec2(0, 0),
-		grab:              nil,
+		grab:              vec.NewVec2(0, 0),
 		keys:              make(map[string]bool),     //which keys are pressed
 		selectedMasses:    make(map[*mass.Mass]bool), //which masses are selected, values are the order in which they were selected
 		boundValues:       make(map[string]*float64, 0),
 		controls:          make(map[input.ControlInput]float64),
 		mtx:               &sync.Mutex{},
 		InMtx:             &sync.Mutex{},
+		keysMutex:         &sync.RWMutex{},
 		mixers:            mixer.StandardMixers,
 		warning:           make([]*errorplus.Event, 10),
 		nearTreeCount:     0,
@@ -461,6 +548,9 @@ func New(id uint32, name string,
 		leafCollector:     terrain.NewLeafCollector(100000, id),
 		patched:           terrain.NewLeafCollector(100000, id),
 		touchedVerts:      terrain.NewTouchedVerts(100000),
+		boundPoints:       make([]BoundPoint, 1000),
+		wireframe:         false,
+		TxScale:           400.0,
 
 		//farTreeBillBoardMesh: mesh.New(105, "tree", 8000, 2000), //2 faces per tree - room for 1k trees
 	}
@@ -570,13 +660,14 @@ func (dev *Device) clearContextMenu() {
 // writes the flames visible to this viewer, to the message
 func (dev *Device) GetFlames(land *terrain.TriMesh, fire *terrain.TriMesh, message *msg.Msg) {
 
-	tcs := mesh.NewTcs(0, 1, 1, 0)                    //texture atlas coordinates
-	flameMesh := mesh.New(201, "flame", 10000, 30000) //10k faces, 30k verts
+	tcs := tcs.NewTcs(0, 1, 1, 0)                                //texture atlas coordinates
+	flameMesh := mesh.NewSimpleMesh(201, "flames", 10000, 15000) //10k faces, 30k verts
 
 	//adds a flame billboard to the flamemesh for every (bespoke) view triangle that sits on on globally burning triangle
 	fire.Root.GetFlames(dev.Id, land, fire, flameMesh, dev.Camera, tcs)
 
-	if flameMesh.FaceCount() > 0 {
+	//TODO used Instanced mesh for flames
+	if flameMesh.Tris > 0 {
 		flameMesh.WriteGeometryTo(message, 1, 0)
 	}
 
@@ -625,9 +716,9 @@ func (dev *Device) processMouseMove(game *game.Game) { //isRunning bool, masses 
 
 				//logit("delta", delta.x, delta.y)
 
-				camRight := dev.downCam.Direction.Cross(dev.downCam.Up).Normalise()
+				camRight := dev.downCam.Direction.Cross(dev.downCam.Up).Normalised()
 
-				dev.Camera.Up = dev.downCam.Up.RotateAbout(camRight, delta.Y).Normalise()
+				dev.Camera.Up = dev.downCam.Up.RotateAbout(camRight, delta.Y).Normalised()
 				pitched := dev.downCam.Direction.RotateAbout(camRight, delta.Y)
 				yawed := pitched.RotateAbout(dev.Camera.Up, -delta.X)
 
@@ -832,7 +923,7 @@ func (dev *Device) moveSelected(game *game.Game) {
 	moveDelta := dev.Grid.SpacePos.Sub(dev.moveStart)
 
 	//add any movement normal to the grid to the delta
-	gridNormal := dev.Grid.Xaxis.Cross(dev.Grid.Yaxis).Normalise()
+	gridNormal := dev.Grid.Xaxis.Cross(dev.Grid.Yaxis).Normalised()
 	camDGN := gridNormal.Multiply(dev.Camera.Position.Sub(dev.downCam.Position).Dot(gridNormal))
 	moveDelta.AddIn(camDGN)
 
@@ -863,10 +954,10 @@ func (dev *Device) SetBoundValue(key string, value float64, masses []*mass.Mass,
 	dev.Send(mass.VectorsAsMsg(masses)) //send the new vectors
 
 	dev.sendSpheres(masses) //send the potentially) modified mass
-	if dev.currentThing == nil {
+	if dev.currentThing == nil && len(things) > 0 {
 		dev.currentThing = things[0]
+		dev.sendCentreOfMass(dev.currentThing)
 	}
-	dev.sendCentreOfMass(dev.currentThing)
 
 }
 
@@ -942,17 +1033,12 @@ func (dev *Device) recordMassPositions(masses []*mass.Mass) {
 func (dev *Device) MoveCamera(game *game.Game) {
 
 	dir := vec.NewVec3(0, 0, 0)
+	dev.keysMutex.RLock()
+	defer dev.keysMutex.RUnlock()
 
 	speed := .5
 	if dev.keys["Alt"] {
 		speed = 10
-	}
-
-	//stop the camera when the movement foxes up
-	if dev.keys["Space"] || dev.keys[" "] {
-		for i := range dev.keys {
-			dev.keys[i] = false
-		}
 	}
 
 	if dev.keys["w"] {
@@ -980,8 +1066,8 @@ func (dev *Device) MoveCamera(game *game.Game) {
 
 	camDir := dev.Camera.Direction
 
-	right := camDir.Cross(dev.Camera.Up).Normalise()
-	up := right.Cross(camDir).Normalise()
+	right := camDir.Cross(dev.Camera.Up).Normalised()
+	up := right.Cross(camDir).Normalised()
 	delta := right.Multiply(dir.X).Add(up.Multiply(dir.Y)).Add(camDir.Multiply(dir.Z))
 
 	if delta.LengthSq() > 0 {
@@ -996,10 +1082,10 @@ func (dev *Device) MoveCamera(game *game.Game) {
 
 func (dev *Device) setMode(mode ModeEnum) {
 	dev.mode = mode
-	log.Logit("viewers mode set to", mode)
+	log.Logit("viewers mode set to", mode) //note - the CLIENT is dumb - blind to its mode
 
 	msg := msg.NewMsg(msg.Mode)
-	msg.Write(mode)
+	msg.Write(string(mode))
 	dev.Send(msg)
 
 }
@@ -1066,6 +1152,9 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 	switch ibm.Cmd {
 	case "keyUp":
 
+		dev.keysMutex.Lock()
+		defer dev.keysMutex.Unlock()
+
 		//a key was released
 		dev.keys[ibm.Key] = false
 
@@ -1108,20 +1197,26 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 			if delta > 2 {
 
 				if land != nil {
-					landProber := terrain.NewProber(dev.Id, land, dev.Camera.Position, false)
-					landProber.Target(dev.Camera.FarPos)
+					if dev.prober == nil {
+						dev.prober = terrain.NewProber(dev.Id, land, dev.Camera.Position, false)
+					}
+					dev.prober.Origin(dev.Camera.Position)
+					dev.prober.Target(dev.Camera.FarPos)
 
-					land.Root.Probe(landProber)
+					land.Root.Probe(dev.prober)
 					//log.logit (landProber.String())
-					if landProber.NearestTri != nil {
+					if dev.prober.NearestLeaf != nil {
 						msg := msg.NewMsg(msg.Vectors)
-						landProber.NearestTri.WriteEdgesInto(msg, land, colors.Magenta)
-						landProber.NearestTri.Parent.WritePrismHeirarchyEdgesInto(msg) //show the prism Hierarchy
+						dev.prober.NearestLeaf.WriteEdgesInto(msg, land, colors.Magenta)
+						dev.prober.NearestTri.Parent.WritePrismHeirarchyEdgesInto(msg) //show the prism Hierarchy
+						dev.prober.NearestLeaf.WriteVertexNormalsInto(msg, land, colors.LightBlue)
 
-						if landProber.HitWater {
+						if dev.prober.HitWater {
 							//send the edges of the water leaf triangle too
 							log.Logit("water hit")
-							landProber.NearestLeaf.WaterPoly.WriteEdgesInto(msg, colors.Cyan)
+							if dev.prober.NearestLeaf.WaterPoly != nil {
+								dev.prober.NearestLeaf.WaterPoly.WriteEdgesInto(msg, colors.Cyan)
+							}
 						}
 						terminator := float32(math.Inf(1))            //use positive infinity as terminator
 						msg.Write(terminator, terminator, terminator) //Terminator for vectors
@@ -1173,7 +1268,7 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 
 		dev.movedSinceMouseDown = false
 
-		dev.grab = dev.cursor.Clone()
+		dev.grab = dev.cursor //.Clone()
 
 		dev.downGridPos = dev.Grid.GridPos.Clone()
 
@@ -1267,6 +1362,9 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 
 	case "keyDown":
 
+		dev.keysMutex.Lock()
+		defer dev.keysMutex.Unlock()
+
 		k := ibm.Key
 		kl := strings.ToLower(k)
 		dev.keys[k] = true
@@ -1285,6 +1383,13 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 		}
 
 		switch k {
+
+		case "Space", " ":
+			//unjam stuck keys
+			for i := range dev.keys {
+				dev.keys[i] = false
+			}
+
 		case "ArrowLeft":
 			dx = -step
 			if gm.Running {
@@ -1314,7 +1419,11 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 		switch kl {
 		case "t":
 
-			gm.Land.TextureX(dev.touchedVerts)
+			startVertex := uint32(0)
+			if dev.prober != nil && dev.prober.NearestLeaf != nil {
+				startVertex = dev.prober.NearestLeaf.Vi[0]
+			}
+			gm.Land.TextureX(dev.touchedVerts, dev.TxScale, startVertex)
 			gm.Land.SendLand(dev.patched, dev.touchedVerts, dev.Camera.Position, response, dev.wireframe)
 			dev.Send(response)
 
@@ -1341,13 +1450,29 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 			dev.sendThings(gm.Things)
 		case "-":
 			dev.controls[input.Throttle] -= 0.05
+
+			dev.TxScale *= 0.9
+			log.Logit("txScale now", dev.TxScale)
+			gm.Land.TextureX(dev.touchedVerts, dev.TxScale, 0)
+			gm.Land.SendLand(dev.patched, dev.touchedVerts, dev.Camera.Position, response, dev.wireframe)
+			dev.Send(response)
+
 		case "+":
 			dev.controls[input.Throttle] += 0.05
+
+			dev.TxScale /= 0.9
+			log.Logit("txScale now", dev.TxScale)
+			gm.Land.TextureX(dev.touchedVerts, dev.TxScale, 0)
+			gm.Land.SendLand(dev.patched, dev.touchedVerts, dev.Camera.Position, response, dev.wireframe)
+			dev.Send(response)
+
 		case "b":
 			//grow a bush
 
 		case "e":
 			dev.setMode(editing)
+		case "c":
+			dev.EditContours()
 		case "f":
 			//gm.Land.Rain(0.1) //10cm of rain
 			gm.Land.Flow()
@@ -1374,7 +1499,11 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 			dev.controls[input.Throttle] = 0
 		} else if k == "1" {
 			//start port engine
-			return dev.startEngine(0, gm, response)
+			if dev.keys["Control"] {
+				dev.EditDistributions()
+			} else {
+				return dev.startEngine(0, gm, response)
+			}
 		} else if k == "2" {
 			//start starboard engine
 			return dev.startEngine(1, gm, response)
@@ -1405,7 +1534,7 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 		} else if kl == "r" {
 			if dev.keys["Control"] {
 				//rotate thing 90 degrees more
-				dev.currentThing.MeshRotation.AddIn(dev.currentThing.MeshRotation.Normalise().Multiply(math.Pi / 2))
+				dev.currentThing.MeshRotation.AddIn(dev.currentThing.MeshRotation.Normalised().Multiply(math.Pi / 2))
 			} else {
 				//right mass  (x axis mass) of thing mesh
 
@@ -1486,6 +1615,9 @@ func (dev *Device) ProcessStructuredMsg(ibm *jsonmsg.Msg, response *msg.Msg) *er
 			dev.sendThings([]*thing.Thing{dev.currentThing})
 
 		} else if k == "Escape" {
+
+			return nil //REENABLE
+
 			if dev.mode == stretching {
 				dev.springCursor.R = 0
 				dev.sendSpheres([]*mass.Mass{dev.springCursor})
@@ -1691,14 +1823,14 @@ func (dev *Device) makeNextSpring(game *game.Game) {
 // 	}
 // }
 
-func (dev *Device) bindValue(key string, valuePointer *float64, min float64, max float64, step float64, labelSet byte) {
+// func (dev *Device) bindValue(key string, valuePointer *float64, min float64, max float64, step float64, labelSet byte) {
 
-	dev.boundValues[key] = valuePointer //store the address of the value to be updated
+// 	dev.boundValues[key] = valuePointer //store the address of the value to be updated
 
-	m := msg.NewMsg(msg.BindValue, key, *valuePointer, min, max, step, labelSet)
-	dev.Send(m) //we will receive msg.ValueChange messages back
+// 	m := msg.NewMsg(msg.BindValue, key, *valuePointer, min, max, step, labelSet)
+// 	dev.Send(m) //we will receive msg.ValueChange messages back
 
-}
+// }
 
 func (dev *Device) ReleaseWebSocket() {
 	dev.mtx.Lock()
@@ -1795,7 +1927,7 @@ func makeNewDevice(ws *websocket.Conn) (*Device, *errorplus.Event) {
 
 	nobody := player.None
 	newDevice := New(ndid, "Name me!", nobody, nobody, nobody, nobody, crypto.Random16string(), ws)
-	Set(newDevice) //sores it in the map
+	Set(newDevice) //stores it in the map
 	err := newDevice.Persist()
 	if err != nil {
 		return newDevice, err
@@ -2057,14 +2189,21 @@ func (dev *Device) startIn(game *game.Game) {
 	dev.SendLabelSets()
 	dev.SendMasses(game.Masses)
 
+	up := vec.NewVec3(0, 1, 0)
 	for i, age := range []int{20, 100, 120, 140} {
-		treeMesh := plant.GrowTree(100+uint16(i), float64(age)) //mesh id
+		treeMesh := plant.GrowTree(game.Species["example"], up, 100+uint16(i), float64(age)) //mesh id
 
-		log.Logit("tree mesh for age", age, "has", treeMesh.VertCount(), "vertices and", treeMesh.FaceCount(), "faces")
+		log.Logit("tree mesh for age", age, "has", treeMesh.Verts, "vertices and", treeMesh.Tris, "faces")
 		tm := msg.Empty()
 		treeMesh.WriteGeometryTo(tm, maxNearTrees, maxFarTrees) //prep for 500 near trees (of each age)
 		dev.Send(tm)                                            //send the tree mesh
 	}
+
+	rock := rock.MakeRock(1050, "rock")
+
+	rm := msg.Empty()
+	rock.WriteGeometryTo(rm, 100, 10000)
+	dev.Send(rm)
 
 	// bbm := msg.Empty()
 	// qbb := mesh.New(105, "none", 4, 2)                               //quad billboard

@@ -4,6 +4,8 @@ import (
 	"math"
 
 	// "github.com/nickax/gofu/game/msg"
+	"github.com/nickax/gofu/colors"
+	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/log"
 	"github.com/nickax/gofu/poly"
 	"github.com/nickax/gofu/ray"
@@ -16,7 +18,8 @@ type TriCollector struct {
 }
 
 type LeafTri struct {
-	vi         [3]uint32
+	owner      *Tri //see shallowCopy
+	Vi         [3]uint32
 	children   [2]*LeafTri
 	childCount int
 	normal     vec.V3
@@ -26,20 +29,46 @@ type LeafTri struct {
 	WaterPoly  *poly.ConvexPoly // made/cached JIT
 }
 
+func (lt *LeafTri) WriteEdgesInto(msg *msg.Msg, mesh *TriMesh, color colors.Color) {
+
+	v := mesh.verts
+	a := v[lt.Vi[0]].P
+	b := v[lt.Vi[1]].P
+	c := v[lt.Vi[2]].P
+
+	msg.Write(a, b, color,
+		b, c, color,
+		c, a, color,
+	)
+
+}
+
+func (lt *LeafTri) WriteVertexNormalsInto(msg *msg.Msg, mesh *TriMesh, color colors.Color) {
+
+	v := mesh.verts
+	for _, vi := range lt.Vi {
+		vv := v[vi]
+		start := vv.P
+		end := vv.P.Add(lt.CacheNormal(mesh).Multiply(.4)) //scale normal for visibility
+		msg.Write(start, end, color)
+	}
+
+}
+
 func (lt *LeafTri) ToConvexPoly(mesh *TriMesh, asWater bool) *poly.ConvexPoly {
 
-	v0 := mesh.verts[lt.vi[0]]
-	v1 := mesh.verts[lt.vi[1]]
-	v2 := mesh.verts[lt.vi[2]]
+	v0 := mesh.verts[lt.Vi[0]]
+	v1 := mesh.verts[lt.Vi[1]]
+	v2 := mesh.verts[lt.Vi[2]]
 
-	a := v0.p
-	b := v1.p
-	c := v2.p
+	a := v0.P
+	b := v1.P
+	c := v2.P
 
 	if asWater {
-		a.Y = v0.wl
-		b.Y = v1.wl
-		c.Y = v2.wl
+		a.Y += v0.Wl
+		b.Y += v1.Wl
+		c.Y += v2.Wl
 	}
 	return poly.NewConvexPolyFromVecs([]vec.V3{a, b, c})
 }
@@ -55,18 +84,35 @@ func (lt *LeafTri) Probe(ray ray.Ray, mesh *TriMesh, water int) (bool, vec.V3, *
 		}
 	}
 
-	hit, where := lt.poly.Probe(ray)
+	p := lt.poly
+	if water == 1 {
+		p = lt.WaterPoly
+	}
+	hit, where := p.Probe(ray)
 
 	if hit {
 		if lt.childCount == 0 {
 			return true, where, lt
 		}
 
-		for i := range lt.childCount {
-			child := lt.children[i]
-			childHit, childWhere, childLeaf := child.Probe(ray, mesh, water)
-			if childHit {
-				return true, childWhere, childLeaf
+		//A leaftri has two or zero children
+		if lt.childCount == 2 {
+
+			aHit, aWhere, aLeaf := lt.children[0].Probe(ray, mesh, water)
+			bHit, bWhere, bLeaf := lt.children[1].Probe(ray, mesh, water)
+
+			if aHit && bHit {
+				if ray.Origin.DistanceSQ(&aWhere) < ray.Origin.DistanceSQ(&bWhere) {
+					return true, aWhere, aLeaf
+				} else {
+					return true, bWhere, bLeaf
+				}
+			}
+			if aHit {
+				return true, aWhere, aLeaf
+			}
+			if bHit {
+				return true, bWhere, bLeaf
 			}
 		}
 		//log.Logit("hit parent but missed all children")
@@ -82,7 +128,7 @@ func (lt *LeafTri) Probe(ray ray.Ray, mesh *TriMesh, water int) (bool, vec.V3, *
 func NewLeafTri(a, b, c uint32, scorched bool, mesh *TriMesh) *LeafTri {
 
 	//initialise normals  pointing down to indicate uncalculated
-	lt := LeafTri{vi: [3]uint32{a, b, c}, normal: vec.NewVec3(0, 0, 0), Scorched: scorched}
+	lt := LeafTri{Vi: [3]uint32{a, b, c}, normal: vec.NewVec3(0, 0, 0), Scorched: scorched}
 
 	//lt.CacheNormal(mesh)
 	// if lt.normal.Y < 0 {
@@ -96,7 +142,7 @@ func (leaf *LeafTri) CacheCentre(mesh *TriMesh) vec.V3 {
 	if leaf.centre.X != 0 || leaf.centre.Y != 0 || leaf.centre.Z != 0 {
 		return leaf.centre
 	}
-	leaf.centre = (mesh.verts[leaf.vi[0]].p.Add(mesh.verts[leaf.vi[1]].p).Add(mesh.verts[leaf.vi[2]].p)).Multiply(1 / 3.0)
+	leaf.centre = (mesh.verts[leaf.Vi[0]].P.Add(mesh.verts[leaf.Vi[1]].P).Add(mesh.verts[leaf.Vi[2]].P)).Multiply(1 / 3.0)
 	return leaf.centre
 }
 
@@ -108,6 +154,13 @@ type LeafCollector struct {
 
 func NewLeafCollector(tris int, deviceId uint32) *LeafCollector {
 	return &LeafCollector{LeafCount: 0, leaves: make([]*LeafTri, tris), DeviceId: deviceId}
+}
+
+func (lc *LeafCollector) BubbleVerticalExtents(land *TriMesh) {
+	for i := 0; i < lc.LeafCount; i++ {
+		leaf := lc.leaves[i]
+		leaf.owner.BubbleVerticalExtents(land)
+	}
 }
 
 func (in *LeafCollector) Reset() {
@@ -124,21 +177,30 @@ func NewTriCollector(tris int) *TriCollector {
 	return &TriCollector{TriCount: 0, triangles: make([]*Tri, tris)}
 }
 
-func (c *TriCollector) BubbleVerticalExtentsFromLeaves(mesh *TriMesh) {
-
+func (c *TriCollector) AsAffectedMap() map[*Tri]int {
+	affectedTris := make(map[*Tri]int)
 	for i := 0; i < c.TriCount; i++ {
-		tri := c.triangles[i]
-		if tri.childCount == 0 {
-			tri.BubbleVerticalExtents()
-		}
+		t := c.triangles[i]
+		affectedTris[t] = 1
 	}
+	return affectedTris
 }
+
+// func (c *TriCollector) BubbleVerticalExtentsFromLeaves(land *TriMesh) {
+
+// 	for i := 0; i < c.TriCount; i++ {
+// 		tri := c.triangles[i]
+// 		if tri.childCount == 0 {
+// 			tri.BubbleVerticalExtents(land.Root)
+// 		}
+// 	}
+// }
 
 func (c *TriCollector) CheckPrisms() {
 
 	for i := 0; i < c.TriCount; i++ {
 		t := c.triangles[i]
-		if t.childCount > 0 {
+		if t.ChildCount > 0 {
 			if t.PrismFaces[0] == nil {
 				panic("prism face missing")
 			}
@@ -146,54 +208,60 @@ func (c *TriCollector) CheckPrisms() {
 	}
 }
 
-func (c *TriCollector) MakePrisms(mesh *TriMesh) {
+func (m *TriMesh) TextureX(tv *TouchedVerts, txScale float64, startVertex uint32) {
 
-	for i := 0; i < c.TriCount; i++ {
-		t := c.triangles[i]
-		if t.childCount > 0 {
-			t.MakePrism(mesh)
-		}
-	}
-
-}
-
-func (m *TriMesh) TextureX(tv *TouchedVerts) {
+	tcx := m.verts[startVertex].Uv.X
+	tcy := m.verts[startVertex].Uv.Y
 
 	for v := range m.verts {
-		m.verts[v].uv.X = -1 //mark all as untextured
+		m.verts[v].Uv.X = -math.MaxFloat64 //mark all as untextured
 	}
 
 	count := 0
-	m.verts[0].uv.X = 0 //seed vert
-	textureX(m, 0, tv, 0, &count)
+
+	textureX(m, startVertex, tv, tcx, tcy, txScale, &count)
 	log.Logit("textured verts", count)
 }
 
 //call this on some central onscreen vert and it will wrap the texture x coords outwards from there based on the edge lengths in world space
-func textureX(m *TriMesh, vi uint32, touchedVerts *TouchedVerts, tcx float64, count *int) {
+func textureX(m *TriMesh, vi uint32, touchedVerts *TouchedVerts, tcx float64, tcy float64, txScale float64, count *int) {
 
-	//touchedVerts is an array of maps - it gives us a list of all the leaf tris touching a vert
-	touches := touchedVerts.touches[vi]
+	//touchedVerts is an array of slices of leafTris
+	//  - it gives us a list of all the leaf tris touching a vert
+	TrisTouchingVert := touchedVerts.touches[vi]
 
 	v := m.verts[vi]
 
-	pp := v.p
-	for lt := range touches {
+	up := vec.NewVec3(0, 1, 0)
+
+	pp := v.P
+	for _, lt := range TrisTouchingVert { //for each leaf triagle this vertex touches..
 
 		if lt.childCount == 0 {
-			for _, vti := range lt.vi {
-				nv := m.verts[vti] //next vert
+			for _, vti := range lt.Vi {
 
-				if nv.uv.X == -1 {
-					hop := pp.Sub(nv.p)
-					hop.Y = 0 //project onto the xz plane
+				if vti != vi { //don't go back the way we came
+					nv := m.verts[vti] //next vert
 
-					dx := hop.Dot(lt.CacheNormal(m).Cross(vec.NewVec3(0, 1, 0)))
-					tcx += dx / 400
-					nv.uv.X = tcx
-					*count++
-					textureX(m, vti, touchedVerts, tcx, count) //recurse
+					if nv.Uv.X == -math.MaxFloat64 {
+						hop := pp.Sub(nv.P)
+						hop.Y = 0 //project onto the xz plane
 
+						faceX := lt.CacheNormal(m).Cross(up).Normalised()
+						//faceY := faceX.Cross(up).Normalise()
+						dx := hop.Dot(faceX)
+						//dy := hop.Dot(faceY)
+
+						tcx += dx / txScale
+						tcy = nv.P.Y / 300 // += dy / txScale
+
+						nv.Uv.X = tcx
+						nv.Uv.Y = tcy
+
+						*count++
+						textureX(m, vti, touchedVerts, tcx, tcy, txScale, count) //recurse
+
+					}
 				}
 			}
 		}
@@ -201,17 +269,22 @@ func textureX(m *TriMesh, vi uint32, touchedVerts *TouchedVerts, tcx float64, co
 	}
 }
 
-func (leaf *LeafTri) PatchInto(camPos vec.V3, final *LeafCollector, mesh *TriMesh, touchedVerts *TouchedVerts, depth int) {
+func (leaf *LeafTri) PatchInto(camPos vec.V3, final *LeafCollector, mesh *TriMesh, touchedVerts *TouchedVerts, depth int) (wasSplit bool) {
 
-	for j := range 3 {
-		ai := leaf.vi[j]
-		bi := leaf.vi[(j+1)%3]
-		ci := leaf.vi[(j+2)%3]
+	for j := range 3 { //for each edge
+		ai := leaf.Vi[j]
+		bi := leaf.Vi[(j+1)%3]
+		ci := leaf.Vi[(j+2)%3]
+
+		if ai == bi || bi == ci || ai == ci {
+			panic("degenerate triangle in PatchInto")
+		}
 
 		mi := mesh.midpoint(bi, ci) //looks both ways for a midpoint
 
 		if mi != math.MaxUint32 { //is there a midpoint(on the opposite edge) ?
 			leaf.removeFrom(touchedVerts)
+
 			leaf.splitIn2(mesh, ai, bi, ci, mi)
 			a := leaf.children[0]
 			b := leaf.children[1]
@@ -220,11 +293,11 @@ func (leaf *LeafTri) PatchInto(camPos vec.V3, final *LeafCollector, mesh *TriMes
 
 			a.PatchInto(camPos, final, mesh, touchedVerts, depth+1)
 			b.PatchInto(camPos, final, mesh, touchedVerts, depth+1)
-			return
+			return true
 		}
 	}
 
-	//no midpoints found - this is a final triangle
+	//no midpoints found - this is a final triangle (It didin't need splitting to patch a hole)
 	if leaf.childCount > 0 {
 		panic("leaf with children being added to final")
 	}
@@ -233,12 +306,15 @@ func (leaf *LeafTri) PatchInto(camPos vec.V3, final *LeafCollector, mesh *TriMes
 	camPos.Y += 3 //pretend we're 10 ft taller
 	if leaf.OnOrUnderWater(mesh) || leaf.CacheCentre(mesh).Sub(camPos).Dot(leaf.CacheNormal(mesh)) <= 0 {
 		final.AddLeaf(leaf)
+		//affectedTris[leaf.owner]++ //should not be needed (and doesnt help)
 	}
+
+	return false
 
 }
 
 // PatchTriangles - Bridges adjoining depths - splitting triangles in two (sometimes recursively)
-// iterates over top level leaves (bottom level triangle)
+// iterates over top level leaves (bottom level triangles)
 // also fills touchedVerts with all verts touched by 'final' patch triangles
 func (in *LeafCollector) PatchTriangles(camPos vec.V3, mesh *TriMesh, out *LeafCollector, touchedVerts *TouchedVerts) {
 
@@ -249,11 +325,11 @@ func (in *LeafCollector) PatchTriangles(camPos vec.V3, mesh *TriMesh, out *LeafC
 		leaf := in.leaves[i]     //these are 'shallow copies' of the BLTs (as leafTris)
 		leaf.addTo(touchedVerts) //this will be undone if we split the leaf
 
-		leaf.PatchInto(camPos, out, mesh, touchedVerts, 0) //this splits some leaves into fans
+		//this splits SOME leaves into fans (and adds some directly) to out - it extends the prism of the owning triangle
+		leaf.PatchInto(camPos, out, mesh, touchedVerts, 0)
 
 	}
 
-	//	return final //note - also mutates (which persist on the device)
 }
 
 func (c *TriCollector) Reset() {

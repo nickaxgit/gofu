@@ -16,7 +16,7 @@ type Plane struct {
 func NewFromPoints(a, b, c vec.V3) Plane {
 	ab := b.Sub(a)
 	ac := c.Sub(a)
-	n := ab.Cross(ac).Normalise()
+	n := ab.Cross(ac).Normalised()
 
 	return Plane{normal: n, distance: n.Dot(a)}
 }
@@ -49,9 +49,9 @@ func (plane Plane) ClosestPointOnPlane(p vec.V3) vec.V3 {
 func (plane Plane) ProbeLine(ray ray.Ray) (bool, vec.V3) {
 
 	denom := plane.normal.Dot(ray.GetDirection())
-	if denom > 1e6 {
-		return false, vec.V3{} //ray could only peirce backface
-	}
+	// if denom > 1e6 {
+	// 	return false, vec.V3{} //ray could only peirce backface
+	// }
 
 	if math.Abs(denom) < 1e-9 { //ray glancing the plane - DBZ - intersect would be at infinity
 		return false, vec.V3{}

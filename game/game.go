@@ -11,7 +11,7 @@ import (
 	"github.com/nickax/gofu/game/msg"
 	"github.com/nickax/gofu/game/sound"
 	"github.com/nickax/gofu/log"
-	//"github.com/nickax/gofu/persist"
+	"github.com/nickax/gofu/plant"
 	"github.com/nickax/gofu/terrain"
 	"github.com/nickax/gofu/vec"
 	"io"
@@ -42,6 +42,7 @@ type Game struct { //the DATA of a game in progress - it can be entirely replace
 	LandHeight float64   //max height of land
 	Kinks      []float64 //land bends
 	Land       *terrain.TriMesh
+	Species    map[string]*plant.Species
 }
 
 var mutex = sync.RWMutex{}
@@ -83,7 +84,11 @@ func New(id uint32, name string) *Game {
 		LandSize:   landSize,
 		LandHeight: landHeight,
 		Kinks:      kinks,
+		Species:    make(map[string]*plant.Species),
 	}
+
+	exp := plant.ExampleSpecies()
+	game.Species["example"] = exp
 
 	game.BuildFireMesh()
 
@@ -412,7 +417,7 @@ func (game *Game) resolveMassOverlaps() {
 				if delta.LengthSq() == 0 {
 					log.Logit("zero length delta")
 				} else {
-					delta = delta.Normalise()
+					delta = delta.Normalised()
 					delta = delta.Multiply(overlap)
 
 					afix := .5 //b.mass/(a.mass+b.mass)

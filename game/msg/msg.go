@@ -65,6 +65,8 @@ const (
 	SignOut    MsgEnum = 49 //sets the devices owner to nil
 	PlayerId   MsgEnum = 50 //sends a player id (and token) to the client
 	RemoveMesh MsgEnum = 51 //remove a mesh by id
+	Steeps     MsgEnum = 52 //sends offset values for steepness texture adjustments
+	Series     MsgEnum = 53 //Sends/binds a graph series (curve)
 
 	Repository     MsgEnum = 100 //a repository of data (persistence)
 	P_Counters     MsgEnum = 101 //counter values
@@ -165,7 +167,7 @@ func writeVec3(buff *bytes.Buffer, v vec.V3) {
 
 }
 
-func writeVec2(buff *bytes.Buffer, v *vec.V2) {
+func writeVec2(buff *bytes.Buffer, v vec.V2) {
 
 	binary.Write(buff, le, float32(v.X))
 	binary.Write(buff, le, float32(v.Y))
@@ -185,8 +187,8 @@ func write(buff *bytes.Buffer, values ...any) {
 		// 	writeVec3(buff, any(v).(*vec.V3))
 		case vec.V3:
 			writeVec3(buff, any(v).(vec.V3))
-		case *vec.V2:
-			writeVec2(buff, any(v).(*vec.V2))
+		case vec.V2:
+			writeVec2(buff, any(v).(vec.V2))
 		case int32, uint32, int16, uint16, float32, float64, byte, bool, []float32, []uint16, []uint8, colors.Color, MsgEnum:
 			error := binary.Write(buff, le, v)
 			if error != nil {

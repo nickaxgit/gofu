@@ -236,7 +236,7 @@ func (a V3) Sub(b V3) V3 {
 	return V3{a.X - b.X, a.Y - b.Y, a.Z - b.Z}
 }
 
-func (a V3) Normalise() V3 {
+func (a V3) Normalised() V3 {
 	l := a.Length()
 	if l == 0 {
 		panic("can't normalise 0 vector")
@@ -350,7 +350,7 @@ func (p V3) closestPointOnLineSegment(a, b V3) V3 {
 func (p V3) DistanceFromLineSegment(a, b V3) float64 {
 	//TEST this
 	ab := b.Sub(a)
-	abn := ab.Normalise()
+	abn := ab.Normalised()
 	ap := p.Sub(a)
 	bp := p.Sub(b)
 	if ap.Dot(abn) < 0 {
@@ -364,7 +364,7 @@ func (p V3) DistanceFromLineSegment(a, b V3) float64 {
 
 func (p V3) ClosestPointOnLine(a, b V3) V3 {
 	ab := b.Sub(a)
-	abn := ab.Normalise()
+	abn := ab.Normalised()
 	dp := p.Sub(a).Dot(abn)
 	return a.Add(abn.Multiply(dp))
 }

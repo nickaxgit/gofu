@@ -186,14 +186,14 @@ func (thing *Thing) Forward() vec.V3 {
 
 	o := thing.Om.P
 	f := thing.Fm.P
-	return f.Sub(o).Normalise()
+	return f.Sub(o).Normalised()
 
 }
 
 func (thing *Thing) Right() vec.V3 {
 	o := thing.Om.P
 	r := thing.Rm.P
-	return r.Sub(o).Normalise()
+	return r.Sub(o).Normalised()
 }
 
 func (thing *Thing) FindMassActuator(act actuator.ActuatorEnum) *mass.Mass {
